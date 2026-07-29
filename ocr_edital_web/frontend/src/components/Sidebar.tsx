@@ -1,6 +1,6 @@
-import { BookOpen, BriefcaseBusiness, FileSearch, FileText } from "lucide-react";
+import { BookOpen, BriefcaseBusiness, ClipboardList, FileSearch, FileText } from "lucide-react";
 
-export type ActiveBlock = "search" | "proposal" | "catalog" | "business";
+export type ActiveBlock = "search" | "proposal" | "catalog" | "business" | "structure";
 
 interface SidebarProps {
   active: ActiveBlock;
@@ -58,6 +58,18 @@ export function Sidebar({ active, onChange }: SidebarProps) {
           <span className="block-nav-copy">
             <strong>Bloco 4</strong>
             <small>Negócios</small>
+          </span>
+        </button>
+        <button
+          className={`block-nav-item${active === "structure" ? " is-active" : ""}`}
+          type="button"
+          onClick={() => onChange("structure")}
+        >
+          <span className="block-nav-number">05</span>
+          <ClipboardList size={18} aria-hidden="true" />
+          <span className="block-nav-copy">
+            <strong>Bloco 5</strong>
+            <small>Estrutura</small>
           </span>
         </button>
       </nav>

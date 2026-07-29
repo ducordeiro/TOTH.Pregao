@@ -3,6 +3,7 @@ import { listResponsibles, listTemplates } from "./api";
 import { CatalogBlock } from "./components/CatalogBlock";
 import { BusinessBlock } from "./components/BusinessBlock";
 import { ProposalBlock } from "./components/ProposalBlock";
+import { ProjectStructureBlock } from "./components/ProjectStructureBlock";
 import { ResponsibleManagerModal } from "./components/ResponsibleManagerModal";
 import { SearchBlock } from "./components/SearchBlock";
 import { Sidebar, type ActiveBlock } from "./components/Sidebar";
@@ -76,35 +77,45 @@ export default function App() {
         proposal: "proposal-workspace",
         catalog: "catalog-workspace",
         business: "business-workspace",
+        structure: "structure-workspace",
       }[block];
       document.getElementById(workspaceId)
         ?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   };
 
-  const header = activeBlock === "search"
-    ? {
-        eyebrow: "Oportunidades públicas",
-        title: "Buscar oportunidades",
-        description: "Consulte editais disponíveis no PNCP e localize oportunidades.",
-      }
-    : activeBlock === "catalog"
-      ? {
-        eyebrow: "Documentos técnicos",
-        title: "Catálogo técnico",
-        description: "Estruture os dados do produto e gere os arquivos da licitação.",
-        }
-      : activeBlock === "business"
-        ? {
-          eyebrow: "Gestão comercial",
-          title: "Negócios",
-          description: "Acompanhe oportunidades e decisões em cada etapa da licitação.",
-        }
-      : {
-          eyebrow: "Propostas comerciais",
-          title: "Gerar proposta",
-          description: "Consulte o edital, selecione os itens e gere o documento Word.",
-        };
+  const headerByBlock: Record<ActiveBlock, {
+    eyebrow: string;
+    title: string;
+    description: string;
+  }> = {
+    search: {
+      eyebrow: "Oportunidades públicas",
+      title: "Buscar oportunidades",
+      description: "Consulte editais disponíveis no PNCP e localize oportunidades.",
+    },
+    proposal: {
+      eyebrow: "Propostas comerciais",
+      title: "Gerar proposta",
+      description: "Consulte o edital, selecione os itens e gere o documento Word.",
+    },
+    catalog: {
+      eyebrow: "Documentos técnicos",
+      title: "Catálogo técnico",
+      description: "Estruture os dados do produto e gere os arquivos da licitação.",
+    },
+    business: {
+      eyebrow: "Gestão comercial",
+      title: "Negócios",
+      description: "Acompanhe oportunidades e decisões em cada etapa da licitação.",
+    },
+    structure: {
+      eyebrow: "Estrutura operacional",
+      title: "Estrutura do projeto",
+      description: "Organize etapas, responsáveis e entregáveis antes da entrega final.",
+    },
+  };
+  const header = headerByBlock[activeBlock];
 
   return (
     <div className={`app-shell is-${activeBlock}-active`}>
@@ -155,6 +166,9 @@ export default function App() {
           </div>
           <div id="business-workspace" hidden={activeBlock !== "business"}>
             <BusinessBlock responsibles={responsibles} />
+          </div>
+          <div id="structure-workspace" hidden={activeBlock !== "structure"}>
+            <ProjectStructureBlock />
           </div>
         </main>
       </div>

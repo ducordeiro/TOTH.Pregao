@@ -2774,6 +2774,221 @@ input[type="checkbox"] {
   }
 }
 
+/* Bloco 5 - Estrutura */
+.app-shell.is-structure-active,
+.app-shell.is-structure-active .app-content {
+  background: #101714;
+}
+
+.is-structure-active .app-header {
+  border-color: #33483d;
+}
+
+#structure-workspace {
+  scroll-margin-top: 16px;
+}
+
+.structure-workspace {
+  min-width: 0;
+}
+
+.structure-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.structure-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 14px;
+}
+
+.structure-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #33483d;
+  border-radius: 6px;
+  background: #141f1a;
+}
+
+.structure-form textarea {
+  min-height: 112px;
+}
+
+.structure-panel {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid #45624f;
+  border-radius: 6px;
+  background: #18251e;
+  color: #dfe9e2;
+}
+
+.structure-panel > svg {
+  color: #80c99a;
+}
+
+.structure-panel strong {
+  font-size: 28px;
+  line-height: 1.1;
+}
+
+.structure-panel span {
+  color: #a9b9ae;
+  font-size: 13px;
+}
+
+.structure-progress-track {
+  overflow: hidden;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: #27372f;
+}
+
+.structure-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #80c99a;
+}
+
+.structure-board {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.structure-board > div {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid #33483d;
+  border-radius: 6px;
+  background: #141f1a;
+}
+
+.structure-board h3 {
+  margin: 0 0 12px;
+  font-size: 17px;
+}
+
+.structure-step-list,
+.structure-deliverables {
+  display: grid;
+  gap: 9px;
+}
+
+.structure-step {
+  display: grid;
+  grid-template-columns: 20px 34px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 10px;
+  min-height: 66px;
+  padding: 10px;
+  border: 1px solid #31463b;
+  border-radius: 5px;
+  background: #101a15;
+  cursor: pointer;
+}
+
+.structure-step:hover {
+  border-color: #5f806a;
+}
+
+.structure-step.is-complete {
+  border-color: #659d75;
+  background: #17261c;
+}
+
+.structure-step input,
+.structure-deliverables input {
+  margin: 0;
+}
+
+.structure-step-number {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid #52715c;
+  border-radius: 50%;
+  color: #a9dcb8;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.structure-step strong,
+.structure-step small {
+  display: block;
+}
+
+.structure-step strong {
+  color: #f0f6f2;
+}
+
+.structure-step small {
+  margin-top: 2px;
+  color: #9cafaa;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.structure-step > svg {
+  color: #80c99a;
+}
+
+.structure-deliverables label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  padding: 9px 10px;
+  border: 1px solid #31463b;
+  border-radius: 5px;
+  background: #101a15;
+  cursor: pointer;
+}
+
+.structure-deliverables label:hover {
+  border-color: #5f806a;
+}
+
+@media (max-width: 1180px) {
+  .structure-grid,
+  .structure-board {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  #structure-workspace {
+    scroll-margin-top: 82px;
+  }
+
+  .structure-heading-actions,
+  .structure-form {
+    grid-template-columns: 1fr;
+  }
+
+  .structure-heading-actions {
+    display: grid;
+  }
+
+  .structure-step {
+    grid-template-columns: 20px 30px minmax(0, 1fr);
+  }
+
+  .structure-step > svg {
+    display: none;
+  }
+}
+
 /* Bloco 4 - Negócios */
 .app-shell.is-business-active,
 .app-shell.is-business-active .app-content {
