@@ -1205,12 +1205,29 @@ def extracted_item_quality(row):
     )
 
 
+def quantity_from_combined_value(value):
+    text = compact(value)
+    match = re.fullmatch(
+        r"(?P<quantidade>\d+(?:[\.,]\d+)?)\s*(?:/|\s+)\s*"
+        r"(?P<unidade>[A-Za-z]{1,12})\.?",
+        text,
+    )
+    if not match or not is_unit_value(match.group("unidade")):
+        return ""
+    return match.group("quantidade")
+
+
 def sanitize_extracted_items(items):
     valid_items = []
     for row in items:
         if not is_item_identifier(row.get("item")):
             continue
         normalized_row = dict(row)
+        combined_quantity = quantity_from_combined_value(
+            normalized_row.get("quantidade")
+        )
+        if combined_quantity:
+            normalized_row["quantidade"] = combined_quantity
         normalized_row["unidade"] = STANDARD_UNIT
         valid_items.append(normalized_row)
     scoped_item_numbers = {
@@ -3683,6 +3700,125 @@ BRAZILIAN_UFS = (
 )
 
 
+def split_search_keywords(value, maximum=20):
+    keywords = []
+    seen = set()
+    for part in str(value or "").split(";"):
+        keyword = compact(part)
+        if not keyword:
+            continue
+        normalized = norm(keyword)
+        if normalized in seen:
+            continue
+        if len(keyword) > 120:
+            raise ValueError("Cada palavra-chave deve possuir no maximo 120 caracteres.")
+        seen.add(normalized)
+        keywords.append(keyword)
+    if len(keywords) > maximum:
+        raise ValueError(f"Informe no maximo {maximum} palavras-chave.")
+    return keywords
+
+
+SEARCH_TERM_CONNECTORS = {
+    "a", "as", "com", "da", "das", "de", "do", "dos", "e", "em",
+    "o", "os", "para", "por",
+}
+MAX_SEARCH_TERM_GAP = 2
+
+
+def matches_complete_words(text, search_term):
+    expected = norm(search_term).split()
+    if not expected:
+        return True
+    words = norm(text).split()
+    for start, word in enumerate(words):
+        if word != expected[0]:
+            continue
+        position = start
+        matched = True
+        for expected_word in expected[1:]:
+            stop = min(len(words), position + MAX_SEARCH_TERM_GAP + 2)
+            next_position = next(
+                (
+                    index
+                    for index in range(position + 1, stop)
+                    if words[index] == expected_word
+                ),
+                None,
+            )
+            if next_position is None:
+                matched = False
+                break
+            position = next_position
+        if matched:
+            return True
+    return False
+
+
+def matches_complete_search_term(row, search_term):
+    return matches_complete_words(
+        f"{row.get('title', '')} {row.get('description', '')}",
+        search_term,
+    )
+
+
+def search_term_anchor(search_term):
+    words = norm(search_term).split()
+    meaningful = [word for word in words if word not in SEARCH_TERM_CONNECTORS]
+    return meaningful[-1] if meaningful else (words[-1] if words else "")
+
+
+def row_may_match_term_in_items(row, search_term):
+    if len(norm(search_term).split()) < 2:
+        return False
+    anchor = search_term_anchor(search_term)
+    searchable_words = set(
+        norm(f"{row.get('title', '')} {row.get('description', '')}").split()
+    )
+    return bool(anchor and anchor in searchable_words)
+
+
+def matches_search_term_in_pncp_items(row, search_term):
+    cnpj = compact(row.get("orgao_cnpj"))
+    ano = compact(row.get("ano"))
+    sequencial = compact(row.get("numero_sequencial"))
+    if not cnpj or not ano or not sequencial:
+        return False
+    return any(
+        matches_complete_words(item.get("descricao", ""), search_term)
+        for item in list_pncp_items(cnpj, ano, sequencial)
+    )
+
+
+def filter_rows_by_complete_search_term(rows, search_term):
+    if not norm(search_term):
+        return list(rows)
+
+    accepted = []
+    item_candidates = []
+    for row in rows:
+        if matches_complete_search_term(row, search_term):
+            accepted.append(row)
+        elif row_may_match_term_in_items(row, search_term):
+            item_candidates.append(row)
+
+    if not item_candidates:
+        return accepted
+
+    with ThreadPoolExecutor(max_workers=min(6, len(item_candidates))) as executor:
+        futures = {
+            executor.submit(matches_search_term_in_pncp_items, row, search_term): row
+            for row in item_candidates
+        }
+        for future in as_completed(futures):
+            try:
+                if future.result():
+                    accepted.append(futures[future])
+            except Exception:
+                continue
+    return accepted
+
+
 def classify_search_object(row):
     text = norm(f"{row.get('title', '')} {row.get('description', '')}")
     material_score = sum(1 for term in MATERIAL_SEARCH_TERMS if term in text)
@@ -3701,7 +3837,8 @@ def classify_search_object(row):
 
 
 def search_pncp_app_editais(params, data_inicial, data_final):
-    keyword = str(params.get("palavraChave") or "").strip()
+    keywords = split_search_keywords(params.get("palavraChave"))
+    search_terms = tuple(keywords) or ("",)
     object_type = str(params.get("tipoObjeto") or "").strip().lower()
     if object_type not in {"", "material", "servico"}:
         raise ValueError("Tipo do objeto invalido.")
@@ -3714,14 +3851,13 @@ def search_pncp_app_editais(params, data_inicial, data_final):
         "ordenacao": str(params.get("ordenacao") or "-data"),
         "tam_pagina": source_page_size,
     }
-    if keyword:
-        base_query["q"] = keyword
     modalidade = str(params.get("codigoModalidadeContratacao") or "").strip()
     if modalidade:
         base_query["modalidades"] = modalidade
     uf = str(params.get("uf") or "").strip().upper()
     result_cache_key = json.dumps({
         **base_query,
+        "keywords": keywords,
         "ufs": uf,
         "dataInicial": data_inicial,
         "dataFinal": data_final,
@@ -3732,9 +3868,16 @@ def search_pncp_app_editais(params, data_inicial, data_final):
 
     if consolidated is None:
         partition_ufs = (uf,) if uf else BRAZILIAN_UFS
+        partitions = tuple(
+            (search_term, partition_uf)
+            for search_term in search_terms
+            for partition_uf in partition_ufs
+        )
 
-        def fetch_source_page(partition_uf, page, timeout=18):
+        def fetch_source_page(search_term, partition_uf, page, timeout=18):
             query = dict(base_query)
+            if search_term:
+                query["q"] = search_term
             query["ufs"] = partition_uf
             query["pagina"] = page
             url = f"{PNCP_SEARCH_URL}?{urlencode(query)}"
@@ -3742,14 +3885,15 @@ def search_pncp_app_editais(params, data_inicial, data_final):
                 payload = request_json(url, timeout=timeout)
             except Exception as exc:
                 payload = {"items": [], "timeout": True, "message": str(exc)}
-            return (partition_uf, page), url, payload
+            return (search_term, partition_uf, page), url, payload
 
         payloads = {}
         urls_by_page = {}
-        with ThreadPoolExecutor(max_workers=min(6, len(partition_ufs))) as executor:
+        with ThreadPoolExecutor(max_workers=min(6, len(partitions))) as executor:
             futures = {
-                executor.submit(fetch_source_page, partition_uf, 1): partition_uf
-                for partition_uf in partition_ufs
+                executor.submit(fetch_source_page, search_term, partition_uf, 1): partition
+                for partition in partitions
+                for search_term, partition_uf in (partition,)
             }
             for future in as_completed(futures):
                 page_key, url, payload = future.result()
@@ -3766,9 +3910,9 @@ def search_pncp_app_editais(params, data_inicial, data_final):
             time.sleep(retry_delay)
             with ThreadPoolExecutor(max_workers=min(3, len(failed_keys))) as executor:
                 futures = {
-                    executor.submit(fetch_source_page, partition_uf, page, 30): page_key
+                    executor.submit(fetch_source_page, search_term, partition_uf, page, 30): page_key
                     for page_key in failed_keys
-                    for partition_uf, page in (page_key,)
+                    for search_term, partition_uf, page in (page_key,)
                 }
                 for future in as_completed(futures):
                     page_key, url, payload = future.result()
@@ -3777,8 +3921,8 @@ def search_pncp_app_editais(params, data_inicial, data_final):
 
         partition_pages = {}
         source_total = 0
-        for partition_uf in partition_ufs:
-            payload = payloads.get((partition_uf, 1), {})
+        for search_term, partition_uf in partitions:
+            payload = payloads.get((search_term, partition_uf, 1), {})
             if payload.get("rate_limited") or payload.get("timeout"):
                 continue
             try:
@@ -3786,22 +3930,22 @@ def search_pncp_app_editais(params, data_inicial, data_final):
             except (TypeError, ValueError):
                 partition_total = len(payload.get("items", []))
             source_total += partition_total
-            partition_pages[partition_uf] = (
+            partition_pages[(search_term, partition_uf)] = (
                 max(1, (partition_total + source_page_size - 1) // source_page_size)
                 if partition_total else 1
             )
 
         remaining_keys = [
-            (partition_uf, page)
-            for partition_uf, pages in partition_pages.items()
+            (search_term, partition_uf, page)
+            for (search_term, partition_uf), pages in partition_pages.items()
             for page in range(2, pages + 1)
         ]
         if remaining_keys:
             with ThreadPoolExecutor(max_workers=min(6, len(remaining_keys))) as executor:
                 futures = {
-                    executor.submit(fetch_source_page, partition_uf, page): page_key
+                    executor.submit(fetch_source_page, search_term, partition_uf, page): page_key
                     for page_key in remaining_keys
-                    for partition_uf, page in (page_key,)
+                    for search_term, partition_uf, page in (page_key,)
                 }
                 for future in as_completed(futures):
                     page_key, url, payload = future.result()
@@ -3818,9 +3962,9 @@ def search_pncp_app_editais(params, data_inicial, data_final):
             time.sleep(retry_delay)
             with ThreadPoolExecutor(max_workers=min(2, len(failed_keys))) as executor:
                 futures = {
-                    executor.submit(fetch_source_page, partition_uf, page, 30): page_key
+                    executor.submit(fetch_source_page, search_term, partition_uf, page, 30): page_key
                     for page_key in failed_keys
-                    for partition_uf, page in (page_key,)
+                    for search_term, partition_uf, page in (page_key,)
                 }
                 for future in as_completed(futures):
                     page_key, url, payload = future.result()
@@ -3831,18 +3975,23 @@ def search_pncp_app_editais(params, data_inicial, data_final):
             page_key for page_key, payload in payloads.items()
             if payload.get("rate_limited") or payload.get("timeout")
         ]
-        for partition_uf, page in failed_keys:
+        for search_term, partition_uf, page in failed_keys:
             time.sleep(0.35)
-            page_key, url, payload = fetch_source_page(partition_uf, page, timeout=45)
+            page_key, url, payload = fetch_source_page(
+                search_term, partition_uf, page, timeout=45
+            )
             payloads[page_key] = payload
             urls_by_page[page_key] = url
 
-        filtered_rows = []
-        seen = set()
+        candidates_by_term = {
+            search_term: {}
+            for search_term in search_terms
+        }
         rate_limited = False
         timed_out = False
         page_cache_hit = False
         for page_key in sorted(payloads):
+            search_term, _partition_uf, _page = page_key
             payload = payloads[page_key]
             rate_limited = rate_limited or bool(payload.get("rate_limited"))
             timed_out = timed_out or bool(payload.get("timeout"))
@@ -3858,6 +4007,28 @@ def search_pncp_app_editais(params, data_inicial, data_final):
                     or row.get("item_url")
                     or hashlib.sha256(
                         json.dumps(row, ensure_ascii=True, sort_keys=True, default=str).encode("utf-8")
+                    ).hexdigest()
+                )
+                candidates_by_term[search_term].setdefault(row_key, row)
+
+        filtered_rows = []
+        seen = set()
+        for search_term, candidates in candidates_by_term.items():
+            for row in filter_rows_by_complete_search_term(
+                candidates.values(),
+                search_term,
+            ):
+                row_key = (
+                    row.get("id")
+                    or row.get("numero_controle_pncp")
+                    or row.get("item_url")
+                    or hashlib.sha256(
+                        json.dumps(
+                            row,
+                            ensure_ascii=True,
+                            sort_keys=True,
+                            default=str,
+                        ).encode("utf-8")
                     ).hexdigest()
                 )
                 if row_key in seen:
@@ -3878,14 +4049,14 @@ def search_pncp_app_editais(params, data_inicial, data_final):
 
         source_pages = sum(partition_pages.values())
         complete = (
-            len(partition_pages) == len(partition_ufs)
+            len(partition_pages) == len(partitions)
             and len(payloads) == source_pages
             and not rate_limited
             and not timed_out
         )
         failed_pages = [
-            f"{partition_uf}:{page}"
-            for (partition_uf, page), payload in payloads.items()
+            f"{search_term or '*'}:{partition_uf}:{page}"
+            for (search_term, partition_uf, page), payload in payloads.items()
             if payload.get("rate_limited") or payload.get("timeout")
         ]
         consolidated = {
@@ -4049,6 +4220,7 @@ def pncp_search_job_key(params):
             "ordenacao",
         )
     }
+    filters["palavraChave"] = split_search_keywords(filters["palavraChave"])
     return hashlib.sha256(
         json.dumps(filters, ensure_ascii=True, sort_keys=True).encode("utf-8")
     ).hexdigest()
@@ -4065,53 +4237,104 @@ def quick_pncp_search_preview(params):
     object_type = str(params.get("tipoObjeto") or "").strip().lower()
     if object_type not in {"", "material", "servico"}:
         raise ValueError("Tipo do objeto invalido.")
-    query = {
+    base_query = {
         "tipos_documento": "edital",
         "status": "recebendo_proposta",
         "ordenacao": str(params.get("ordenacao") or "-data"),
         "pagina": 1,
         "tam_pagina": 100,
     }
-    keyword = str(params.get("palavraChave") or "").strip()
-    if keyword:
-        query["q"] = keyword
+    keywords = split_search_keywords(params.get("palavraChave"))
+    search_terms = tuple(keywords) or ("",)
     modalidade = str(params.get("codigoModalidadeContratacao") or "").strip()
     if modalidade:
-        query["modalidades"] = modalidade
+        base_query["modalidades"] = modalidade
     uf = str(params.get("uf") or "").strip().upper()
     if uf:
-        query["ufs"] = uf
+        base_query["ufs"] = uf
 
-    url = f"{PNCP_SEARCH_URL}?{urlencode(query)}"
-    payload = request_json(url, timeout=12)
-    rows = [
-        row for row in payload.get("items", [])
-        if date_in_range(row.get("data_fim_vigencia"), data_inicial, data_final)
-        and (not object_type or classify_search_object(row) == object_type)
-    ][:10]
-    results = [map_search_item(row) for row in rows]
+    def fetch_preview(search_term):
+        query = dict(base_query)
+        if search_term:
+            query["q"] = search_term
+        url = f"{PNCP_SEARCH_URL}?{urlencode(query)}"
+        return search_term, url, request_json(url, timeout=12)
+
+    previews = []
+    with ThreadPoolExecutor(max_workers=min(4, len(search_terms))) as executor:
+        futures = {
+            executor.submit(fetch_preview, search_term): search_term
+            for search_term in search_terms
+        }
+        for future in as_completed(futures):
+            previews.append(future.result())
+
+    rows = []
+    seen = set()
+    source_total = 0
+    rate_limited = False
+    timed_out = False
+    cache_hit = False
+    source_urls = []
+    for search_term, url, payload in previews:
+        source_urls.append(url)
+        try:
+            source_total += int(payload.get("total", len(payload.get("items", []))))
+        except (TypeError, ValueError):
+            source_total += len(payload.get("items", []))
+        rate_limited = rate_limited or bool(payload.get("rate_limited"))
+        timed_out = timed_out or bool(payload.get("timeout"))
+        cache_hit = cache_hit or bool(payload.get("cache_hit"))
+        candidates = []
+        for row in payload.get("items", []):
+            if not date_in_range(row.get("data_fim_vigencia"), data_inicial, data_final):
+                continue
+            if object_type and classify_search_object(row) != object_type:
+                continue
+            candidates.append(row)
+        for row in filter_rows_by_complete_search_term(candidates, search_term):
+            row_key = (
+                row.get("id")
+                or row.get("numero_controle_pncp")
+                or row.get("item_url")
+            )
+            if row_key and row_key in seen:
+                continue
+            if row_key:
+                seen.add(row_key)
+            rows.append(row)
+    rows.sort(
+        key=lambda row: str(
+            row.get("data_atualizacao_pncp")
+            or row.get("createdAt")
+            or row.get("data_publicacao_pncp")
+            or ""
+        ),
+        reverse=True,
+    )
+    results = [map_search_item(row) for row in rows[:10]]
     return {
         "results": results,
         "total": len(results),
-        "source_total": payload.get("total", len(results)),
+        "source_total": source_total,
         "pagina": 1,
         "tamanhoPagina": 10,
         "total_pages": 1 if results else 0,
         "has_previous": False,
         "has_next": False,
-        "source_url": url,
+        "source_url": source_urls[0] if source_urls else "",
         "source": "api/search",
         "pages_checked": 1,
         "source_pages": None,
-        "rate_limited": bool(payload.get("rate_limited")),
-        "timed_out": bool(payload.get("timeout")),
+        "rate_limited": rate_limited,
+        "timed_out": timed_out,
         "failed_pages": [],
         "complete": False,
         "searching": True,
         "dataInicial": data_inicial,
         "dataFinal": data_final,
         "tipoObjeto": object_type,
-        "cache_hit": bool(payload.get("cache_hit")),
+        "cache_hit": cache_hit,
     }
 
 

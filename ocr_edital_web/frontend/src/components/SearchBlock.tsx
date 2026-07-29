@@ -4,6 +4,7 @@ import { searchBids } from "../api";
 import type { Bid, UiMessage } from "../types";
 import { localIsoDate, toPncpDate } from "../utils";
 import { DateRangePicker } from "./DateRangePicker";
+import { KeywordTagInput } from "./KeywordTagInput";
 import { StatusMessage } from "./StatusMessage";
 
 interface SearchBlockProps {
@@ -25,7 +26,8 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
   const [startDate, setStartDate] = useState(defaults.start);
   const [endDate, setEndDate] = useState(defaults.end);
   const [uf, setUf] = useState("");
-  const [keyword, setKeyword] = useState("");
+  const [keywords, setKeywords] = useState<string[]>([]);
+  const [keywordDraft, setKeywordDraft] = useState("");
   const [objectType, setObjectType] = useState("");
   const [modality, setModality] = useState("6");
   const [results, setResults] = useState<Bid[]>([]);
@@ -41,7 +43,8 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
     setStartDate("");
     setEndDate("");
     setUf("");
-    setKeyword("");
+    setKeywords([]);
+    setKeywordDraft("");
     setObjectType("");
     setModality("");
     setResults([]);
@@ -77,11 +80,21 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
     setSearchingAll(false);
     setMessage({ kind: "info", text: "Consultando contratações no PNCP..." });
     try {
+      const effectiveKeywords = [
+        ...keywords,
+        ...(keywordDraft.trim() ? [keywordDraft.trim()] : []),
+      ].filter(
+        (term, index, all) =>
+          all.findIndex(
+            (candidate) =>
+              candidate.toLocaleLowerCase("pt-BR") === term.toLocaleLowerCase("pt-BR"),
+          ) === index,
+      );
       const params = new URLSearchParams({
         dataInicial: toPncpDate(startDate),
         dataFinal: toPncpDate(endDate),
         uf: uf.trim().toUpperCase(),
-        palavraChave: keyword.trim(),
+        palavraChave: effectiveKeywords.join(";"),
         tipoObjeto: objectType,
         codigoModalidadeContratacao: modality,
         pagina: String(targetPage),
@@ -172,15 +185,16 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
             onChange={(e) => setUf(e.target.value.replace(/[^a-z]/gi, "").slice(0, 2))}
           />
         </label>
-        <label>
-          Palavra-chave
-          <input
-            value={keyword}
-            maxLength={120}
-            placeholder="Ex.: mobiliário"
-            onChange={(e) => setKeyword(e.target.value)}
+        <div className="keyword-field">
+          <span className="field-label">Palavras-chave</span>
+          <KeywordTagInput
+            terms={keywords}
+            draft={keywordDraft}
+            onTermsChange={setKeywords}
+            onDraftChange={setKeywordDraft}
           />
-        </label>
+          <small>Separe cada referência com ponto e vírgula (;).</small>
+        </div>
         <label>
           Tipo do objeto
           <select value={objectType} onChange={(e) => setObjectType(e.target.value)}>

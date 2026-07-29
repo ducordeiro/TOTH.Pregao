@@ -256,6 +256,26 @@ class ItemExtractionRegressionTests(unittest.TestCase):
         self.assertEqual([row["item"] for row in rows], ["1", "2"])
         self.assertNotIn("jurídico", rows[1]["descricao"])
 
+    def test_pdf_table_accepts_quantity_and_unit_in_the_same_cell(self):
+        tables = [[
+            ["ITEM", "DESCRICAO DO OBJETO", "QTDE/UND", "VALOR EM R$"],
+            [
+                "01",
+                "AQUISICAO DE VEICULO NOVO 1.0 TURBO.",
+                "01/UND",
+                "R$ 117.133,33",
+            ],
+        ]]
+
+        rows = server.normalize_pdf_tables(tables)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["item"], "01")
+        self.assertEqual(rows[0]["quantidade"], "01")
+        self.assertEqual(rows[0]["unidade"], "UND")
+        self.assertEqual(rows[0]["valor_unitario"], "R$ 117.133,33")
+        self.assertIn("VEICULO NOVO", rows[0]["descricao"])
+
     def test_legitimate_three_level_subitem_is_not_discarded(self):
         row = make_item("1.2.3", "Subitem técnico legítimo.", quantidade="5")
 
@@ -899,6 +919,127 @@ class DescriptionReviewRegressionTests(unittest.TestCase):
 
 
 class PncpSearchPaginationTests(unittest.TestCase):
+    def test_semicolon_keywords_are_normalized_and_deduplicated(self):
+        self.assertEqual(
+            server.split_search_keywords(" Cadeira de rodas; monitor;cadeira de RODAS; "),
+            ["Cadeira de rodas", "monitor"],
+        )
+
+    def test_search_term_requires_complete_words_and_phrase(self):
+        self.assertTrue(
+            server.matches_complete_search_term(
+                {"title": "Edital", "description": "Cadeira de rodas motorizada"},
+                "cadeira de rodas",
+            )
+        )
+        self.assertTrue(
+            server.matches_complete_search_term(
+                {"title": "Aquisição de MONITOR", "description": ""},
+                "monitor",
+            )
+        )
+        self.assertTrue(
+            server.matches_complete_search_term(
+                {
+                    "title": "Edital",
+                    "description": "Registro eletrônico integrado de ponto",
+                },
+                "registro de ponto",
+            )
+        )
+        self.assertFalse(
+            server.matches_complete_search_term(
+                {"title": "Edital", "description": "Serviço de monitoramento"},
+                "monitor",
+            )
+        )
+        self.assertFalse(
+            server.matches_complete_search_term(
+                {"title": "Edital", "description": "Aquisição de monitores"},
+                "monitor",
+            )
+        )
+        self.assertFalse(
+            server.matches_complete_search_term(
+                {"title": "Edital", "description": "Cadeira para rodas"},
+                "cadeira de rodas",
+            )
+        )
+        self.assertFalse(
+            server.matches_complete_search_term(
+                {
+                    "title": "Edital",
+                    "description": (
+                        "Registro de preços para aquisição de relógios de ponto"
+                    ),
+                },
+                "registro de ponto",
+            )
+        )
+
+    def test_search_term_can_match_official_item_description(self):
+        row = {
+            "orgao_cnpj": "46422408000152",
+            "ano": "2026",
+            "numero_sequencial": "367",
+            "title": "Edital 60/2026",
+            "description": "Aquisição de Registradores Eletrônicos de Ponto",
+        }
+        pncp_items = [{
+            "descricao": "Registro eletrônico de ponto por reconhecimento facial",
+        }]
+
+        with patch.object(server, "list_pncp_items", return_value=pncp_items) as items:
+            result = server.filter_rows_by_complete_search_term(
+                [row],
+                "registro de ponto",
+            )
+
+        self.assertEqual(result, [row])
+        items.assert_called_once_with("46422408000152", "2026", "367")
+
+    def test_multiple_keywords_are_combined_with_or_semantics(self):
+        def row(identifier, description):
+            return {
+                "id": identifier,
+                "orgao_cnpj": "12345678000199",
+                "ano": "2026",
+                "numero_sequencial": identifier.removeprefix("id-"),
+                "orgao_nome": "Orgao",
+                "title": "Edital",
+                "description": description,
+                "data_fim_vigencia": "2026-08-01T10:00:00",
+            }
+
+        shared = row("id-1", "Cadeira e monitor")
+
+        def fake_request(url, timeout=18):
+            query = parse_qs(urlparse(url).query)
+            keyword = query.get("q", [""])[0]
+            if keyword == "cadeira de rodas":
+                return {"items": [shared, row("id-2", "Cadeira de rodas")], "total": 2}
+            if keyword == "monitor":
+                return {"items": [shared, row("id-3", "Monitor")], "total": 2}
+            return {"items": [], "total": 0}
+
+        server.PNCP_RESULT_CACHE.clear()
+        with patch.object(server, "request_json", side_effect=fake_request) as request:
+            response = server.search_pncp_open_bids({
+                "dataInicial": "20260725",
+                "dataFinal": "20260823",
+                "uf": "SP",
+                "palavraChave": "cadeira de rodas;monitor",
+                "pagina": "1",
+                "tamanhoPagina": "10",
+            })
+
+        self.assertEqual(response["total"], 3)
+        self.assertEqual(len(response["results"]), 3)
+        requested_urls = [call.args[0] for call in request.call_args_list]
+        self.assertTrue(any("q=cadeira+de+rodas" in url for url in requested_urls))
+        self.assertTrue(any("q=monitor" in url for url in requested_urls))
+        server.PNCP_RESULT_CACHE.clear()
+
     def test_fast_search_returns_preview_then_completed_result(self):
         preview = {
             "results": [{"processo": "preview"}],
