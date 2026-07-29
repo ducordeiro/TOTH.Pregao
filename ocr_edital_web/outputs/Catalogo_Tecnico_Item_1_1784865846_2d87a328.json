@@ -1,0 +1,96 @@
+{
+  "schema": "catalogo-tecnico-licitacao/v1",
+  "dados": {
+    "documento_licitacao": {
+      "titulo": "CATÁLOGO TÉCNICO",
+      "numero_pregao": "13/2026",
+      "processo": "12425/2025",
+      "modalidade": "Pregão - Eletrônico",
+      "objeto": "Aquisição de mobiliário.",
+      "link_pncp": "https://pncp.gov.br/app/editais/45780087000103/2026/43"
+    },
+    "orgao": {
+      "nome": "Município de Várzea Paulista",
+      "unidade": "Hospital Municipal",
+      "cnpj": "45780087000103",
+      "endereco": "",
+      "municipio": "Várzea Paulista",
+      "uf": "SP"
+    },
+    "fabricante": {
+      "razao_social": "Fabricante Teste Ltda.",
+      "nome_fantasia": "Fabricante Teste",
+      "cnpj": "33661439000114",
+      "inscricao_estadual": "",
+      "endereco": "",
+      "telefone": "",
+      "email": "",
+      "site": ""
+    },
+    "item": {
+      "numero": "1",
+      "lote": "",
+      "quantidade": "12",
+      "unidade": "UND",
+      "descricao": "Cadeira com estrutura em aço, assento em espuma D-23 e capacidade de 120 kg."
+    },
+    "produto": {
+      "marca": "Marca Teste",
+      "modelo": "Modelo A",
+      "cor": "",
+      "revestimento": "",
+      "peso": "",
+      "garantia": ""
+    },
+    "resumo": {
+      "caracteristicas": "Cadeira com estrutura em aço, assento em espuma D-23 e capacidade de 120 kg."
+    },
+    "secoes": {
+      "assento": "assento em espuma D-23 e capacidade de 120 kg.",
+      "encosto": "",
+      "estrutura": "Cadeira com estrutura em aço",
+      "base": "",
+      "pes": "",
+      "bracos": "",
+      "rodizios": "",
+      "mecanismos": "",
+      "acessorios": "",
+      "dimensoes": "",
+      "normas": "",
+      "complementares": "",
+      "observacoes": ""
+    },
+    "marca_dagua": {
+      "ativa": true,
+      "texto_personalizado": "",
+      "cor": "#C62828",
+      "opacidade": 12
+    },
+    "origem": {
+      "tipo": "Termo de Referência",
+      "arquivo": "TR.pdf",
+      "link": "https://pncp.gov.br/app/editais/45780087000103/2026/43"
+    }
+  },
+  "imagens": [
+    {
+      "arquivo": "logo.png",
+      "papel": "logo",
+      "secao": "",
+      "legenda": "Logo"
+    },
+    {
+      "arquivo": "produto.png",
+      "papel": "principal",
+      "secao": "",
+      "legenda": "Produto"
+    }
+  ],
+  "validacao": {
+    "errors": [],
+    "warnings": [
+      "Há possível erro de espaçamento entre números.",
+      "Seções sem conteúdo não serão exportadas: ENCOSTO, BASE, PÉS, BRAÇOS, RODÍZIOS, MECANISMOS, ACESSÓRIOS, DIMENSÕES, NORMAS E CONFORMIDADES, INFORMAÇÕES COMPLEMENTARES, OBSERVAÇÕES."
+    ]
+  }
+}
