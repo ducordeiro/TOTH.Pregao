@@ -20,6 +20,7 @@ import {
   MapPin,
   Maximize2,
   MoreHorizontal,
+  PackageSearch,
   Plus,
   Search,
   Star,
@@ -78,7 +79,7 @@ const STAGES: Array<{
 ];
 
 type BusinessView = "kanban" | "list" | "table";
-type DetailTab = "dados" | "tarefas" | "documentos" | "arquivos" | "historico";
+type DetailTab = "dados" | "itens" | "tarefas" | "documentos" | "arquivos" | "historico";
 
 interface BusinessFilters {
   keyword: string;
@@ -119,6 +120,13 @@ function formatDateTime(value: string) {
     dateStyle: "short",
     timeStyle: "short",
   }).format(date);
+}
+
+function formatCurrency(value: string) {
+  if (!value) return "Não informado";
+  const number = Number(value.replace(",", "."));
+  if (!Number.isFinite(number)) return value;
+  return number.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
 function openingLabel(value: string) {
@@ -221,6 +229,7 @@ function BusinessCard({
         <span>{business.modalidade || "Sem modalidade"}</span>
         <span>{priorityLabel(business.prioridade)}</span>
         {business.situacao && <span>{business.situacao}</span>}
+        {business.total_itens > 0 && <span>{business.total_itens} item(ns)</span>}
       </div>
       <div className="business-card-footer">
         <button
@@ -603,6 +612,7 @@ function BusinessDetailModal({
             <nav className="business-detail-tabs" aria-label="Conteúdo do negócio">
               {([
                 ["dados", "Dados"],
+                ["itens", `Itens (${detail.itens.length})`],
                 ["tarefas", "Checklist"],
                 ["documentos", "Documentação"],
                 ["arquivos", "Edital"],
@@ -742,6 +752,33 @@ function BusinessDetailModal({
                 </div>
               )}
 
+              {tab === "itens" && (
+                <div className="business-item-list">
+                  {detail.itens.length ? detail.itens.map((item) => (
+                    <article key={item.id}>
+                      <header>
+                        <span>Item {item.numero}{item.lote ? ` · Lote ${item.lote}` : ""}</span>
+                        {item.situacao && <em>{item.situacao}</em>}
+                      </header>
+                      <p>{item.descricao}</p>
+                      <dl>
+                        <div><dt>Quantidade</dt><dd>{item.quantidade || "Não informada"}</dd></div>
+                        <div><dt>Unidade</dt><dd>{item.unidade || "UND"}</dd></div>
+                        <div><dt>Valor unitário</dt><dd>{formatCurrency(item.valor_unitario_estimado)}</dd></div>
+                        <div><dt>Valor total</dt><dd>{formatCurrency(item.valor_total_estimado)}</dd></div>
+                        <div><dt>Critério</dt><dd>{item.criterio_julgamento || "Não informado"}</dd></div>
+                      </dl>
+                    </article>
+                  )) : (
+                    <div className="business-empty-detail">
+                      <PackageSearch size={26} />
+                      <strong>Nenhum item vinculado</strong>
+                      <span>Selecione os itens ao adicionar a oportunidade pelo Bloco 1.</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {tab === "documentos" && (
                 <div className="business-empty-detail">
                   <FileText size={26} />
@@ -868,6 +905,12 @@ export function BusinessBlock({ responsibles }: BusinessBlockProps) {
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  useEffect(() => {
+    const refresh = () => void load();
+    window.addEventListener("toth:business-updated", refresh);
+    return () => window.removeEventListener("toth:business-updated", refresh);
   }, [load]);
 
   useEffect(() => {

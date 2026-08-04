@@ -1,10 +1,11 @@
-import { useMemo, useRef, useState } from "react";
-import { ArrowRight, ChevronLeft, ChevronRight, Search, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowRight, ChevronDown, ChevronLeft, ChevronRight, Search, Trash2 } from "lucide-react";
 import { searchBids } from "../api";
 import type { Bid, UiMessage } from "../types";
 import { localIsoDate, toPncpDate } from "../utils";
 import { DateRangePicker } from "./DateRangePicker";
 import { KeywordTagInput } from "./KeywordTagInput";
+import { OpportunityDetailModal } from "./OpportunityDetailModal";
 import { StatusMessage } from "./StatusMessage";
 
 interface SearchBlockProps {
@@ -20,12 +21,44 @@ function defaultDates() {
 
 const PAGE_SIZE = 10;
 
+const BRAZILIAN_UFS = [
+  ["AC", "Acre"],
+  ["AL", "Alagoas"],
+  ["AP", "Amapa"],
+  ["AM", "Amazonas"],
+  ["BA", "Bahia"],
+  ["CE", "Ceara"],
+  ["DF", "Distrito Federal"],
+  ["ES", "Espirito Santo"],
+  ["GO", "Goias"],
+  ["MA", "Maranhao"],
+  ["MT", "Mato Grosso"],
+  ["MS", "Mato Grosso do Sul"],
+  ["MG", "Minas Gerais"],
+  ["PA", "Para"],
+  ["PB", "Paraiba"],
+  ["PR", "Parana"],
+  ["PE", "Pernambuco"],
+  ["PI", "Piaui"],
+  ["RJ", "Rio de Janeiro"],
+  ["RN", "Rio Grande do Norte"],
+  ["RS", "Rio Grande do Sul"],
+  ["RO", "Rondonia"],
+  ["RR", "Roraima"],
+  ["SC", "Santa Catarina"],
+  ["SP", "Sao Paulo"],
+  ["SE", "Sergipe"],
+  ["TO", "Tocantins"],
+] as const;
+
 export function SearchBlock({ onUseLink }: SearchBlockProps) {
   const searchRequestRef = useRef(0);
+  const ufFieldRef = useRef<HTMLDivElement>(null);
   const defaults = useMemo(defaultDates, []);
   const [startDate, setStartDate] = useState(defaults.start);
   const [endDate, setEndDate] = useState(defaults.end);
-  const [uf, setUf] = useState("");
+  const [ufs, setUfs] = useState<string[]>([]);
+  const [ufMenuOpen, setUfMenuOpen] = useState(false);
   const [keywords, setKeywords] = useState<string[]>([]);
   const [keywordDraft, setKeywordDraft] = useState("");
   const [objectType, setObjectType] = useState("");
@@ -37,12 +70,23 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
   const [searchingAll, setSearchingAll] = useState(false);
   const [message, setMessage] = useState<UiMessage | null>(null);
   const [busy, setBusy] = useState(false);
+  const [selectedBid, setSelectedBid] = useState<Bid | null>(null);
+
+  useEffect(() => {
+    if (!ufMenuOpen) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!ufFieldRef.current?.contains(event.target as Node)) setUfMenuOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [ufMenuOpen]);
 
   const clear = () => {
     searchRequestRef.current += 1;
     setStartDate("");
     setEndDate("");
-    setUf("");
+    setUfs([]);
+    setUfMenuOpen(false);
     setKeywords([]);
     setKeywordDraft("");
     setObjectType("");
@@ -93,7 +137,7 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
       const params = new URLSearchParams({
         dataInicial: toPncpDate(startDate),
         dataFinal: toPncpDate(endDate),
-        uf: uf.trim().toUpperCase(),
+        uf: ufs.join(","),
         palavraChave: effectiveKeywords.join(";"),
         tipoObjeto: objectType,
         codigoModalidadeContratacao: modality,
@@ -176,15 +220,66 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
           />
           <small>Selecione um período de até 30 dias.</small>
         </div>
-        <label>
-          UF
-          <input
-            value={uf}
-            maxLength={2}
-            placeholder="SP"
-            onChange={(e) => setUf(e.target.value.replace(/[^a-z]/gi, "").slice(0, 2))}
-          />
-        </label>
+        <div className="uf-field" ref={ufFieldRef}>
+          <span className="field-label">UF</span>
+          <button
+            className="uf-multi-trigger"
+            type="button"
+            aria-label="Selecionar UFs da oportunidade"
+            aria-haspopup="listbox"
+            aria-expanded={ufMenuOpen}
+            onClick={() => setUfMenuOpen((current) => !current)}
+          >
+            <span>
+              {ufs.length === 0
+                ? "Todos os estados"
+                : ufs.length <= 3
+                  ? ufs.join(", ")
+                  : `${ufs.slice(0, 3).join(", ")} +${ufs.length - 3}`}
+            </span>
+            <ChevronDown size={16} aria-hidden="true" />
+          </button>
+          {ufMenuOpen && (
+            <div
+              className="uf-multi-menu"
+              role="listbox"
+              aria-label="Estados selecionados"
+              aria-multiselectable="true"
+            >
+              <button
+                className={ufs.length === 0 ? "is-active" : ""}
+                type="button"
+                onClick={() => setUfs([])}
+              >
+                Todos os estados
+              </button>
+              <div className="uf-option-list">
+                {BRAZILIAN_UFS.map(([code, name]) => {
+                  const checked = ufs.includes(code);
+                  return (
+                    <label key={code} role="option" aria-selected={checked}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(event) => {
+                          setUfs((current) => {
+                            const selected = new Set(current);
+                            if (event.target.checked) selected.add(code);
+                            else selected.delete(code);
+                            return BRAZILIAN_UFS
+                              .map(([ufCode]) => ufCode)
+                              .filter((ufCode) => selected.has(ufCode));
+                          });
+                        }}
+                      />
+                      <span><strong>{code}</strong>{name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
         <div className="keyword-field">
           <span className="field-label">Palavras-chave</span>
           <KeywordTagInput
@@ -240,7 +335,20 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
             </thead>
             <tbody>
               {results.map((bid) => (
-                <tr key={`${bid.cnpj}-${bid.ano}-${bid.sequencial}`}>
+                <tr
+                  className="search-result-row"
+                  key={`${bid.cnpj}-${bid.ano}-${bid.sequencial}`}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`Abrir oportunidade ${bid.numeroCompra}`}
+                  onClick={() => setSelectedBid(bid)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedBid(bid);
+                    }
+                  }}
+                >
                   <td>{bid.orgao}</td>
                   <td>{[bid.municipio, bid.uf].filter(Boolean).join(" / ")}</td>
                   <td>{bid.numeroCompra}</td>
@@ -250,7 +358,11 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
                     <button
                       className="button button-small button-secondary"
                       type="button"
-                      onClick={() => onUseLink(bid.link)}
+                      title="Usar oportunidade no Bloco 2"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onUseLink(bid.link);
+                      }}
                     >
                       Usar
                       <ArrowRight size={15} />
@@ -293,6 +405,12 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
           </div>
         </nav>
       ) : null}
+
+      <OpportunityDetailModal
+        bid={selectedBid}
+        onClose={() => setSelectedBid(null)}
+        onUseLink={onUseLink}
+      />
     </section>
   );
 }
