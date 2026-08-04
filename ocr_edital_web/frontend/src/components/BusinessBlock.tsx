@@ -187,6 +187,7 @@ interface BusinessCardProps {
   business: Business;
   onOpen: (id: string, tab?: DetailTab) => void;
   onRename: (business: Business, title: string) => Promise<void>;
+  onPositionChange: (business: Business, position: number | null) => Promise<void>;
   onArchive: (business: Business) => void;
   onRemove: (business: Business) => void;
 }
@@ -196,6 +197,7 @@ function BusinessCard({
   onOpen,
   onRename,
   onArchive,
+  onPositionChange,
   onRemove,
 }: BusinessCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -226,6 +228,29 @@ function BusinessCard({
       setSavingTitle(false);
     }
   };
+  const editPosition = async () => {
+    setMenuOpen(false);
+    const answer = window.prompt(
+      "Informe a posição do item. Deixe em branco para remover:",
+      business.position_number ? String(business.position_number) : "",
+    );
+    if (answer === null) return;
+    const value = answer.trim();
+    let position: number | null = null;
+    if (value) {
+      if (!/^\d+$/.test(value) || Number(value) < 1) {
+        window.alert("A posição deve ser um número inteiro maior que zero.");
+        return;
+      }
+      position = Number(value);
+    }
+    try {
+      await onPositionChange(business, position);
+    } catch {
+      // A mensagem de erro é exibida pelo bloco.
+    }
+  };
+
 
   return (
     <article
@@ -312,6 +337,19 @@ function BusinessCard({
         <span>{priorityLabel(business.prioridade)}</span>
         {business.situacao && <span>{business.situacao}</span>}
         {business.total_itens > 0 && <span>{business.total_itens} item(ns)</span>}
+        <button
+          className="business-position-button"
+          type="button"
+          title="Definir posição"
+          aria-label={`Posição atual: ${business.position_number ?? "não definida"}. Editar posição`}
+          onClick={(event) => {
+            event.stopPropagation();
+            void editPosition();
+          }}
+        >
+          Posição: <strong>{business.position_number ?? "definir"}</strong>
+          <Pencil size={10} />
+        </button>
       </div>
       <div className="business-card-footer">
         <button
@@ -1076,6 +1114,18 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
     }
   };
 
+  const changeBusinessPosition = async (business: Business, position: number | null) => {
+    setError("");
+    try {
+      const updated = await updateBusiness(business.id, { position_number: position });
+      replaceBusiness(updated);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "Não foi possível alterar a posição.";
+      setError(message);
+      throw reason;
+    }
+  };
+
   const changeStage = async (business: Business, stage: BusinessStage) => {
     if (business.etapa === stage) return;
     const sensitive = stage === "contrato" || STAGE_INDEX[stage] < STAGE_INDEX[business.etapa];
@@ -1359,6 +1409,7 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
                         setDetailTab(tab);
                         setDetailId(id);
                       }}
+                      onPositionChange={changeBusinessPosition}
                       onArchive={(item) => void archiveBusiness(item)}
                       onRemove={(item) => void removeBusiness(item)}
                     />

@@ -1653,5 +1653,36 @@ class BusinessItemSelectionTests(unittest.TestCase):
             })
 
 
+    def test_position_is_defined_on_main_business_record(self):
+        with patch.object(server, "pncp_purchase_metadata", return_value=self.metadata):
+            created = server.import_business({
+                "pncp_link": self.link,
+                "empresa": "Empresa Teste",
+                "itens": [self.item(1, "Cadeira")],
+            })
+
+        business_id = created["negocio"]["id"]
+        updated = server.update_business(business_id, {"position_number": 2})
+        self.assertEqual(updated["position_number"], 2)
+
+        cleared = server.update_business(business_id, {"position_number": None})
+        self.assertIsNone(cleared["position_number"])
+
+    def test_classification_position_is_synchronized_back_to_main_screen(self):
+        with patch.object(server, "pncp_purchase_metadata", return_value=self.metadata):
+            created = server.import_business({
+                "pncp_link": self.link,
+                "empresa": "Empresa Teste",
+                "itens": [self.item(1, "Cadeira")],
+            })
+
+        business_id = created["negocio"]["id"]
+        server.sync_business_position_from_proposal({
+            "business_id": int(business_id),
+            "position_number": 3,
+        })
+
+        self.assertEqual(server.get_business(business_id)["position_number"], 3)
+
 if __name__ == "__main__":
     unittest.main()

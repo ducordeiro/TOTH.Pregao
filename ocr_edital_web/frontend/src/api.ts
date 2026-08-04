@@ -283,6 +283,7 @@ export type BusinessUpdate = Partial<Pick<
   | "titulo"
   | "etapa"
   | "prioridade"
+  | "position_number"
   | "favorito"
   | "responsavel"
   | "prazo_interno"

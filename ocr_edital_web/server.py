@@ -183,6 +183,7 @@ def database_connection():
 
 def init_database():
     ensure_dirs()
+    kanban_store.initialize(DATABASE_PATH)
     with DATABASE_LOCK, database_connection() as connection:
         connection.execute("PRAGMA journal_mode = WAL")
         connection.executescript(
@@ -283,6 +284,7 @@ def init_database():
                 etapa TEXT NOT NULL DEFAULT 'oportunidade',
                 situacao TEXT NOT NULL DEFAULT '',
                 prioridade INTEGER NOT NULL DEFAULT 2 CHECK (prioridade BETWEEN 1 AND 3),
+                position_number INTEGER,
                 favorito INTEGER NOT NULL DEFAULT 0 CHECK (favorito IN (0, 1)),
                 arquivado INTEGER NOT NULL DEFAULT 0 CHECK (arquivado IN (0, 1)),
                 removido INTEGER NOT NULL DEFAULT 0 CHECK (removido IN (0, 1)),
@@ -358,6 +360,20 @@ def init_database():
                 ON negocio_itens (negocio_id, ordem, id);
             """
         )
+        business_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(negocios)")
+        }
+        if "position_number" not in business_columns:
+            connection.execute("ALTER TABLE negocios ADD COLUMN position_number INTEGER")
+        connection.execute(
+            """
+            UPDATE negocios SET position_number = (
+                SELECT p.position_number FROM proposals p WHERE p.business_id = negocios.id LIMIT 1
+            ) WHERE position_number IS NULL AND EXISTS (
+                SELECT 1 FROM proposals p WHERE p.business_id = negocios.id AND p.position_number IS NOT NULL
+            )
+            """
+        )
         now = datetime.now().astimezone().isoformat(timespec="seconds")
         seed_migration = "seed_responsaveis_v1"
         migration_applied = connection.execute(
@@ -377,7 +393,6 @@ def init_database():
                 "INSERT INTO app_migrations (chave, aplicado_em) VALUES (?, ?)",
                 (seed_migration, now),
             )
-    kanban_store.initialize(DATABASE_PATH)
 
 
 def responsible_record(row):
@@ -1905,7 +1920,7 @@ def business_record(row):
         "total_itens": row["total_itens"],
         "criado_em": row["criado_em"],
         "atualizado_em": row["atualizado_em"],
-        "position_number": row["position_number"],
+        "position_number": row["effective_position_number"],
         "pode_mover": True,
     }
 
@@ -1918,8 +1933,8 @@ BUSINESS_SELECT = """
          WHERE t.negocio_id = n.id) AS checklist_total,
         (SELECT COUNT(*) FROM negocio_itens i
          WHERE i.negocio_id = n.id) AS total_itens,
-        (SELECT p.position_number FROM proposals p
-         WHERE p.business_id = n.id LIMIT 1) AS position_number
+        COALESCE(n.position_number, (SELECT p.position_number FROM proposals p
+         WHERE p.business_id = n.id LIMIT 1)) AS effective_position_number
     FROM negocios n
 """
 
@@ -2332,7 +2347,7 @@ def classify_business_into_source_portal(business_id):
     proposal = kanban_store.upsert_business_proposal(DATABASE_PATH, business_id, {
         "column_id": str(column["id"]),
         "portal": portal,
-        "position_number": "",
+        "position_number": str(business.get("position_number") or ""),
         "modality": business["modalidade"],
         "agency_name": business["orgao"],
         "notice_number": business["numero_compra"],
@@ -2355,6 +2370,18 @@ def classify_business_into_source_portal(business_id):
     return {"portal": portal, "proposal": proposal, "verification": verification}
 
 
+def sync_business_position_from_proposal(proposal):
+    business_id = proposal.get("business_id") if proposal else None
+    if not business_id:
+        return
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    with DATABASE_LOCK, database_connection() as connection:
+        connection.execute(
+            "UPDATE negocios SET position_number = ?, atualizado_em = ? WHERE id = ?",
+            (proposal.get("position_number"), now, business_id),
+        )
+
+
 def validate_business_update(payload):
     if not isinstance(payload, dict):
         raise ValueError("Dados do negócio inválidos.")
@@ -2363,6 +2390,7 @@ def validate_business_update(payload):
         "etapa",
         "prioridade",
         "favorito",
+        "position_number",
         "responsavel",
         "prazo_interno",
         "anotacoes",
@@ -2423,6 +2451,18 @@ def update_business(business_id, payload):
             if priority not in {1, 2, 3}:
                 raise ValueError("Prioridade inválida.")
             changes["prioridade"] = priority
+        if "position_number" in changes:
+            raw_position = changes["position_number"]
+            if raw_position in (None, ""):
+                changes["position_number"] = None
+            else:
+                try:
+                    position = int(raw_position)
+                except (TypeError, ValueError):
+                    raise ValueError("A posição deve ser um número inteiro maior que zero.")
+                if position < 1:
+                    raise ValueError("A posição deve ser um número inteiro maior que zero.")
+                changes["position_number"] = position
         for boolean_field in ("favorito", "arquivado", "removido"):
             if boolean_field in changes:
                 changes[boolean_field] = 1 if bool(changes[boolean_field]) else 0
@@ -2436,6 +2476,11 @@ def update_business(business_id, payload):
             f"UPDATE negocios SET {assignments}, atualizado_em = ? WHERE id = ?",
             (*changes.values(), now, business_id),
         )
+        if "position_number" in changes:
+            connection.execute(
+                "UPDATE proposals SET position_number = ?, updated_at = ? WHERE business_id = ?",
+                (changes["position_number"], now, business_id),
+            )
         if "arquivado" in changes or "removido" in changes:
             event = "Negócio arquivado" if changes.get("arquivado") else "Negócio removido"
             connection.execute(
@@ -8775,7 +8820,9 @@ class App(BaseHTTPRequestHandler):
             return
         if request_path == "/api/kanban/proposals":
             try:
-                json_response(self, 201, {"proposal": kanban_store.save_proposal(DATABASE_PATH, parse_json_body(self))})
+                proposal = kanban_store.save_proposal(DATABASE_PATH, parse_json_body(self))
+                sync_business_position_from_proposal(proposal)
+                json_response(self, 201, {"proposal": proposal})
             except Exception as exc:
                 business_api_error(self, exc)
 
@@ -9041,7 +9088,9 @@ class App(BaseHTTPRequestHandler):
         proposal_match = re.fullmatch(r"/api/kanban/proposals/(\d+)", request_path)
         if proposal_match:
             try:
-                json_response(self, 200, {"proposal": kanban_store.save_proposal(DATABASE_PATH, parse_json_body(self), proposal_match.group(1))})
+                proposal = kanban_store.save_proposal(DATABASE_PATH, parse_json_body(self), proposal_match.group(1))
+                sync_business_position_from_proposal(proposal)
+                json_response(self, 200, {"proposal": proposal})
             except Exception as exc:
                 business_api_error(self, exc)
             return

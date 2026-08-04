@@ -4126,6 +4126,34 @@ input[type="checkbox"] {
   white-space: nowrap;
 }
 
+.business-position-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 20px;
+  border: 1px solid #61757d;
+  border-radius: 3px;
+  padding: 2px 5px;
+  background: #1d2c32;
+  color: #d7e1e4;
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.business-position-button:hover,
+.business-position-button:focus-visible {
+  border-color: #86a0aa;
+  background: #263940;
+  color: #fff;
+  outline: none;
+}
+
+.business-position-button strong {
+  color: inherit;
+  font-size: 10px;
+}
+
 .business-card-footer {
   margin-top: 10px;
   padding-top: 8px;
