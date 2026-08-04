@@ -43,6 +43,30 @@ class KanbanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "http"):
             kanban.save_proposal(self.database, {"column_id": column["id"], "title": "Outro", "priority": "normal", "source_link": "arquivo.txt"})
 
+    def test_business_classification_creates_portal_and_updates_same_card(self):
+        column = kanban.ensure_column(self.database, "Comprasnet")
+        first = kanban.upsert_business_proposal(self.database, 42, {
+            "column_id": column["id"],
+            "title": "Pregão 42",
+            "priority": "normal",
+            "notice_number": "42/2026",
+        })
+        second_column = kanban.ensure_column(self.database, "Licitanet")
+        second = kanban.upsert_business_proposal(self.database, 42, {
+            "column_id": second_column["id"],
+            "title": "Pregão 42 atualizado",
+            "priority": "alta",
+            "notice_number": "42/2026",
+        })
+
+        board = kanban.board(self.database)
+        linked = [item for item in board["proposals"] if item["business_id"] == 42]
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(len(linked), 1)
+        self.assertEqual(linked[0]["portal"], "Licitanet")
+        self.assertEqual(linked[0]["title"], "Pregão 42 atualizado")
+        self.assertEqual(len(kanban.history(self.database, first["id"])), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

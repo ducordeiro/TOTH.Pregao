@@ -21,6 +21,7 @@ import {
   Maximize2,
   MoreHorizontal,
   PackageSearch,
+  Pencil,
   Plus,
   Search,
   Star,
@@ -175,9 +176,17 @@ function filterDate(value: string) {
   return `${year}-${month}-${day}`;
 }
 
+function businessPositionClass(position: number | null) {
+  if (position === 1) return " position-first";
+  if (position === 2) return " position-second";
+  if (position === 3) return " position-third";
+  return "";
+}
+
 interface BusinessCardProps {
   business: Business;
   onOpen: (id: string, tab?: DetailTab) => void;
+  onRename: (business: Business, title: string) => Promise<void>;
   onArchive: (business: Business) => void;
   onRemove: (business: Business) => void;
 }
@@ -185,15 +194,43 @@ interface BusinessCardProps {
 function BusinessCard({
   business,
   onOpen,
+  onRename,
   onArchive,
   onRemove,
 }: BusinessCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(business.titulo);
+  const [savingTitle, setSavingTitle] = useState(false);
   const deadline = urgency(business);
+
+  const beginTitleEdit = () => {
+    setTitleDraft(business.titulo);
+    setMenuOpen(false);
+    setEditingTitle(true);
+  };
+
+  const saveTitle = async () => {
+    const title = titleDraft.trim();
+    if (!title || title === business.titulo) {
+      if (title) setEditingTitle(false);
+      return;
+    }
+    setSavingTitle(true);
+    try {
+      await onRename(business, title);
+      setEditingTitle(false);
+    } catch {
+      // A mensagem de erro é exibida pelo bloco e o editor permanece aberto.
+    } finally {
+      setSavingTitle(false);
+    }
+  };
+
   return (
     <article
-      className={`business-card priority-${business.prioridade}`}
-      draggable={business.pode_mover}
+      className={`business-card priority-${business.prioridade}${businessPositionClass(business.position_number)}`}
+      draggable={business.pode_mover && !editingTitle}
       onDragStart={(event) => {
         event.dataTransfer.setData("text/business-id", business.id);
         event.dataTransfer.effectAllowed = "move";
@@ -208,9 +245,54 @@ function BusinessCard({
         <strong>{business.modalidade || "Modalidade não informada"}</strong>
         <span>{business.numero_compra || `PNCP ${business.ano}/${business.sequencial}`}</span>
       </div>
-      <h3 title={business.titulo_oficial || business.titulo}>
-        {shortText(business.titulo || "Objeto da contratação não informado")}
-      </h3>
+      {editingTitle ? (
+        <div
+          className="business-card-title-editor"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setEditingTitle(false);
+            if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) void saveTitle();
+          }}
+        >
+          <textarea
+            autoFocus
+            rows={3}
+            value={titleDraft}
+            aria-label="Título do negócio"
+            onChange={(event) => setTitleDraft(event.target.value)}
+          />
+          <div>
+            <button
+              type="button"
+              disabled={savingTitle || !titleDraft.trim()}
+              onClick={() => void saveTitle()}
+            >
+              <Check size={14} /> {savingTitle ? "Salvando..." : "Salvar"}
+            </button>
+            <button type="button" disabled={savingTitle} onClick={() => setEditingTitle(false)}>
+              <X size={14} /> Cancelar
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="business-card-title-row">
+          <h3 title={business.titulo_oficial || business.titulo}>
+            {shortText(business.titulo || "Objeto da contratação não informado")}
+          </h3>
+          <button
+            className="business-title-edit-button"
+            type="button"
+            title="Editar título"
+            aria-label={`Editar título de ${business.titulo}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              beginTitleEdit();
+            }}
+          >
+            <Pencil size={13} />
+          </button>
+        </div>
+      )}
       <div className="business-card-org" title={business.orgao}>
         <Building2 size={15} aria-hidden="true" />
         <span>{business.orgao || "Órgão não informado"}</span>
@@ -297,6 +379,9 @@ function BusinessCard({
       </div>
       {menuOpen && (
         <div className="business-card-menu" onClick={(event) => event.stopPropagation()}>
+          <button type="button" onClick={beginTitleEdit}>
+            <Pencil size={14} /> Editar título
+          </button>
           <button
             type="button"
             onClick={() => {
@@ -863,9 +948,10 @@ function BusinessDetailModal({
 
 interface BusinessBlockProps {
   responsibles: Responsible[];
+  onOpenClassifications: () => void;
 }
 
-export function BusinessBlock({ responsibles }: BusinessBlockProps) {
+export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessBlockProps) {
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -978,10 +1064,20 @@ export function BusinessBlock({ responsibles }: BusinessBlockProps) {
     setBusinesses((current) => current.map((item) => item.id === updated.id ? { ...item, ...updated } : item));
   };
 
+  const renameBusiness = async (business: Business, title: string) => {
+    setError("");
+    try {
+      const updated = await updateBusiness(business.id, { titulo_interno: title });
+      replaceBusiness(updated);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "Não foi possível alterar o título.";
+      setError(message);
+      throw reason;
+    }
+  };
+
   const changeStage = async (business: Business, stage: BusinessStage) => {
     if (business.etapa === stage) return;
-    const target = STAGES.find((item) => item.id === stage)!;
-    if (!window.confirm(`Mover "${shortText(business.titulo, 55)}" para ${target.label}?`)) return;
     const sensitive = stage === "contrato" || STAGE_INDEX[stage] < STAGE_INDEX[business.etapa];
     let justification = "";
     if (sensitive) {
@@ -1242,12 +1338,23 @@ export function BusinessBlock({ responsibles }: BusinessBlockProps) {
                     <p>{stage.description}</p>
                   </div>
                   <span>{stageBusinesses.length}</span>
+                  {stage.id === "classificacao" ? (
+                    <button
+                      className="business-classification-button"
+                      type="button"
+                      onClick={onOpenClassifications}
+                      aria-label="Visualizar classificações por portal"
+                    >
+                      <Eye size={15} /> Visualizar classificações
+                    </button>
+                  ) : null}
                 </header>
                 <div className="business-column-scroll">
                   {stageBusinesses.length ? stageBusinesses.map((business) => (
                     <BusinessCard
                       key={business.id}
                       business={business}
+                      onRename={renameBusiness}
                       onOpen={(id, tab = "dados") => {
                         setDetailTab(tab);
                         setDetailId(id);

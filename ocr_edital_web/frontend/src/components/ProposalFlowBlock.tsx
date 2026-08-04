@@ -20,7 +20,12 @@ function positionClass(value: string) {
   return "";
 }
 
-export function ProposalFlowBlock() {
+interface ProposalFlowBlockProps {
+  onBack?: () => void;
+  active?: boolean;
+}
+
+export function ProposalFlowBlock({ onBack, active = true }: ProposalFlowBlockProps) {
   const [columns, setColumns] = useState<KanbanColumn[]>([]);
   const [proposals, setProposals] = useState<KanbanProposal[]>([]);
   const [editing, setEditing] = useState<KanbanProposal | null>(null);
@@ -36,7 +41,7 @@ export function ProposalFlowBlock() {
     setProposals(board.proposals);
   };
 
-  useEffect(() => { void reload().catch((error) => setMessage({ kind: "error", text: error.message })); }, []);
+  useEffect(() => { if (active) void reload().catch((error) => setMessage({ kind: "error", text: error.message })); }, [active]);
   const grouped = useMemo(() => new Map(columns.map((column) => [
     column.id,
     proposals
@@ -66,6 +71,7 @@ export function ProposalFlowBlock() {
     try {
       await saveKanbanProposal(draft, editing?.id);
       await reload();
+      window.dispatchEvent(new Event("toth:business-updated"));
       setOpen(false);
       setMessage({ kind: "success", text: editing ? "Proposta atualizada." : "Proposta cadastrada." });
     } catch (error) {
@@ -104,8 +110,12 @@ export function ProposalFlowBlock() {
 
   return <section className="workspace-section proposal-flow" aria-labelledby="flow-heading">
     <div className="section-heading flow-heading">
-      <div><span className="section-kicker">Bloco 06</span><h2 id="flow-heading">Fluxo de propostas</h2><p>Kanban por portal, com histórico de movimentação e persistência local.</p></div>
-      <div className="flow-actions"><span className="sync-badge is-offline">Offline · sincronização manual</span><button className="button button-primary" type="button" onClick={() => void addColumn()}><Plus size={17}/> Nova coluna</button></div>
+      <div><span className="section-kicker">Bloco 04 · Classificação</span><h2 id="flow-heading">Classificações por portal</h2><p>Kanban por portal, com histórico de movimentação e persistência local.</p></div>
+      <div className="flow-actions">
+        <span className="sync-badge is-offline">Offline · sincronização manual</span>
+        {onBack ? <button className="button button-secondary" type="button" onClick={onBack}><ArrowLeft size={17}/> Voltar para Negócios</button> : null}
+        <button className="button button-primary" type="button" onClick={() => void addColumn()}><Plus size={17}/> Nova coluna</button>
+      </div>
     </div>
     <StatusMessage message={message}/>
     <div className="proposal-kanban" aria-label="Kanban de propostas">

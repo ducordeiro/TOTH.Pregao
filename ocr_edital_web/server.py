@@ -76,6 +76,7 @@ PNCP_SEARCH_URL = "https://pncp.gov.br/api/search"
 SEARCH_CACHE = {}
 PNCP_RESULT_CACHE = {}
 SEARCH_ITEM_CACHE = {}
+SEARCH_DOCUMENT_ITEM_CACHE = {}
 PNCP_SEARCH_JOBS = {}
 SEARCH_CACHE_TTL = 300
 SOURCE_CACHE = {}
@@ -376,6 +377,7 @@ def init_database():
                 "INSERT INTO app_migrations (chave, aplicado_em) VALUES (?, ?)",
                 (seed_migration, now),
             )
+    kanban_store.initialize(DATABASE_PATH)
 
 
 def responsible_record(row):
@@ -1903,6 +1905,7 @@ def business_record(row):
         "total_itens": row["total_itens"],
         "criado_em": row["criado_em"],
         "atualizado_em": row["atualizado_em"],
+        "position_number": row["position_number"],
         "pode_mover": True,
     }
 
@@ -1914,7 +1917,9 @@ BUSINESS_SELECT = """
         (SELECT COUNT(*) FROM negocio_tarefas t
          WHERE t.negocio_id = n.id) AS checklist_total,
         (SELECT COUNT(*) FROM negocio_itens i
-         WHERE i.negocio_id = n.id) AS total_itens
+         WHERE i.negocio_id = n.id) AS total_itens,
+        (SELECT p.position_number FROM proposals p
+         WHERE p.business_id = n.id LIMIT 1) AS position_number
     FROM negocios n
 """
 
@@ -2280,6 +2285,76 @@ def import_business(payload):
     return {"negocio": get_business(business_id), "criado": created}
 
 
+def classification_portal_name(detected_portal, source_link=""):
+    """Map source-system names to the columns used by the classification sub-screen."""
+    detected = compact(detected_portal)
+    aliases = {
+        "BLL Compras": "BLL",
+        "BNC Compras": "BNC",
+        "Portal de Compras Publicas": "Portal de Compras Públicas",
+        "Licitações-e": "Licitações-e",
+    }
+    if detected and detected != "PNCP":
+        return aliases.get(detected, detected)
+    hostname = (urlparse(source_link or "").hostname or "").removeprefix("www.")
+    return hostname or "PNCP"
+
+
+def classify_business_into_source_portal(business_id):
+    """Verify edital/API data and upsert the business in its source portal column."""
+    business = get_business(business_id, include_details=True)
+    fallback = {
+        "objeto": business["titulo_oficial"],
+        "orgao": business["orgao"],
+        "municipio": business["municipio"],
+        "uf": business["uf"],
+        "modalidade": business["modalidade"],
+        "numero_compra": business["numero_compra"],
+        "processo": business["processo"],
+        "abertura": business["abertura"],
+        "encerramento": business["encerramento"],
+        "situacao": business["situacao"],
+    }
+    detail = opportunity_detail_from_pncp_link(business["link_pncp"], fallback)
+    opportunity = detail["oportunidade"]
+    source_link = opportunity.get("link_origem") or business["link_pncp"]
+    portal = classification_portal_name(opportunity.get("portal_origem"), source_link)
+    column = kanban_store.ensure_column(DATABASE_PATH, portal)
+    verification = detail.get("verificacao_itens") or {}
+    verification_note = (
+        f"Conferência edital/API: {verification.get('file_count', 0)} item(ns) no documento e "
+        f"{verification.get('pncp_count', 0)} na API."
+    )
+    if verification.get("has_divergence"):
+        verification_note += " Foram identificadas divergências entre as fontes."
+    if verification.get("file_error"):
+        verification_note += f" Documento indisponível: {verification['file_error']}"
+    proposal = kanban_store.upsert_business_proposal(DATABASE_PATH, business_id, {
+        "column_id": str(column["id"]),
+        "portal": portal,
+        "position_number": "",
+        "modality": business["modalidade"],
+        "agency_name": business["orgao"],
+        "notice_number": business["numero_compra"],
+        "uasg": opportunity.get("codigo_unidade", ""),
+        "pncp_control_number": opportunity.get("numero_controle_pncp", ""),
+        "opening_at": business["abertura"],
+        "critical_deadline": business["encerramento"],
+        "internal_identifier": f"negocio-{business_id}",
+        "title": business["titulo"],
+        "object_description": business["titulo_oficial"],
+        "phase_status": business["situacao"],
+        "priority": {1: "alta", 2: "normal", 3: "baixa"}.get(business["prioridade"], "normal"),
+        "pending_documents": "",
+        "estimated_value": str(opportunity.get("valor_total_estimado") or ""),
+        "responsible": business["responsavel"],
+        "next_review_at": business["prazo_interno"],
+        "notes": verification_note,
+        "source_link": source_link,
+    })
+    return {"portal": portal, "proposal": proposal, "verification": verification}
+
+
 def validate_business_update(payload):
     if not isinstance(payload, dict):
         raise ValueError("Dados do negócio inválidos.")
@@ -2306,10 +2381,21 @@ def update_business(business_id, payload):
     init_database()
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     justification = compact(payload.get("justificativa"))
+    classification = None
+    requested_stage = compact(changes.get("etapa")).lower() if "etapa" in changes else ""
+    if requested_stage == "classificacao":
+        with DATABASE_LOCK, database_connection() as connection:
+            stage_row = connection.execute(
+                "SELECT etapa FROM negocios WHERE id = ?", (business_id,)
+            ).fetchone()
+        if not stage_row:
+            raise FileNotFoundError("Negócio não encontrado.")
+        if stage_row["etapa"] != "classificacao":
+            classification = classify_business_into_source_portal(business_id)
+
     with DATABASE_LOCK, database_connection() as connection:
         current = connection.execute(
-            "SELECT * FROM negocios WHERE id = ?",
-            (business_id,),
+            "SELECT * FROM negocios WHERE id = ?", (business_id,)
         ).fetchone()
         if not current:
             raise FileNotFoundError("Negócio não encontrado.")
@@ -2321,9 +2407,7 @@ def update_business(business_id, payload):
             if stage != previous:
                 backward = BUSINESS_STAGES.index(stage) < BUSINESS_STAGES.index(previous)
                 if (stage == "contrato" or backward) and not justification:
-                    raise ValueError(
-                        "Informe uma justificativa para esta movimentação."
-                    )
+                    raise ValueError("Informe uma justificativa para esta movimentação.")
                 connection.execute(
                     """
                     INSERT INTO negocio_historico (
@@ -2331,14 +2415,7 @@ def update_business(business_id, payload):
                         justificativa, criado_em
                     ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        business_id,
-                        "Etapa alterada",
-                        previous,
-                        stage,
-                        justification,
-                        now,
-                    ),
+                    (business_id, "Etapa alterada", previous, stage, justification, now),
                 )
             changes["etapa"] = stage
         if "prioridade" in changes:
@@ -2350,11 +2427,7 @@ def update_business(business_id, payload):
             if boolean_field in changes:
                 changes[boolean_field] = 1 if bool(changes[boolean_field]) else 0
         for text_field in (
-            "titulo_interno",
-            "responsavel",
-            "prazo_interno",
-            "anotacoes",
-            "decisao_comercial",
+            "titulo_interno", "responsavel", "prazo_interno", "anotacoes", "decisao_comercial",
         ):
             if text_field in changes:
                 changes[text_field] = str(changes[text_field] or "").strip()
@@ -2372,6 +2445,22 @@ def update_business(business_id, payload):
                 ) VALUES (?, ?, ?, ?)
                 """,
                 (business_id, event, justification, now),
+            )
+        if classification:
+            connection.execute(
+                "UPDATE negocios SET plataforma = ?, fonte_integracao = ? WHERE id = ?",
+                (classification["portal"], "Edital oficial + API PNCP", business_id),
+            )
+            check = classification["verification"]
+            detail_text = (
+                f"Portal: {classification['portal']}; documento: {check.get('file_count', 0)} item(ns); "
+                f"API PNCP: {check.get('pncp_count', 0)} item(ns); "
+                f"divergência: {'sim' if check.get('has_divergence') else 'não'}"
+            )
+            connection.execute(
+                "INSERT INTO negocio_historico (negocio_id, evento, justificativa, criado_em) "
+                "VALUES (?, ?, ?, ?)",
+                (business_id, "Classificado automaticamente no portal de origem", detail_text, now),
             )
     return get_business(business_id)
 
@@ -3521,6 +3610,22 @@ def opportunity_source_portal(link):
         return "Licitanet"
     if "bll" in hostname:
         return "BLL Compras"
+    if "bnc" in hostname:
+        return "BNC Compras"
+    if "comprasbr" in hostname:
+        return "ComprasBR"
+    if "licitapp" in hostname or "licita-pp" in hostname:
+        return "Licita PP"
+    if "licitardigital" in hostname:
+        return "Licitar Digital"
+    if "novobbmnet" in hostname or "bbmnet" in hostname:
+        return "NovoBBMNet"
+    if "portaldecompraspublicas" in hostname:
+        return "Portal de Compras Públicas"
+    if "compras.rs.gov.br" in hostname:
+        return "Portal de Compras RS"
+    if "sislog" in hostname:
+        return "SISLOG"
     if "licitacoes-e" in hostname:
         return "Licitações-e"
     if hostname:
@@ -3623,12 +3728,57 @@ def opportunity_detail_from_pncp_link(link, fallback=None):
     })
     if not metadata:
         raise RuntimeError("A contratação não foi localizada na API oficial do PNCP.")
-    items = [
+    api_items = [
         opportunity_item_record(item)
         for item in raw_items
         if compact(item.get("numeroItem") or item.get("item"))
     ]
     official_link = pncp_app_link(cnpj, ano, sequencial)
+    file_items = []
+    file_error = ""
+    source_data = None
+    try:
+        source_data = source_from_pncp_link(official_link)
+        file_items = extract_items_cached(source_data["source_path"])
+    except Exception as exc:
+        file_error = str(exc) or "Documento oficial não pôde ser lido."
+
+    api_by_key = {
+        (compact(item.get("lote")), compact(item.get("numero"))): item
+        for item in api_items
+    }
+    if file_items:
+        items = []
+        for file_item in file_items:
+            key = (compact(file_item.get("lote")), compact(file_item.get("item")))
+            api_item = api_by_key.get(key, {})
+            document_item = opportunity_item_record({
+                "numeroItem": file_item.get("item"),
+                "numeroLote": file_item.get("lote"),
+                "descricao": file_item.get("descricao"),
+                "quantidade": file_item.get("quantidade"),
+                "unidadeMedida": file_item.get("unidade"),
+            })
+            merged = {**api_item, **{
+                field: value
+                for field, value in document_item.items()
+                if value not in (None, "")
+            }}
+            items.append(merged)
+    else:
+        items = api_items
+
+    comparison_api_items = [
+        {"item": item.get("numero"), "lote": item.get("lote"), "descricao": item.get("descricao")}
+        for item in api_items
+    ]
+    items_check = build_pncp_items_check(file_items, comparison_api_items)
+    if file_error:
+        items_check["file_error"] = file_error
+    items_check["source"] = "documento_oficial" if file_items else "api_pncp"
+    items_check["documento"] = (
+        source_data.get("pncp", {}).get("documento_usado", "") if source_data else ""
+    )
     source_link = metadata.get("link_sistema_origem", "")
     return {
         "oportunidade": {
@@ -3643,10 +3793,15 @@ def opportunity_detail_from_pncp_link(link, fallback=None):
         },
         "arquivos": [opportunity_file_record(item) for item in files],
         "itens": items,
+        "verificacao_itens": items_check,
         "fontes": {
             "oportunidade": "API oficial do PNCP - contratação e busca pública",
             "arquivos": "API oficial do PNCP - arquivos da contratação",
-            "itens": "API oficial do PNCP - itens da contratação",
+            "itens": (
+                "Documento oficial conferido com a API do PNCP"
+                if file_items
+                else "API oficial do PNCP (documento indisponível para conferência)"
+            ),
         },
     }
 
@@ -4189,12 +4344,52 @@ def matches_complete_search_term(row, search_term):
     )
 
 
-def get_search_row_pncp_items(row):
+def normalized_numeric_code(value):
+    digits = re.sub(r"\D", "", compact(value))
+    return digits.lstrip("0") or ("0" if digits else "")
+
+
+def row_matches_purchase_filters(row, purchase_number="", uasg=""):
+    purchase_number = norm(purchase_number)
+    if purchase_number:
+        purchase_text = norm(" ".join(compact(value) for value in (
+            row.get("numeroCompra"),
+            row.get("numero_compra"),
+            row.get("numero"),
+            row.get("title"),
+        ) if value not in (None, "")))
+        if purchase_number not in purchase_text:
+            return False
+
+    uasg = normalized_numeric_code(uasg)
+    if uasg:
+        unit = row.get("unidadeOrgao") or {}
+        candidate_codes = (
+            row.get("codigoUnidade"),
+            row.get("codigo_unidade"),
+            row.get("unidade_codigo"),
+            unit.get("codigoUnidade") if isinstance(unit, dict) else "",
+            unit.get("codigo") if isinstance(unit, dict) else "",
+        )
+        if not any(normalized_numeric_code(value) == uasg for value in candidate_codes):
+            return False
+    return True
+
+
+def search_row_contract_key(row):
     cnpj = compact(row.get("orgao_cnpj"))
     ano = compact(row.get("ano"))
     sequencial = compact(row.get("numero_sequencial"))
     if not cnpj or not ano or not sequencial:
+        return None
+    return cnpj, ano, sequencial
+
+
+def get_search_row_pncp_items(row):
+    contract_key = search_row_contract_key(row)
+    if contract_key is None:
         return []
+    cnpj, ano, sequencial = contract_key
     cache_key = f"{cnpj}:{ano}:{sequencial}"
     cached = cache_get(SEARCH_ITEM_CACHE, cache_key, DOCUMENT_CACHE_TTL)
     if cached is not None:
@@ -4204,20 +4399,57 @@ def get_search_row_pncp_items(row):
     return items
 
 
-def matches_search_term_after_item_identification(row, search_term):
+def get_search_row_document_items(row):
+    contract_key = search_row_contract_key(row)
+    if contract_key is None:
+        return {"items": [], "error": "Identificação PNCP incompleta."}
+    cnpj, ano, sequencial = contract_key
+    cache_key = f"{cnpj}:{ano}:{sequencial}"
+    cached = cache_get(SEARCH_DOCUMENT_ITEM_CACHE, cache_key, DOCUMENT_CACHE_TTL)
+    if cached is not None:
+        return cached
     try:
-        items = get_search_row_pncp_items(row)
+        source = source_from_pncp_link(pncp_app_link(cnpj, ano, sequencial))
+        items = extract_items_cached(source["source_path"])
+        result = {
+            "items": items,
+            "error": "",
+            "documento": source.get("pncp", {}).get("documento_usado", ""),
+        }
+    except Exception as exc:
+        result = {"items": [], "error": str(exc) or "Documento oficial não pôde ser lido."}
+    cache_set(SEARCH_DOCUMENT_ITEM_CACHE, cache_key, result)
+    return result
+
+
+def items_match_search_term(items, search_term):
+    return any(
+        matches_complete_words(item.get("descricao", ""), search_term)
+        for item in items
+    )
+
+
+def matches_search_term_after_item_identification(row, search_term, verify_document=True):
+    try:
+        pncp_items = get_search_row_pncp_items(row)
     except Exception:
-        items = []
-    if items:
-        return any(
-            matches_complete_words(item.get("descricao", ""), search_term)
-            for item in items
-        )
+        pncp_items = []
+    if items_match_search_term(pncp_items, search_term):
+        return True
+
+    # A prévia permanece rápida. A busca completa, executada em segundo plano,
+    # consulta o documento antes de rejeitar uma oportunidade.
+    if verify_document:
+        document_result = get_search_row_document_items(row)
+        document_items = document_result.get("items") or []
+        if document_items:
+            return items_match_search_term(document_items, search_term)
+    if pncp_items:
+        return False
     return matches_complete_search_term(row, search_term)
 
 
-def filter_rows_by_complete_search_term(rows, search_term):
+def filter_rows_by_complete_search_term(rows, search_term, verify_documents=True):
     if not norm(search_term):
         return list(rows)
 
@@ -4227,7 +4459,12 @@ def filter_rows_by_complete_search_term(rows, search_term):
         return accepted
     with ThreadPoolExecutor(max_workers=min(6, len(rows))) as executor:
         futures = {
-            executor.submit(matches_search_term_after_item_identification, row, search_term): row
+            executor.submit(
+                matches_search_term_after_item_identification,
+                row,
+                search_term,
+                verify_documents,
+            ): row
             for row in rows
         }
         for future in as_completed(futures):
@@ -4286,6 +4523,12 @@ def search_pncp_app_editais(params, data_inicial, data_final):
     object_type = str(params.get("tipoObjeto") or "").strip().lower()
     if object_type not in {"", "material", "servico"}:
         raise ValueError("Tipo do objeto invalido.")
+    purchase_number = compact(params.get("numeroCompra"))
+    if len(purchase_number) > 80:
+        raise ValueError("Número da compra excede 80 caracteres.")
+    uasg = re.sub(r"\D", "", compact(params.get("uasg")))
+    if len(uasg) > 20:
+        raise ValueError("UASG excede 20 dígitos.")
     page_size = bounded_int(params.get("tamanhoPagina"), 50, 1, 500)
     start_page = bounded_int(params.get("pagina"), 1, 1, 1000)
     source_page_size = 500
@@ -4306,6 +4549,8 @@ def search_pncp_app_editais(params, data_inicial, data_final):
         "dataInicial": data_inicial,
         "dataFinal": data_final,
         "tipoObjeto": object_type,
+        "numeroCompra": purchase_number,
+        "uasg": uasg,
     }, ensure_ascii=True, sort_keys=True)
     consolidated = cache_get(PNCP_RESULT_CACHE, result_cache_key, SEARCH_CACHE_TTL)
     aggregate_cache_hit = consolidated is not None
@@ -4443,6 +4688,8 @@ def search_pncp_app_editais(params, data_inicial, data_final):
             for row in payload.get("items", []):
                 if not date_in_range(row.get("data_fim_vigencia"), data_inicial, data_final):
                     continue
+                if not row_matches_purchase_filters(row, purchase_number, uasg):
+                    continue
                 if not row_matches_object_type(row, object_type):
                     continue
                 row_key = (
@@ -4579,10 +4826,12 @@ def search_pncp_open_bids(params):
         query["cnpj"] = cnpj
 
     keyword = norm(params.get("palavraChave") or "")
+    purchase_number = compact(params.get("numeroCompra"))
+    uasg = re.sub(r"\D", "", compact(params.get("uasg")))
     rows = []
     payload = {}
     urls_consultadas = []
-    max_pages = 3 if keyword else 1
+    max_pages = 3 if keyword or purchase_number or uasg else 1
     rate_limited = False
     timed_out = False
 
@@ -4604,6 +4853,11 @@ def search_pncp_open_bids(params):
             row for row in page_rows
             if date_in_range(row.get("dataEncerramentoProposta"), data_inicial, data_final)
         ]
+        if purchase_number or uasg:
+            page_rows = [
+                row for row in page_rows
+                if row_matches_purchase_filters(row, purchase_number, uasg)
+            ]
         if keyword:
             page_rows = [
                 row for row in page_rows
@@ -4661,6 +4915,8 @@ def pncp_search_job_key(params):
             "palavraChave",
             "tipoObjeto",
             "codigoModalidadeContratacao",
+            "numeroCompra",
+            "uasg",
             "ordenacao",
         )
     }
@@ -4681,6 +4937,8 @@ def quick_pncp_search_preview(params):
     object_type = str(params.get("tipoObjeto") or "").strip().lower()
     if object_type not in {"", "material", "servico"}:
         raise ValueError("Tipo do objeto invalido.")
+    purchase_number = compact(params.get("numeroCompra"))
+    uasg = re.sub(r"\D", "", compact(params.get("uasg")))
     base_query = {
         "tipos_documento": "edital",
         "status": "recebendo_proposta",
@@ -4739,10 +4997,16 @@ def quick_pncp_search_preview(params):
         for row in payload.get("items", []):
             if not date_in_range(row.get("data_fim_vigencia"), data_inicial, data_final):
                 continue
+            if not row_matches_purchase_filters(row, purchase_number, uasg):
+                continue
             if not row_matches_object_type(row, object_type):
                 continue
             candidates.append(row)
-        for row in filter_rows_by_complete_search_term(candidates, search_term):
+        for row in filter_rows_by_complete_search_term(
+            candidates,
+            search_term,
+            verify_documents=False,
+        ):
             row_key = (
                 row.get("id")
                 or row.get("numero_controle_pncp")

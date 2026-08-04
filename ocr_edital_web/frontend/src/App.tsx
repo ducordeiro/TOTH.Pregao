@@ -10,9 +10,12 @@ import { SearchBlock } from "./components/SearchBlock";
 import { Sidebar, type ActiveBlock } from "./components/Sidebar";
 import { TemplateManagerModal } from "./components/TemplateManagerModal";
 import type { Responsible, Template, UiMessage } from "./types";
+import { CLASSIFICATION_HASH, opensClassifications } from "./classificationNavigation";
 
 export default function App() {
-  const [activeBlock, setActiveBlock] = useState<ActiveBlock>("search");
+  const classificationHash = opensClassifications(window.location.hash);
+  const [activeBlock, setActiveBlock] = useState<ActiveBlock>(classificationHash ? "business" : "search");
+  const [classificationOpen, setClassificationOpen] = useState(classificationHash);
   const [pncpLink, setPncpLink] = useState("");
   const [templates, setTemplates] = useState<Template[]>([]);
   const [responsibles, setResponsibles] = useState<Responsible[]>([]);
@@ -71,6 +74,8 @@ export default function App() {
   }, [applyResponsibles, applyTemplates]);
 
   const selectBlock = (block: ActiveBlock) => {
+    setClassificationOpen(false);
+    if (opensClassifications(window.location.hash)) history.replaceState(null, "", window.location.pathname);
     setActiveBlock(block);
     window.requestAnimationFrame(() => {
       const workspaceId = {
@@ -79,7 +84,6 @@ export default function App() {
         catalog: "catalog-workspace",
         business: "business-workspace",
         structure: "structure-workspace",
-        flow: "flow-workspace",
       }[block];
       document.getElementById(workspaceId)
         ?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -111,18 +115,15 @@ export default function App() {
       title: "Negócios",
       description: "Acompanhe oportunidades e decisões em cada etapa da licitação.",
     },
-    flow: {
-      eyebrow: "Gestão por portais",
-      title: "Fluxo de propostas",
-      description: "Organize propostas e licitações em um Kanban persistente por portal.",
-    },
     structure: {
       eyebrow: "Estrutura operacional",
       title: "Estrutura do projeto",
       description: "Organize etapas, responsáveis e entregáveis antes da entrega final.",
     },
   };
-  const header = headerByBlock[activeBlock];
+  const header = activeBlock === "business" && classificationOpen
+    ? { eyebrow: "Negócios · Classificação", title: "Classificações", description: "Organize propostas por portal e posição." }
+    : headerByBlock[activeBlock];
 
   return (
     <div className={`app-shell is-${activeBlock}-active`}>
@@ -172,10 +173,26 @@ export default function App() {
             />
           </div>
           <div id="business-workspace" hidden={activeBlock !== "business"}>
-            <BusinessBlock responsibles={responsibles} />
-          </div>
-          <div id="flow-workspace" hidden={activeBlock !== "flow"}>
-            <ProposalFlowBlock />
+            <div hidden={classificationOpen}>
+              <BusinessBlock
+                responsibles={responsibles}
+                onOpenClassifications={() => {
+                  setClassificationOpen(true);
+                  history.replaceState(null, "", CLASSIFICATION_HASH);
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+              />
+            </div>
+            <div hidden={!classificationOpen}>
+              <ProposalFlowBlock
+                active={classificationOpen}
+                onBack={() => {
+                  setClassificationOpen(false);
+                  history.replaceState(null, "", window.location.pathname);
+                  window.requestAnimationFrame(() => document.getElementById("business-workspace")?.scrollIntoView({ block: "start" }));
+                }}
+              />
+            </div>
           </div>
           <div id="structure-workspace" hidden={activeBlock !== "structure"}>
             <ProjectStructureBlock />

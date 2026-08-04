@@ -166,6 +166,16 @@ export interface OpportunityDetail {
   oportunidade: OpportunityData;
   arquivos: OpportunityFile[];
   itens: OpportunityItem[];
+  verificacao_itens?: {
+    has_divergence: boolean;
+    file_count: number;
+    pncp_count: number;
+    only_in_file?: string[];
+    added_from_pncp?: string[];
+    file_error?: string;
+    source: "documento_oficial" | "api_pncp";
+    documento?: string;
+  };
   fontes: {
     oportunidade: string;
     arquivos: string;
@@ -352,6 +362,7 @@ export interface Business {
   total_itens: number;
   criado_em: string;
   atualizado_em: string;
+  position_number: number | null;
   pode_mover: boolean;
 }
 

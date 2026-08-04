@@ -69,6 +69,12 @@ def initialize(database_path):
             proposal_columns = {row[1] for row in connection.execute("PRAGMA table_info(proposals)")}
             if "position_number" not in proposal_columns:
                 connection.execute("ALTER TABLE proposals ADD COLUMN position_number INTEGER")
+            if "business_id" not in proposal_columns:
+                connection.execute("ALTER TABLE proposals ADD COLUMN business_id INTEGER")
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_proposals_business "
+                "ON proposals(user_id, business_id) WHERE business_id IS NOT NULL"
+            )
             for position, name in enumerate(DEFAULT_COLUMNS, 1):
                 connection.execute(
                     "INSERT OR IGNORE INTO kanban_columns(user_id,name,position,created_at,updated_at) VALUES('local',?,?,?,?)",
@@ -117,6 +123,30 @@ def create_column(database_path, payload):
             return row_dict(row)
     except sqlite3.IntegrityError as exc:
         raise ValueError("Já existe uma coluna com este nome.") from exc
+
+
+def ensure_column(database_path, name):
+    """Return a portal column, creating it when the detected portal is new."""
+    initialize(database_path)
+    name, now = clean_name(name), now_iso()
+    with closing(connect(database_path)) as connection:
+        with connection:
+            row = connection.execute(
+                "SELECT * FROM kanban_columns WHERE user_id='local' AND lower(name)=lower(?)", (name,),
+            ).fetchone()
+            if row:
+                return row_dict(row)
+            position = connection.execute(
+                "SELECT COALESCE(MAX(position),0)+1 FROM kanban_columns WHERE user_id='local'"
+            ).fetchone()[0]
+            cursor = connection.execute(
+                "INSERT INTO kanban_columns(user_id,name,position,created_at,updated_at) VALUES('local',?,?,?,?)",
+                (name, position, now, now),
+            )
+            return row_dict(connection.execute(
+                "SELECT * FROM kanban_columns WHERE id=?", (cursor.lastrowid,)
+            ).fetchone())
+
 
 def update_column(database_path, column_id, payload):
     initialize(database_path)
@@ -211,9 +241,29 @@ def save_proposal(database_path, payload, proposal_id=None):
             return row_dict(connection.execute("SELECT * FROM proposals WHERE id=?", (proposal_id,)).fetchone())
     
     
+def upsert_business_proposal(database_path, business_id, payload):
+    """Keep exactly one classification card linked to a Block 4 business."""
+    initialize(database_path)
+    business_id = int(business_id)
+    with closing(connect(database_path)) as connection:
+        existing = connection.execute(
+            "SELECT id FROM proposals WHERE user_id='local' AND business_id=?", (business_id,),
+        ).fetchone()
+    proposal = save_proposal(database_path, payload, existing["id"] if existing else None)
+    with closing(connect(database_path)) as connection:
+        with connection:
+            connection.execute(
+                "UPDATE proposals SET business_id=? WHERE id=?", (business_id, proposal["id"])
+            )
+            return row_dict(connection.execute(
+                "SELECT * FROM proposals WHERE id=?", (proposal["id"],)
+            ).fetchone())
+
+
 def move_proposal(database_path, proposal_id, column_id):
     initialize(database_path)
     now = now_iso()
+
     with closing(connect(database_path)) as connection:
         with connection:
             proposal = connection.execute("SELECT * FROM proposals WHERE id=?", (proposal_id,)).fetchone()

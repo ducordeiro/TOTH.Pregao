@@ -1005,6 +1005,46 @@ class PncpSearchPaginationTests(unittest.TestCase):
         items.assert_called_once_with("46422408000152", "2026", "367")
         server.SEARCH_ITEM_CACHE.clear()
 
+    def test_search_falls_back_to_document_when_api_omits_matching_item(self):
+        row = {
+            "orgao_cnpj": "46422408000152",
+            "ano": "2026",
+            "numero_sequencial": "368",
+            "title": "Edital 61/2026",
+            "description": "Aquisição de equipamentos",
+        }
+        pncp_items = [{"descricao": "Monitor LED"}]
+        document_result = {
+            "items": [{"descricao": "Teclado ergonômico USB"}],
+            "error": "",
+        }
+
+        with (
+            patch.object(server, "list_pncp_items", return_value=pncp_items),
+            patch.object(server, "get_search_row_document_items", return_value=document_result) as document,
+        ):
+            result = server.filter_rows_by_complete_search_term([row], "teclado")
+
+        self.assertEqual(result, [row])
+        document.assert_called_once_with(row)
+        server.SEARCH_ITEM_CACHE.clear()
+
+    def test_search_does_not_download_document_when_api_already_matches(self):
+        row = {
+            "orgao_cnpj": "46422408000152",
+            "ano": "2026",
+            "numero_sequencial": "369",
+        }
+        with (
+            patch.object(server, "list_pncp_items", return_value=[{"descricao": "Teclado USB"}]),
+            patch.object(server, "get_search_row_document_items") as document,
+        ):
+            result = server.filter_rows_by_complete_search_term([row], "teclado")
+
+        self.assertEqual(result, [row])
+        document.assert_not_called()
+        server.SEARCH_ITEM_CACHE.clear()
+
     def test_single_word_search_term_can_match_official_item_description(self):
         row = {
             "orgao_cnpj": "48813638000178",
@@ -1102,6 +1142,53 @@ class PncpSearchPaginationTests(unittest.TestCase):
         self.assertTrue(any("q=cadeira+de+rodas" in url for url in requested_urls))
         self.assertTrue(any("q=monitor" in url for url in requested_urls))
         server.PNCP_RESULT_CACHE.clear()
+
+    def test_purchase_number_and_uasg_filters_are_applied_together(self):
+        matching = {
+            "id": "match",
+            "orgao_cnpj": "12345678000199",
+            "ano": "2026",
+            "numero_sequencial": "1",
+            "orgao_nome": "Órgão",
+            "title": "Pregão eletrônico 90010/2026",
+            "description": "Aquisição de mobiliário",
+            "unidade_codigo": "00123456",
+            "data_fim_vigencia": "2026-08-20T10:00:00",
+        }
+        wrong_uasg = {**matching, "id": "wrong-uasg", "unidade_codigo": "654321"}
+        wrong_number = {**matching, "id": "wrong-number", "title": "Pregão 90011/2026"}
+
+        server.PNCP_RESULT_CACHE.clear()
+        with patch.object(
+            server,
+            "request_json",
+            return_value={"items": [matching, wrong_uasg, wrong_number], "total": 3},
+        ):
+            response = server.search_pncp_open_bids({
+                "dataInicial": "20260801",
+                "dataFinal": "20260830",
+                "uf": "SP",
+                "numeroCompra": "90010/2026",
+                "uasg": "123456",
+                "pagina": "1",
+                "tamanhoPagina": "10",
+            })
+
+        self.assertEqual(response["total"], 1)
+        self.assertEqual(response["results"][0]["numeroCompra"], "Pregão eletrônico 90010/2026")
+        self.assertEqual(response["results"][0]["codigoUnidade"], "00123456")
+        server.PNCP_RESULT_CACHE.clear()
+
+    def test_search_job_key_includes_purchase_number_and_uasg(self):
+        base = {"dataInicial": "20260801", "dataFinal": "20260830"}
+        self.assertNotEqual(
+            server.pncp_search_job_key({**base, "numeroCompra": "1/2026"}),
+            server.pncp_search_job_key({**base, "numeroCompra": "2/2026"}),
+        )
+        self.assertNotEqual(
+            server.pncp_search_job_key({**base, "uasg": "123456"}),
+            server.pncp_search_job_key({**base, "uasg": "654321"}),
+        )
 
     def test_modality_and_object_type_are_applied_to_official_search(self):
         rows = [
@@ -1401,6 +1488,59 @@ class OpportunityDetailTests(unittest.TestCase):
         self.assertIn("Acessórios ergonômicos", result["oportunidade"]["categorias"])
         self.assertEqual(result["itens"][0]["valor_total_estimado"], 200.0)
         self.assertEqual(result["arquivos"][0]["titulo"], "Termo de Referência")
+
+    def test_detail_prioritizes_document_items_and_reports_divergence(self):
+        raw_items = [{
+            "numeroItem": 1,
+            "descricao": "Descrição resumida da API",
+            "quantidade": 1,
+            "unidadeMedida": "UNIDADE",
+            "valorUnitarioEstimado": 50,
+        }]
+        file_items = [
+            make_item("1", "Descrição completa do documento", quantidade="2"),
+            make_item("2", "Item existente somente no documento", quantidade="3"),
+        ]
+        source = {
+            "source_path": Path("termo.pdf"),
+            "pncp": {"documento_usado": "Termo de Referência.pdf"},
+        }
+
+        with (
+            patch.object(server, "pncp_purchase_metadata", return_value={}),
+            patch.object(server, "list_pncp_item_payload", return_value=raw_items),
+            patch.object(server, "list_pncp_files", return_value=[]),
+            patch.object(server, "source_from_pncp_link", return_value=source),
+            patch.object(server, "extract_items_cached", return_value=file_items),
+        ):
+            result = server.opportunity_detail_from_pncp_link(
+                "https://pncp.gov.br/app/editais/00394700000108/2026/252"
+            )
+
+        self.assertEqual(len(result["itens"]), 2)
+        self.assertEqual(result["itens"][0]["descricao"], "Descrição completa do documento")
+        self.assertEqual(result["itens"][0]["valor_unitario_estimado"], 50)
+        self.assertEqual(result["verificacao_itens"]["file_count"], 2)
+        self.assertEqual(result["verificacao_itens"]["pncp_count"], 1)
+        self.assertTrue(result["verificacao_itens"]["has_divergence"])
+        self.assertEqual(result["verificacao_itens"]["source"], "documento_oficial")
+
+    def test_detail_falls_back_to_api_when_document_cannot_be_read(self):
+        raw_items = [{"numeroItem": 1, "descricao": "Item da API", "quantidade": 1}]
+        with (
+            patch.object(server, "pncp_purchase_metadata", return_value={}),
+            patch.object(server, "list_pncp_item_payload", return_value=raw_items),
+            patch.object(server, "list_pncp_files", return_value=[]),
+            patch.object(server, "source_from_pncp_link", side_effect=RuntimeError("arquivo indisponível")),
+        ):
+            result = server.opportunity_detail_from_pncp_link(
+                "https://pncp.gov.br/app/editais/00394700000108/2026/253"
+            )
+
+        self.assertEqual(len(result["itens"]), 1)
+        self.assertEqual(result["itens"][0]["descricao"], "Item da API")
+        self.assertEqual(result["verificacao_itens"]["source"], "api_pncp")
+        self.assertIn("arquivo indisponível", result["verificacao_itens"]["file_error"])
 
     def test_document_question_returns_only_matching_official_excerpts(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -63,6 +63,8 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
   const [keywordDraft, setKeywordDraft] = useState("");
   const [objectType, setObjectType] = useState("");
   const [modality, setModality] = useState("6");
+  const [purchaseNumber, setPurchaseNumber] = useState("");
+  const [uasg, setUasg] = useState("");
   const [results, setResults] = useState<Bid[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -91,6 +93,8 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
     setKeywordDraft("");
     setObjectType("");
     setModality("");
+    setPurchaseNumber("");
+    setUasg("");
     setResults([]);
     setPage(1);
     setTotal(0);
@@ -141,6 +145,8 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
         palavraChave: effectiveKeywords.join(";"),
         tipoObjeto: objectType,
         codigoModalidadeContratacao: modality,
+        numeroCompra: purchaseNumber.trim(),
+        uasg: uasg.trim(),
         pagina: String(targetPage),
         tamanhoPagina: String(PAGE_SIZE),
         rapido: "1",
@@ -305,6 +311,25 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
             <option value="8">Dispensa eletrônica</option>
             <option value="">Todas</option>
           </select>
+        </label>
+        <label>
+          Número da compra
+          <input
+            value={purchaseNumber}
+            maxLength={80}
+            placeholder="Ex.: 90010/2026"
+            onChange={(event) => setPurchaseNumber(event.target.value)}
+          />
+        </label>
+        <label>
+          UASG
+          <input
+            value={uasg}
+            inputMode="numeric"
+            maxLength={20}
+            placeholder="Ex.: 123456"
+            onChange={(event) => setUasg(event.target.value.replace(/\D/g, ""))}
+          />
         </label>
         <div className="form-actions">
           <button className="button button-primary" type="submit" disabled={busy}>

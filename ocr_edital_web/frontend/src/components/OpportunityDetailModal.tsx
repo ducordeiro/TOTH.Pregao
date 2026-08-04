@@ -334,6 +334,24 @@ export function OpportunityDetailModal({
                 />
               </label>
             </div>
+            {detail.verificacao_itens?.has_divergence && !detail.verificacao_itens.file_error ? (
+              <StatusMessage
+                compact
+                message={{
+                  kind: "warning",
+                  text: `Conferência automática: documento oficial com ${detail.verificacao_itens.file_count} item(ns) e API do PNCP com ${detail.verificacao_itens.pncp_count}. A relação do documento está sendo priorizada.`,
+                }}
+              />
+            ) : null}
+            {detail.verificacao_itens?.file_error ? (
+              <StatusMessage
+                compact
+                message={{
+                  kind: "warning",
+                  text: "Não foi possível conferir o documento oficial. Os itens exibidos vieram da API do PNCP.",
+                }}
+              />
+            ) : null}
             {selectingForBusiness ? (
               <div className="opportunity-selection-toolbar">
                 <strong>{selectedBusinessItems.size} de {detail.itens.length} item(ns) selecionado(s)</strong>
