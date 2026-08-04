@@ -1,6 +1,6 @@
-import { BookOpen, BriefcaseBusiness, ClipboardList, FileSearch, FileText } from "lucide-react";
+import { BookOpen, BriefcaseBusiness, ClipboardList, Columns3, FileSearch, FileText } from "lucide-react";
 
-export type ActiveBlock = "search" | "proposal" | "catalog" | "business" | "structure";
+export type ActiveBlock = "search" | "proposal" | "catalog" | "business" | "structure" | "flow";
 
 interface SidebarProps {
   active: ActiveBlock;
@@ -71,6 +71,10 @@ export function Sidebar({ active, onChange }: SidebarProps) {
             <strong>Bloco 5</strong>
             <small>Estrutura</small>
           </span>
+        </button>
+        <button className={`block-nav-item${active === "flow" ? " is-active" : ""}`} type="button" onClick={() => onChange("flow")}>
+          <span className="block-nav-number">06</span><Columns3 size={18} aria-hidden="true" />
+          <span className="block-nav-copy"><strong>Bloco 6</strong><small>Fluxo de propostas</small></span>
         </button>
       </nav>
       <div className="sidebar-context">Licitações públicas</div>

@@ -47,6 +47,8 @@ from catalog import (
     write_catalog_json,
 )
 
+import kanban as kanban_store
+
 
 ROOT = Path(__file__).resolve().parent
 WORKSPACE = ROOT.parent
@@ -8337,6 +8339,14 @@ def business_api_error(handler, exc):
 
 class App(BaseHTTPRequestHandler):
     def do_GET(self):
+        request_path = urlparse(self.path).path
+        if request_path == "/api/kanban":
+            json_response(self, 200, kanban_store.board(DATABASE_PATH))
+            return
+        history_match = re.fullmatch(r"/api/kanban/proposals/(\d+)/history", request_path)
+        if history_match:
+            json_response(self, 200, {"history": kanban_store.history(DATABASE_PATH, history_match.group(1))})
+            return
         if self.path == "/" or self.path.startswith("/?"):
             frontend_response(self, self.path)
             return
@@ -8492,6 +8502,19 @@ class App(BaseHTTPRequestHandler):
                 json_response(self, 400, {"error": str(exc)})
             except Exception as exc:
                 json_response(self, 500, {"error": str(exc) or "Não foi possível consultar o edital."})
+            return
+        if request_path == "/api/kanban/columns":
+            try:
+                json_response(self, 201, {"column": kanban_store.create_column(DATABASE_PATH, parse_json_body(self))})
+            except Exception as exc:
+                business_api_error(self, exc)
+            return
+        if request_path == "/api/kanban/proposals":
+            try:
+                json_response(self, 201, {"proposal": kanban_store.save_proposal(DATABASE_PATH, parse_json_body(self))})
+            except Exception as exc:
+                business_api_error(self, exc)
+
             return
         if request_path == "/api/negocios/importar":
             try:
@@ -8736,6 +8759,28 @@ class App(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         request_path = urlparse(self.path).path
+        column_match = re.fullmatch(r"/api/kanban/columns/(\d+)", request_path)
+        if column_match:
+            try:
+                json_response(self, 200, {"column": kanban_store.update_column(DATABASE_PATH, column_match.group(1), parse_json_body(self))})
+            except Exception as exc:
+                business_api_error(self, exc)
+            return
+        move_match = re.fullmatch(r"/api/kanban/proposals/(\d+)/move", request_path)
+        if move_match:
+            try:
+                payload = parse_json_body(self)
+                json_response(self, 200, {"proposal": kanban_store.move_proposal(DATABASE_PATH, move_match.group(1), payload.get("column_id"))})
+            except Exception as exc:
+                business_api_error(self, exc)
+            return
+        proposal_match = re.fullmatch(r"/api/kanban/proposals/(\d+)", request_path)
+        if proposal_match:
+            try:
+                json_response(self, 200, {"proposal": kanban_store.save_proposal(DATABASE_PATH, parse_json_body(self), proposal_match.group(1))})
+            except Exception as exc:
+                business_api_error(self, exc)
+            return
         business_task_match = re.fullmatch(
             r"/api/negocios/(\d+)/tarefas/(\d+)",
             request_path,
@@ -8776,6 +8821,14 @@ class App(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         request_path = urlparse(self.path).path
+        column_match = re.fullmatch(r"/api/kanban/columns/(\d+)", request_path)
+        if column_match:
+            try:
+                kanban_store.delete_column(DATABASE_PATH, column_match.group(1))
+                json_response(self, 200, {"deleted": column_match.group(1)})
+            except Exception as exc:
+                business_api_error(self, exc)
+            return
         responsible_match = re.fullmatch(r"/api/responsaveis/(\d+)", request_path)
         if responsible_match:
             try:

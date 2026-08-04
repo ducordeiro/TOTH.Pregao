@@ -398,3 +398,16 @@ export interface BusinessDetail extends Business {
   arquivos: BusinessFile[];
   itens: BusinessItem[];
 }
+
+
+export interface KanbanColumn { id: string; name: string; position: number; color: string; created_at: string; updated_at: string; }
+export type KanbanPriority = "critica" | "alta" | "normal" | "baixa";
+export interface KanbanProposalInput {
+  column_id: string; portal: string; position_number: string; modality: string; agency_name: string; notice_number: string;
+  uasg: string; pncp_control_number: string; opening_at: string; critical_deadline: string;
+  internal_identifier: string; title: string; object_description: string; phase_status: string;
+  priority: KanbanPriority; pending_documents: string; estimated_value: string; responsible: string;
+  next_review_at: string; notes: string; source_link: string;
+}
+export interface KanbanProposal extends KanbanProposalInput { id: string; created_at: string; updated_at: string; }
+export interface KanbanBoard { columns: KanbanColumn[]; proposals: KanbanProposal[]; sync_status: "offline" | "pending" | "error" | "synced"; }

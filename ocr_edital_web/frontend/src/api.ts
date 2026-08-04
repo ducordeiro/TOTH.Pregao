@@ -13,6 +13,8 @@ import type {
   Template,
   ProposalPreviewResponse,
   Business,
+  KanbanBoard,
+  KanbanProposalInput,
   BusinessDetail,
   BusinessStage,
   Bid,
@@ -345,4 +347,26 @@ export async function updateBusinessTask(
   );
   const payload = await parseJson<{ negocio: BusinessDetail }>(response);
   return payload.negocio;
+}
+
+
+export async function getKanbanBoard(): Promise<KanbanBoard> {
+  return parseJson<KanbanBoard>(await fetch("/api/kanban", { headers: { Accept: "application/json" } }));
+}
+export async function createKanbanColumn(name: string) {
+  return parseJson(await fetch("/api/kanban/columns", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }));
+}
+export async function updateKanbanColumn(id: string, update: { name?: string; direction?: "left" | "right" }) {
+  return parseJson(await fetch(`/api/kanban/columns/${encodeURIComponent(id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update) }));
+}
+export async function moveKanbanColumn(id: string, direction: "left" | "right") { return updateKanbanColumn(id, { direction }); }
+export async function deleteKanbanColumn(id: string) {
+  return parseJson(await fetch(`/api/kanban/columns/${encodeURIComponent(id)}`, { method: "DELETE" }));
+}
+export async function saveKanbanProposal(input: KanbanProposalInput, id?: string) {
+  const url = id ? `/api/kanban/proposals/${encodeURIComponent(id)}` : "/api/kanban/proposals";
+  return parseJson(await fetch(url, { method: id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }));
+}
+export async function moveKanbanProposal(id: string, columnId: string) {
+  return parseJson(await fetch(`/api/kanban/proposals/${encodeURIComponent(id)}/move`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ column_id: columnId }) }));
 }

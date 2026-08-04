@@ -4,6 +4,7 @@ import { CatalogBlock } from "./components/CatalogBlock";
 import { BusinessBlock } from "./components/BusinessBlock";
 import { ProposalBlock } from "./components/ProposalBlock";
 import { ProjectStructureBlock } from "./components/ProjectStructureBlock";
+import { ProposalFlowBlock } from "./components/ProposalFlowBlock";
 import { ResponsibleManagerModal } from "./components/ResponsibleManagerModal";
 import { SearchBlock } from "./components/SearchBlock";
 import { Sidebar, type ActiveBlock } from "./components/Sidebar";
@@ -78,6 +79,7 @@ export default function App() {
         catalog: "catalog-workspace",
         business: "business-workspace",
         structure: "structure-workspace",
+        flow: "flow-workspace",
       }[block];
       document.getElementById(workspaceId)
         ?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -108,6 +110,11 @@ export default function App() {
       eyebrow: "Gestão comercial",
       title: "Negócios",
       description: "Acompanhe oportunidades e decisões em cada etapa da licitação.",
+    },
+    flow: {
+      eyebrow: "Gestão por portais",
+      title: "Fluxo de propostas",
+      description: "Organize propostas e licitações em um Kanban persistente por portal.",
     },
     structure: {
       eyebrow: "Estrutura operacional",
@@ -166,6 +173,9 @@ export default function App() {
           </div>
           <div id="business-workspace" hidden={activeBlock !== "business"}>
             <BusinessBlock responsibles={responsibles} />
+          </div>
+          <div id="flow-workspace" hidden={activeBlock !== "flow"}>
+            <ProposalFlowBlock />
           </div>
           <div id="structure-workspace" hidden={activeBlock !== "structure"}>
             <ProjectStructureBlock />
