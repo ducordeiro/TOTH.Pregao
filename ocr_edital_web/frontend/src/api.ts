@@ -15,6 +15,11 @@ import type {
   Business,
   BusinessDetail,
   BusinessStage,
+  Bid,
+  OpportunityAnswer,
+  OpportunityData,
+  OpportunityDetail,
+  OpportunityItem,
 } from "./types";
 
 interface ApiErrorPayload {
@@ -109,6 +114,41 @@ export async function deleteResponsible(id: string): Promise<void> {
 export async function searchBids(params: URLSearchParams): Promise<SearchResponse> {
   const response = await fetch(`/pncp-search?${params.toString()}`);
   return parseJson<SearchResponse>(response);
+}
+
+export async function getOpportunityDetail(bid: Bid): Promise<OpportunityDetail> {
+  const params = new URLSearchParams({
+    pncp_link: bid.link,
+    numero_compra: bid.numeroCompra,
+    processo: bid.processo,
+    modalidade: bid.modalidade || "",
+    objeto: bid.objeto,
+    orgao: bid.orgao,
+    municipio: bid.municipio,
+    uf: bid.uf,
+    unidade: bid.unidade || "",
+    codigo_unidade: bid.codigoUnidade || "",
+    valor_total_estimado: String(bid.valorTotalEstimado ?? ""),
+    modo_disputa: bid.modoDisputa || "",
+    situacao: bid.situacao || "",
+    link_sistema_origem: bid.linkOrigem || "",
+    abertura: bid.abertura,
+    encerramento: bid.encerramento,
+  });
+  const response = await fetch(`/api/oportunidades/detalhe?${params.toString()}`);
+  return parseJson<OpportunityDetail>(response);
+}
+
+export async function askOpportunityDocument(
+  pncpLink: string,
+  question: string,
+): Promise<OpportunityAnswer> {
+  const response = await fetch("/api/oportunidades/conversar", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pncp_link: pncpLink, pergunta: question }),
+  });
+  return parseJson<OpportunityAnswer>(response);
 }
 
 export async function identifyItems(
@@ -219,11 +259,18 @@ export async function getBusiness(id: string): Promise<BusinessDetail> {
 export async function importBusiness(
   pncpLink: string,
   empresa: string,
+  items?: OpportunityItem[],
+  opportunity?: OpportunityData,
 ): Promise<Business> {
   const response = await fetch("/api/negocios/importar", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pncp_link: pncpLink, empresa }),
+    body: JSON.stringify({
+      pncp_link: pncpLink,
+      empresa,
+      ...(items !== undefined ? { itens: items } : {}),
+      ...(opportunity ? { oportunidade: opportunity } : {}),
+    }),
   });
   const payload = await parseJson<{ negocio: Business }>(response);
   return payload.negocio;

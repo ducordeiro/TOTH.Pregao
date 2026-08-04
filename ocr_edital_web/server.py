@@ -73,6 +73,7 @@ PNCP_APP_BASE = "https://pncp.gov.br/app/editais"
 PNCP_SEARCH_URL = "https://pncp.gov.br/api/search"
 SEARCH_CACHE = {}
 PNCP_RESULT_CACHE = {}
+SEARCH_ITEM_CACHE = {}
 PNCP_SEARCH_JOBS = {}
 SEARCH_CACHE_TTL = 300
 SOURCE_CACHE = {}
@@ -311,6 +312,24 @@ def init_database():
                 atualizado_em TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS negocio_itens (
+                id INTEGER PRIMARY KEY,
+                negocio_id INTEGER NOT NULL REFERENCES negocios(id) ON DELETE CASCADE,
+                ordem INTEGER NOT NULL DEFAULT 0,
+                lote TEXT NOT NULL DEFAULT '',
+                numero_item TEXT NOT NULL,
+                descricao TEXT NOT NULL,
+                quantidade TEXT NOT NULL DEFAULT '',
+                unidade TEXT NOT NULL DEFAULT 'UND',
+                valor_unitario_estimado TEXT NOT NULL DEFAULT '',
+                valor_total_estimado TEXT NOT NULL DEFAULT '',
+                criterio_julgamento TEXT NOT NULL DEFAULT '',
+                situacao TEXT NOT NULL DEFAULT '',
+                criado_em TEXT NOT NULL,
+                atualizado_em TEXT NOT NULL,
+                UNIQUE (negocio_id, lote, numero_item)
+            );
+
             CREATE TABLE IF NOT EXISTS app_migrations (
                 chave TEXT PRIMARY KEY,
                 aplicado_em TEXT NOT NULL
@@ -332,6 +351,8 @@ def init_database():
                 ON negocio_historico (negocio_id, criado_em);
             CREATE INDEX IF NOT EXISTS idx_negocio_tarefas
                 ON negocio_tarefas (negocio_id, ordem, id);
+            CREATE INDEX IF NOT EXISTS idx_negocio_itens
+                ON negocio_itens (negocio_id, ordem, id);
             """
         )
         now = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -1819,6 +1840,19 @@ def pncp_purchase_metadata(cnpj, ano, sequencial):
             payload.get("situacaoCompraNome")
             or payload.get("situacaoCompra")
         ),
+        "valor_total_estimado": payload.get("valorTotalEstimado"),
+        "modo_disputa": compact(
+            payload.get("modoDisputaNome")
+            or payload.get("modoDisputa")
+        ),
+        "codigo_unidade": compact(
+            unidade.get("codigoUnidade")
+            or unidade.get("codigo")
+        ),
+        "link_sistema_origem": compact(
+            payload.get("linkSistemaOrigem")
+            or payload.get("urlSistemaOrigem")
+        ),
     }
 
 
@@ -1864,6 +1898,7 @@ def business_record(row):
         "decisao_comercial": row["decisao_comercial"],
         "checklist_concluido": row["checklist_concluido"],
         "checklist_total": row["checklist_total"],
+        "total_itens": row["total_itens"],
         "criado_em": row["criado_em"],
         "atualizado_em": row["atualizado_em"],
         "pode_mover": True,
@@ -1875,7 +1910,9 @@ BUSINESS_SELECT = """
         (SELECT COUNT(*) FROM negocio_tarefas t
          WHERE t.negocio_id = n.id AND t.concluida = 1) AS checklist_concluido,
         (SELECT COUNT(*) FROM negocio_tarefas t
-         WHERE t.negocio_id = n.id) AS checklist_total
+         WHERE t.negocio_id = n.id) AS checklist_total,
+        (SELECT COUNT(*) FROM negocio_itens i
+         WHERE i.negocio_id = n.id) AS total_itens
     FROM negocios n
 """
 
@@ -1984,6 +2021,29 @@ def get_business(business_id, include_details=False):
                 ).fetchall()
             ]
             result["arquivos"] = business_files(connection, row)
+            result["itens"] = [
+                {
+                    "id": str(item["id"]),
+                    "ordem": item["ordem"],
+                    "lote": item["lote"],
+                    "numero": item["numero_item"],
+                    "descricao": item["descricao"],
+                    "quantidade": item["quantidade"],
+                    "unidade": item["unidade"],
+                    "valor_unitario_estimado": item["valor_unitario_estimado"],
+                    "valor_total_estimado": item["valor_total_estimado"],
+                    "criterio_julgamento": item["criterio_julgamento"],
+                    "situacao": item["situacao"],
+                }
+                for item in connection.execute(
+                    """
+                    SELECT * FROM negocio_itens
+                    WHERE negocio_id = ?
+                    ORDER BY ordem, id
+                    """,
+                    (business_id,),
+                ).fetchall()
+            ]
     return result
 
 
@@ -2014,16 +2074,102 @@ def ensure_business_tasks(connection, business_id, now):
     )
 
 
+def validate_business_items(payload):
+    if "itens" not in payload:
+        return None
+    raw_items = payload.get("itens")
+    if not isinstance(raw_items, list) or not raw_items:
+        raise ValueError("Selecione ao menos um item para adicionar ao negócio.")
+    if len(raw_items) > 5000:
+        raise ValueError("A seleção excede o limite de 5.000 itens por negócio.")
+    items = []
+    seen = set()
+    for index, raw in enumerate(raw_items, start=1):
+        if not isinstance(raw, dict):
+            raise ValueError("A seleção de itens contém dados inválidos.")
+        item = {
+            "ordem": index,
+            "lote": compact(raw.get("lote")),
+            "numero": compact(raw.get("numero") or raw.get("item")),
+            "descricao": compact(raw.get("descricao")),
+            "quantidade": compact(raw.get("quantidade")),
+            "unidade": compact(raw.get("unidade")) or STANDARD_UNIT,
+            "valor_unitario_estimado": compact(raw.get("valor_unitario_estimado")),
+            "valor_total_estimado": compact(raw.get("valor_total_estimado")),
+            "criterio_julgamento": compact(raw.get("criterio_julgamento")),
+            "situacao": compact(raw.get("situacao")),
+        }
+        if not item["numero"] or not item["descricao"]:
+            raise ValueError("Todo item selecionado deve possuir número e descrição.")
+        key = (item["lote"], item["numero"])
+        if key in seen:
+            raise ValueError(f"O item {item['numero']} foi selecionado mais de uma vez.")
+        seen.add(key)
+        items.append(item)
+    return items
+
+
+def replace_business_items(connection, business_id, items, now):
+    if items is None:
+        return
+    connection.execute("DELETE FROM negocio_itens WHERE negocio_id = ?", (business_id,))
+    connection.executemany(
+        """
+        INSERT INTO negocio_itens (
+            negocio_id, ordem, lote, numero_item, descricao, quantidade,
+            unidade, valor_unitario_estimado, valor_total_estimado,
+            criterio_julgamento, situacao, criado_em, atualizado_em
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                business_id, item["ordem"], item["lote"], item["numero"],
+                item["descricao"], item["quantidade"], item["unidade"],
+                item["valor_unitario_estimado"], item["valor_total_estimado"],
+                item["criterio_julgamento"], item["situacao"], now, now,
+            )
+            for item in items
+        ],
+    )
+
+
 def import_business(payload):
     if not isinstance(payload, dict):
         raise ValueError("Dados do negócio inválidos.")
     link = compact(payload.get("pncp_link"))
     cnpj, ano, sequencial = parse_pncp_link(link)
     empresa = compact(payload.get("empresa")) or default_business_company()
+    selected_items = validate_business_items(payload)
     if len(empresa) > 200:
         raise ValueError("O nome da empresa excede 200 caracteres.")
-    metadata = pncp_purchase_metadata(cnpj, ano, sequencial)
-    if not metadata:
+    fallback = payload.get("oportunidade")
+    fallback = fallback if isinstance(fallback, dict) else {}
+    metadata = {
+        "numero_compra": compact(fallback.get("numero_compra")),
+        "processo": compact(fallback.get("processo")),
+        "modalidade": compact(fallback.get("modalidade")),
+        "objeto": compact(fallback.get("objeto")),
+        "orgao": compact(fallback.get("orgao")),
+        "orgao_cnpj": cnpj,
+        "unidade": compact(fallback.get("unidade")),
+        "municipio": compact(fallback.get("municipio")),
+        "uf": compact(fallback.get("uf")),
+        "numero_controle_pncp": compact(fallback.get("numero_controle_pncp")),
+        "abertura": compact(fallback.get("abertura")),
+        "encerramento": compact(fallback.get("encerramento")),
+        "situacao": compact(fallback.get("situacao")),
+    }
+    remote_metadata = (
+        {}
+        if metadata["objeto"] and metadata["orgao"]
+        else pncp_purchase_metadata(cnpj, ano, sequencial)
+    )
+    metadata.update({
+        key: value
+        for key, value in remote_metadata.items()
+        if value not in (None, "")
+    })
+    if not metadata["objeto"] and not metadata["orgao"]:
         raise RuntimeError("A contratação não foi localizada na API oficial do PNCP.")
     init_database()
     now = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -2114,6 +2260,20 @@ def import_business(payload):
                 (business_id, "Negócio adicionado a partir do PNCP", now),
             )
             created = True
+        replace_business_items(connection, business_id, selected_items, now)
+        if selected_items is not None:
+            connection.execute(
+                """
+                INSERT INTO negocio_historico (
+                    negocio_id, evento, criado_em
+                ) VALUES (?, ?, ?)
+                """,
+                (
+                    business_id,
+                    f"{len(selected_items)} item(ns) selecionado(s) para o negócio",
+                    now,
+                ),
+            )
         ensure_business_tasks(connection, business_id, now)
     return {"negocio": get_business(business_id), "criado": created}
 
@@ -3283,7 +3443,7 @@ def format_pncp_quantity(value):
     return text.replace(".", ",")
 
 
-def list_pncp_items(cnpj, ano, sequencial):
+def list_pncp_item_payload(cnpj, ano, sequencial):
     base_url = f"{PNCP_API_BASE}/pncp/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens"
     page_size = 100
     payload = []
@@ -3300,6 +3460,11 @@ def list_pncp_items(cnpj, ano, sequencial):
         if len(page_items) < page_size:
             break
         time.sleep(0.15)
+    return payload
+
+
+def list_pncp_items(cnpj, ano, sequencial):
+    payload = list_pncp_item_payload(cnpj, ano, sequencial)
 
     rows = []
     for item in payload or []:
@@ -3318,6 +3483,214 @@ def list_pncp_items(cnpj, ano, sequencial):
         if row["item"] and row["descricao"]:
             rows.append(row)
     return rows
+
+
+OPPORTUNITY_CATEGORY_RULES = (
+    ("Mobiliário", ("cadeira", "mesa", "armario", "sofa", "estante", "mobiliario", "poltrona", "banco")),
+    ("Equipamentos de escritório", ("impressora", "fragmentadora", "projetor", "scanner", "copiadora", "escritorio")),
+    ("Acessórios ergonômicos", ("ergonom", "apoio de punho", "mouse pad", "suporte para monitor", "apoio para pes")),
+    ("Informática", ("computador", "notebook", "monitor", "teclado", "mouse", "servidor", "software", "informatica")),
+    ("Artigos para ginástica", ("ginastica", "academia", "halter", "colchonete", "esteira ergometrica")),
+    ("Saúde", ("hospital", "medicamento", "cirurg", "odontolog", "saude", "enfermagem")),
+    ("Limpeza", ("limpeza", "higiene", "detergente", "desinfetante", "saneante")),
+    ("EPI e segurança", ("capacete", "luva", "equipamento de protecao", "epi", "seguranca")),
+    ("Climatização", ("ar condicionado", "climatizador", "ventilador", "refrigeracao")),
+    ("Alimentos", ("alimento", "genero alimenticio", "refeicao", "cafe", "leite")),
+)
+
+
+def opportunity_categories(object_text, items):
+    searchable = norm(" ".join(
+        [object_text] + [compact(item.get("descricao")) for item in items]
+    ))
+    categories = [
+        label
+        for label, keywords in OPPORTUNITY_CATEGORY_RULES
+        if any(norm(keyword) in searchable for keyword in keywords)
+    ]
+    return categories[:4] or ["Outros"]
+
+
+def opportunity_source_portal(link):
+    hostname = (urlparse(link or "").hostname or "").lower()
+    if "compras.gov.br" in hostname or "comprasnet" in hostname:
+        return "Comprasnet"
+    if "licitanet" in hostname:
+        return "Licitanet"
+    if "bll" in hostname:
+        return "BLL Compras"
+    if "licitacoes-e" in hostname:
+        return "Licitações-e"
+    if hostname:
+        return hostname.removeprefix("www.")
+    return "PNCP"
+
+
+def opportunity_file_record(item):
+    return {
+        "titulo": compact(
+            item.get("titulo")
+            or item.get("tipoDocumentoNome")
+            or "Arquivo oficial"
+        ),
+        "tipo": compact(
+            item.get("tipoDocumentoNome")
+            or item.get("tipoDocumentoDescricao")
+        ),
+        "url": compact(item.get("url") or item.get("uri")),
+    }
+
+
+def opportunity_item_record(item):
+    quantity = item.get("quantidade")
+    unit_value = item.get("valorUnitarioEstimado")
+    total_value = item.get("valorTotal")
+    if total_value is None and quantity is not None and unit_value is not None:
+        try:
+            total_value = float(quantity) * float(unit_value)
+        except (TypeError, ValueError):
+            total_value = None
+    return {
+        "numero": compact(item.get("numeroItem") or item.get("item")),
+        "lote": compact(
+            item.get("numeroLote")
+            or item.get("lote")
+            or item.get("grupo")
+        ),
+        "descricao": compact(item.get("descricao")),
+        "quantidade": format_pncp_quantity(quantity),
+        "unidade": compact(
+            item.get("unidadeMedida")
+            or item.get("unidadeFornecimento")
+        ) or STANDARD_UNIT,
+        "valor_unitario_estimado": unit_value,
+        "valor_total_estimado": total_value,
+        "criterio_julgamento": compact(
+            item.get("criterioJulgamentoNome")
+            or item.get("criterioJulgamento")
+        ),
+        "situacao": compact(
+            item.get("situacaoCompraItemNome")
+            or item.get("situacaoItemNome")
+            or item.get("situacaoCompraItem")
+        ),
+        "tipo": compact(
+            item.get("materialOuServicoNome")
+            or item.get("tipoItemNome")
+        ),
+    }
+
+
+def opportunity_detail_from_pncp_link(link, fallback=None):
+    cnpj, ano, sequencial = parse_pncp_link(link)
+    fallback = fallback if isinstance(fallback, dict) else {}
+    metadata = {
+        "numero_compra": compact(fallback.get("numero_compra")),
+        "processo": compact(fallback.get("processo")),
+        "modalidade": compact(fallback.get("modalidade")),
+        "objeto": compact(fallback.get("objeto")),
+        "orgao": compact(fallback.get("orgao")),
+        "orgao_cnpj": cnpj,
+        "unidade": compact(fallback.get("unidade")),
+        "municipio": compact(fallback.get("municipio")),
+        "uf": compact(fallback.get("uf")),
+        "numero_controle_pncp": compact(fallback.get("numero_controle_pncp")),
+        "abertura": compact(fallback.get("abertura")),
+        "encerramento": compact(fallback.get("encerramento")),
+        "situacao": compact(fallback.get("situacao")),
+        "valor_total_estimado": fallback.get("valor_total_estimado"),
+        "modo_disputa": compact(fallback.get("modo_disputa")),
+        "codigo_unidade": compact(fallback.get("codigo_unidade")),
+        "link_sistema_origem": compact(fallback.get("link_sistema_origem")),
+    }
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        metadata_future = executor.submit(
+            pncp_purchase_metadata, cnpj, ano, sequencial
+        )
+        items_future = executor.submit(
+            list_pncp_item_payload, cnpj, ano, sequencial
+        )
+        files_future = executor.submit(list_pncp_files, cnpj, ano, sequencial)
+        remote_metadata = metadata_future.result()
+        raw_items = items_future.result()
+        files = files_future.result()
+    metadata.update({
+        key: value
+        for key, value in remote_metadata.items()
+        if value not in (None, "")
+    })
+    if not metadata:
+        raise RuntimeError("A contratação não foi localizada na API oficial do PNCP.")
+    items = [
+        opportunity_item_record(item)
+        for item in raw_items
+        if compact(item.get("numeroItem") or item.get("item"))
+    ]
+    official_link = pncp_app_link(cnpj, ano, sequencial)
+    source_link = metadata.get("link_sistema_origem", "")
+    return {
+        "oportunidade": {
+            **metadata,
+            "cnpj": cnpj,
+            "ano": ano,
+            "sequencial": sequencial,
+            "link_pncp": official_link,
+            "link_origem": source_link,
+            "portal_origem": opportunity_source_portal(source_link),
+            "categorias": opportunity_categories(metadata.get("objeto", ""), items),
+        },
+        "arquivos": [opportunity_file_record(item) for item in files],
+        "itens": items,
+        "fontes": {
+            "oportunidade": "API oficial do PNCP - contratação e busca pública",
+            "arquivos": "API oficial do PNCP - arquivos da contratação",
+            "itens": "API oficial do PNCP - itens da contratação",
+        },
+    }
+
+
+OPPORTUNITY_QUESTION_STOPWORDS = {
+    "a", "ao", "aos", "as", "com", "como", "da", "das", "de", "do", "dos",
+    "e", "em", "esta", "este", "foi", "ha", "no", "nos", "o", "os", "para",
+    "por", "qual", "que", "sao", "se", "sobre", "um", "uma",
+}
+
+
+def answer_opportunity_question(link, question):
+    question = compact(question)
+    if len(question) < 3:
+        raise ValueError("Digite uma pergunta sobre o edital.")
+    if len(question) > 500:
+        raise ValueError("A pergunta deve ter no máximo 500 caracteres.")
+    source = source_from_pncp_link(link)
+    source_path = Path(source["source_path"])
+    document_text = catalog_document_text(source_path)
+    chunks = [
+        compact(chunk)
+        for chunk in re.split(r"\n\s*\n|(?<=[.;:])\s+(?=[A-ZÁÉÍÓÚÂÊÔÃÕÇ0-9])", document_text)
+        if len(compact(chunk)) >= 40
+    ]
+    terms = {
+        term for term in norm(question).split()
+        if len(term) >= 3 and term not in OPPORTUNITY_QUESTION_STOPWORDS
+    }
+    ranked = []
+    for index, chunk in enumerate(chunks):
+        normalized = norm(chunk)
+        score = sum(1 for term in terms if term in normalized)
+        if score:
+            ranked.append((score, -index, chunk[:1200]))
+    excerpts = [row[2] for row in sorted(ranked, reverse=True)[:3]]
+    return {
+        "resposta": (
+            "Encontrei os trechos abaixo no documento oficial que mais se relacionam à pergunta."
+            if excerpts
+            else "Não localizei no documento oficial um trecho relacionado à pergunta."
+        ),
+        "trechos": excerpts,
+        "documento": source["pncp"].get("documento_usado") or source_path.name,
+        "tipo_documento": source["pncp"].get("documento_tipo", ""),
+    }
 
 
 def pncp_item_match_text(item):
@@ -3671,9 +4044,16 @@ def map_search_item(row):
         "sequencial": sequencial,
         "numeroCompra": row.get("title", ""),
         "processo": row.get("numero_controle_pncp", ""),
+        "modalidade": row.get("modalidade_nome", "") or row.get("modalidade_licitacao_nome", ""),
         "objeto": row.get("description", ""),
         "uf": row.get("uf", ""),
         "municipio": row.get("municipio_nome", ""),
+        "unidade": row.get("unidade_nome", "") or row.get("unidade_orgao_nome", ""),
+        "codigoUnidade": row.get("unidade_codigo", "") or row.get("codigo_unidade", ""),
+        "valorTotalEstimado": row.get("valor_total_estimado"),
+        "modoDisputa": row.get("modo_disputa_nome", ""),
+        "situacao": row.get("situacao_nome", "") or row.get("situacao_compra_nome", ""),
+        "linkOrigem": row.get("item_url", "") or row.get("link_sistema_origem", ""),
         "abertura": row.get("data_inicio_vigencia", ""),
         "encerramento": row.get("data_fim_vigencia", ""),
         "link": pncp_app_link(cnpj, ano, sequencial) if cnpj and ano and sequencial else "",
@@ -3684,6 +4064,9 @@ MATERIAL_SEARCH_TERMS = (
     "aquisicao", "compra", "fornecimento", "material", "materiais", "produto",
     "produtos", "equipamento", "equipamentos", "bem", "bens", "insumo",
     "insumos", "medicamento", "medicamentos", "mobiliario", "generos alimenticios",
+    "microcomputador", "microcomputadores", "computador", "computadores",
+    "desktop", "desktops", "notebook", "notebooks", "monitor", "monitores",
+    "periferico", "perifericos", "informatica", "teclado", "mouse",
 )
 
 SERVICE_SEARCH_TERMS = (
@@ -3698,6 +4081,18 @@ BRAZILIAN_UFS = (
     "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI",
     "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO",
 )
+
+
+def parse_search_ufs(value):
+    selected = []
+    for part in re.split(r"[,;\s]+", str(value or "").upper()):
+        uf = part.strip()
+        if not uf or uf in selected:
+            continue
+        if uf not in BRAZILIAN_UFS:
+            raise ValueError(f"UF invalida: {uf}.")
+        selected.append(uf)
+    return tuple(selected)
 
 
 def split_search_keywords(value, maximum=20):
@@ -3719,11 +4114,41 @@ def split_search_keywords(value, maximum=20):
     return keywords
 
 
-SEARCH_TERM_CONNECTORS = {
-    "a", "as", "com", "da", "das", "de", "do", "dos", "e", "em",
-    "o", "os", "para", "por",
-}
 MAX_SEARCH_TERM_GAP = 2
+
+
+def search_word_variants(word):
+    word = norm(word)
+    if not word:
+        return set()
+    variants = {word}
+    if len(word) > 3:
+        if word.endswith("oes"):
+            variants.add(f"{word[:-3]}ao")
+        if word.endswith("ais"):
+            variants.add(f"{word[:-3]}al")
+        if word.endswith("eis"):
+            variants.add(f"{word[:-3]}el")
+        if word.endswith("is"):
+            variants.add(f"{word[:-2]}il")
+        if word.endswith("es"):
+            variants.add(word[:-2])
+        if word.endswith("s"):
+            variants.add(word[:-1])
+        variants.add(f"{word}s")
+        if word[-1] in {"r", "z", "n"}:
+            variants.add(f"{word}es")
+        if word.endswith("al"):
+            variants.add(f"{word[:-2]}ais")
+        if word.endswith("el"):
+            variants.add(f"{word[:-2]}eis")
+        if word.endswith("ao"):
+            variants.add(f"{word[:-2]}oes")
+    return {variant for variant in variants if variant}
+
+
+def search_words_match(actual, expected):
+    return bool(search_word_variants(actual) & search_word_variants(expected))
 
 
 def matches_complete_words(text, search_term):
@@ -3732,7 +4157,7 @@ def matches_complete_words(text, search_term):
         return True
     words = norm(text).split()
     for start, word in enumerate(words):
-        if word != expected[0]:
+        if not search_words_match(word, expected[0]):
             continue
         position = start
         matched = True
@@ -3742,7 +4167,7 @@ def matches_complete_words(text, search_term):
                 (
                     index
                     for index in range(position + 1, stop)
-                    if words[index] == expected_word
+                    if search_words_match(words[index], expected_word)
                 ),
                 None,
             )
@@ -3762,32 +4187,32 @@ def matches_complete_search_term(row, search_term):
     )
 
 
-def search_term_anchor(search_term):
-    words = norm(search_term).split()
-    meaningful = [word for word in words if word not in SEARCH_TERM_CONNECTORS]
-    return meaningful[-1] if meaningful else (words[-1] if words else "")
-
-
-def row_may_match_term_in_items(row, search_term):
-    if len(norm(search_term).split()) < 2:
-        return False
-    anchor = search_term_anchor(search_term)
-    searchable_words = set(
-        norm(f"{row.get('title', '')} {row.get('description', '')}").split()
-    )
-    return bool(anchor and anchor in searchable_words)
-
-
-def matches_search_term_in_pncp_items(row, search_term):
+def get_search_row_pncp_items(row):
     cnpj = compact(row.get("orgao_cnpj"))
     ano = compact(row.get("ano"))
     sequencial = compact(row.get("numero_sequencial"))
     if not cnpj or not ano or not sequencial:
-        return False
-    return any(
-        matches_complete_words(item.get("descricao", ""), search_term)
-        for item in list_pncp_items(cnpj, ano, sequencial)
-    )
+        return []
+    cache_key = f"{cnpj}:{ano}:{sequencial}"
+    cached = cache_get(SEARCH_ITEM_CACHE, cache_key, DOCUMENT_CACHE_TTL)
+    if cached is not None:
+        return cached
+    items = list_pncp_items(cnpj, ano, sequencial)
+    cache_set(SEARCH_ITEM_CACHE, cache_key, items)
+    return items
+
+
+def matches_search_term_after_item_identification(row, search_term):
+    try:
+        items = get_search_row_pncp_items(row)
+    except Exception:
+        items = []
+    if items:
+        return any(
+            matches_complete_words(item.get("descricao", ""), search_term)
+            for item in items
+        )
+    return matches_complete_search_term(row, search_term)
 
 
 def filter_rows_by_complete_search_term(rows, search_term):
@@ -3795,20 +4220,13 @@ def filter_rows_by_complete_search_term(rows, search_term):
         return list(rows)
 
     accepted = []
-    item_candidates = []
-    for row in rows:
-        if matches_complete_search_term(row, search_term):
-            accepted.append(row)
-        elif row_may_match_term_in_items(row, search_term):
-            item_candidates.append(row)
-
-    if not item_candidates:
+    rows = list(rows)
+    if not rows:
         return accepted
-
-    with ThreadPoolExecutor(max_workers=min(6, len(item_candidates))) as executor:
+    with ThreadPoolExecutor(max_workers=min(6, len(rows))) as executor:
         futures = {
-            executor.submit(matches_search_term_in_pncp_items, row, search_term): row
-            for row in item_candidates
+            executor.submit(matches_search_term_after_item_identification, row, search_term): row
+            for row in rows
         }
         for future in as_completed(futures):
             try:
@@ -3819,12 +4237,16 @@ def filter_rows_by_complete_search_term(rows, search_term):
     return accepted
 
 
-def classify_search_object(row):
-    text = norm(f"{row.get('title', '')} {row.get('description', '')}")
+def classify_search_text(text):
+    text = norm(text)
     material_score = sum(1 for term in MATERIAL_SEARCH_TERMS if term in text)
     service_score = sum(1 for term in SERVICE_SEARCH_TERMS if term in text)
 
-    if "contratacao de empresa para fornecimento" in text or "registro de precos" in text:
+    if (
+        "contratacao de empresa para fornecimento" in text
+        or "registro de preco" in text
+        or "registro de precos" in text
+    ):
         material_score += 2
     if "contratacao de empresa especializada" in text and "fornecimento" not in text:
         service_score += 2
@@ -3834,6 +4256,26 @@ def classify_search_object(row):
     if service_score > material_score:
         return "servico"
     return ""
+
+
+def classify_search_object(row):
+    return classify_search_text(f"{row.get('title', '')} {row.get('description', '')}")
+
+
+def classify_search_items(row):
+    return classify_search_text(
+        " ".join(item.get("descricao", "") for item in get_search_row_pncp_items(row))
+    )
+
+
+def row_matches_object_type(row, object_type):
+    if not object_type:
+        return True
+    row_type = classify_search_object(row)
+    if row_type == object_type:
+        return True
+    item_type = classify_search_items(row)
+    return item_type == object_type
 
 
 def search_pncp_app_editais(params, data_inicial, data_final):
@@ -3854,11 +4296,11 @@ def search_pncp_app_editais(params, data_inicial, data_final):
     modalidade = str(params.get("codigoModalidadeContratacao") or "").strip()
     if modalidade:
         base_query["modalidades"] = modalidade
-    uf = str(params.get("uf") or "").strip().upper()
+    selected_ufs = parse_search_ufs(params.get("uf"))
     result_cache_key = json.dumps({
         **base_query,
         "keywords": keywords,
-        "ufs": uf,
+        "ufs": selected_ufs,
         "dataInicial": data_inicial,
         "dataFinal": data_final,
         "tipoObjeto": object_type,
@@ -3867,7 +4309,7 @@ def search_pncp_app_editais(params, data_inicial, data_final):
     aggregate_cache_hit = consolidated is not None
 
     if consolidated is None:
-        partition_ufs = (uf,) if uf else BRAZILIAN_UFS
+        partition_ufs = selected_ufs or BRAZILIAN_UFS
         partitions = tuple(
             (search_term, partition_uf)
             for search_term in search_terms
@@ -3999,7 +4441,7 @@ def search_pncp_app_editais(params, data_inicial, data_final):
             for row in payload.get("items", []):
                 if not date_in_range(row.get("data_fim_vigencia"), data_inicial, data_final):
                     continue
-                if object_type and classify_search_object(row) != object_type:
+                if not row_matches_object_type(row, object_type):
                     continue
                 row_key = (
                     row.get("id")
@@ -4249,22 +4691,28 @@ def quick_pncp_search_preview(params):
     modalidade = str(params.get("codigoModalidadeContratacao") or "").strip()
     if modalidade:
         base_query["modalidades"] = modalidade
-    uf = str(params.get("uf") or "").strip().upper()
-    if uf:
-        base_query["ufs"] = uf
+    selected_ufs = parse_search_ufs(params.get("uf"))
+    preview_ufs = selected_ufs or ("",)
 
-    def fetch_preview(search_term):
+    def fetch_preview(search_term, uf):
         query = dict(base_query)
         if search_term:
             query["q"] = search_term
+        if uf:
+            query["ufs"] = uf
         url = f"{PNCP_SEARCH_URL}?{urlencode(query)}"
-        return search_term, url, request_json(url, timeout=12)
+        return search_term, uf, url, request_json(url, timeout=12)
 
     previews = []
-    with ThreadPoolExecutor(max_workers=min(4, len(search_terms))) as executor:
+    partitions = tuple(
+        (search_term, uf)
+        for search_term in search_terms
+        for uf in preview_ufs
+    )
+    with ThreadPoolExecutor(max_workers=min(6, len(partitions))) as executor:
         futures = {
-            executor.submit(fetch_preview, search_term): search_term
-            for search_term in search_terms
+            executor.submit(fetch_preview, search_term, uf): (search_term, uf)
+            for search_term, uf in partitions
         }
         for future in as_completed(futures):
             previews.append(future.result())
@@ -4276,7 +4724,7 @@ def quick_pncp_search_preview(params):
     timed_out = False
     cache_hit = False
     source_urls = []
-    for search_term, url, payload in previews:
+    for search_term, _uf, url, payload in previews:
         source_urls.append(url)
         try:
             source_total += int(payload.get("total", len(payload.get("items", []))))
@@ -4289,7 +4737,7 @@ def quick_pncp_search_preview(params):
         for row in payload.get("items", []):
             if not date_in_range(row.get("data_fim_vigencia"), data_inicial, data_final):
                 continue
-            if object_type and classify_search_object(row) != object_type:
+            if not row_matches_object_type(row, object_type):
                 continue
             candidates.append(row)
         for row in filter_rows_by_complete_search_term(candidates, search_term):
@@ -7926,6 +8374,30 @@ class App(BaseHTTPRequestHandler):
                 },
             )
             return
+        if request_path == "/api/oportunidades/detalhe":
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                link = (query.get("pncp_link") or [""])[0]
+                fallback = {
+                    key: (query.get(key) or [""])[0]
+                    for key in (
+                        "numero_compra", "processo", "modalidade", "objeto",
+                        "orgao", "unidade", "municipio", "uf", "abertura",
+                        "encerramento", "situacao", "modo_disputa",
+                        "codigo_unidade", "link_sistema_origem",
+                        "valor_total_estimado",
+                    )
+                }
+                json_response(
+                    self,
+                    200,
+                    opportunity_detail_from_pncp_link(link, fallback),
+                )
+            except ValueError as exc:
+                json_response(self, 400, {"error": str(exc) or "Link PNCP inválido."})
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc) or "Não foi possível carregar a oportunidade."})
+            return
         business_match = re.fullmatch(r"/api/negocios/(\d+)", request_path)
         if business_match:
             try:
@@ -8008,6 +8480,19 @@ class App(BaseHTTPRequestHandler):
 
     def do_POST(self):
         request_path = urlparse(self.path).path
+        if request_path == "/api/oportunidades/conversar":
+            try:
+                payload = parse_json_body(self)
+                result = answer_opportunity_question(
+                    payload.get("pncp_link", ""),
+                    payload.get("pergunta", ""),
+                )
+                json_response(self, 200, result)
+            except ValueError as exc:
+                json_response(self, 400, {"error": str(exc)})
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc) or "Não foi possível consultar o edital."})
+            return
         if request_path == "/api/negocios/importar":
             try:
                 result = import_business(parse_json_body(self))

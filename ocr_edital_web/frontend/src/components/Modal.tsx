@@ -7,6 +7,7 @@ interface ModalProps extends PropsWithChildren {
   busy?: boolean;
   onClose: () => void;
   wide?: boolean;
+  className?: string;
 }
 
 export function Modal({
@@ -15,6 +16,7 @@ export function Modal({
   busy = false,
   onClose,
   wide = false,
+  className = "",
   children,
 }: ModalProps) {
   const titleId = useId();
@@ -43,7 +45,7 @@ export function Modal({
       }}
     >
       <section
-        className={`modal-dialog${wide ? " modal-dialog-wide" : ""}`}
+        className={`modal-dialog${wide ? " modal-dialog-wide" : ""}${className ? ` ${className}` : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

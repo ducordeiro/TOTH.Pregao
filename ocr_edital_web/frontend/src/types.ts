@@ -26,9 +26,16 @@ export interface Bid {
   sequencial: number;
   numeroCompra: string;
   processo: string;
+  modalidade?: string;
   objeto: string;
   uf: string;
   municipio: string;
+  unidade?: string;
+  codigoUnidade?: string;
+  valorTotalEstimado?: number | string | null;
+  modoDisputa?: string;
+  situacao?: string;
+  linkOrigem?: string;
   abertura: string;
   encerramento: string;
   link: string;
@@ -112,6 +119,65 @@ export interface SearchResponse {
   cache_hit?: boolean;
   rate_limited?: boolean;
   timed_out?: boolean;
+}
+
+export interface OpportunityItem {
+  numero: string;
+  lote: string;
+  descricao: string;
+  quantidade: string;
+  unidade: string;
+  valor_unitario_estimado: number | string | null;
+  valor_total_estimado: number | string | null;
+  criterio_julgamento: string;
+  situacao: string;
+  tipo: string;
+}
+
+export interface OpportunityFile {
+  titulo: string;
+  tipo: string;
+  url: string;
+}
+
+export interface OpportunityData {
+  numero_compra: string;
+  processo: string;
+  modalidade: string;
+  objeto: string;
+  orgao: string;
+  orgao_cnpj: string;
+  unidade: string;
+  codigo_unidade: string;
+  municipio: string;
+  uf: string;
+  abertura: string;
+  encerramento: string;
+  situacao: string;
+  valor_total_estimado: number | string | null;
+  modo_disputa: string;
+  link_pncp: string;
+  link_origem: string;
+  portal_origem: string;
+  categorias: string[];
+}
+
+export interface OpportunityDetail {
+  oportunidade: OpportunityData;
+  arquivos: OpportunityFile[];
+  itens: OpportunityItem[];
+  fontes: {
+    oportunidade: string;
+    arquivos: string;
+    itens: string;
+  };
+}
+
+export interface OpportunityAnswer {
+  resposta: string;
+  trechos: string[];
+  documento: string;
+  tipo_documento: string;
 }
 
 export interface GenerateResponse {
@@ -283,6 +349,7 @@ export interface Business {
   decisao_comercial: string;
   checklist_concluido: number;
   checklist_total: number;
+  total_itens: number;
   criado_em: string;
   atualizado_em: string;
   pode_mover: boolean;
@@ -311,8 +378,23 @@ export interface BusinessFile {
   selecionado: boolean;
 }
 
+export interface BusinessItem {
+  id: string;
+  ordem: number;
+  lote: string;
+  numero: string;
+  descricao: string;
+  quantidade: string;
+  unidade: string;
+  valor_unitario_estimado: string;
+  valor_total_estimado: string;
+  criterio_julgamento: string;
+  situacao: string;
+}
+
 export interface BusinessDetail extends Business {
   historico: BusinessHistory[];
   tarefas: BusinessTask[];
   arquivos: BusinessFile[];
+  itens: BusinessItem[];
 }

@@ -953,10 +953,16 @@ class PncpSearchPaginationTests(unittest.TestCase):
                 "monitor",
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             server.matches_complete_search_term(
                 {"title": "Edital", "description": "Aquisição de monitores"},
                 "monitor",
+            )
+        )
+        self.assertTrue(
+            server.matches_complete_search_term(
+                {"title": "Edital", "description": "Aquisicao de cadeira de rodas"},
+                "cadeiras",
             )
         )
         self.assertFalse(
@@ -997,6 +1003,63 @@ class PncpSearchPaginationTests(unittest.TestCase):
 
         self.assertEqual(result, [row])
         items.assert_called_once_with("46422408000152", "2026", "367")
+        server.SEARCH_ITEM_CACHE.clear()
+
+    def test_single_word_search_term_can_match_official_item_description(self):
+        row = {
+            "orgao_cnpj": "48813638000178",
+            "ano": "2026",
+            "numero_sequencial": "97",
+            "title": "Pregao eletronico 28/2026",
+            "description": "Eventual aquisicao de equipamentos de informatica",
+        }
+        pncp_items = [{
+            "descricao": "Kit teclado e mouse USB com fio",
+        }]
+
+        server.SEARCH_ITEM_CACHE.clear()
+        with patch.object(server, "list_pncp_items", return_value=pncp_items) as items:
+            result = server.filter_rows_by_complete_search_term([row], "teclado")
+
+        self.assertEqual(result, [row])
+        items.assert_called_once_with("48813638000178", "2026", "97")
+        server.SEARCH_ITEM_CACHE.clear()
+
+    def test_search_term_uses_items_before_general_opportunity_text(self):
+        row = {
+            "orgao_cnpj": "12345678000199",
+            "ano": "2026",
+            "numero_sequencial": "40",
+            "title": "Edital",
+            "description": "Aquisicao de suporte para teclado",
+        }
+        pncp_items = [{
+            "descricao": "Suporte para monitor",
+        }]
+
+        server.SEARCH_ITEM_CACHE.clear()
+        with patch.object(server, "list_pncp_items", return_value=pncp_items):
+            result = server.filter_rows_by_complete_search_term([row], "teclado")
+
+        self.assertEqual(result, [])
+        server.SEARCH_ITEM_CACHE.clear()
+
+    def test_material_filter_can_use_official_item_descriptions(self):
+        row = {
+            "orgao_cnpj": "46068425000133",
+            "ano": "2026",
+            "numero_sequencial": "1396",
+            "title": "Pregao eletronico 1669/2026",
+            "description": "PE DGA No 90220/2026",
+        }
+        pncp_items = [{
+            "descricao": "Microcomputador com teclado e mouse",
+        }]
+
+        server.SEARCH_ITEM_CACHE.clear()
+        with patch.object(server, "list_pncp_items", return_value=pncp_items):
+            self.assertTrue(server.row_matches_object_type(row, "material"))
+        server.SEARCH_ITEM_CACHE.clear()
 
     def test_multiple_keywords_are_combined_with_or_semantics(self):
         def row(identifier, description):
@@ -1039,6 +1102,134 @@ class PncpSearchPaginationTests(unittest.TestCase):
         self.assertTrue(any("q=cadeira+de+rodas" in url for url in requested_urls))
         self.assertTrue(any("q=monitor" in url for url in requested_urls))
         server.PNCP_RESULT_CACHE.clear()
+
+    def test_modality_and_object_type_are_applied_to_official_search(self):
+        rows = [
+            {
+                "id": "material-1",
+                "orgao_cnpj": "12345678000199",
+                "ano": "2026",
+                "numero_sequencial": "1",
+                "orgao_nome": "Orgao",
+                "title": "Edital",
+                "description": "Aquisicao de cadeiras escolares",
+                "data_fim_vigencia": "2026-08-01T10:00:00",
+            },
+            {
+                "id": "servico-1",
+                "orgao_cnpj": "12345678000199",
+                "ano": "2026",
+                "numero_sequencial": "2",
+                "orgao_nome": "Orgao",
+                "title": "Edital",
+                "description": "Contratacao de empresa especializada para limpeza predial",
+                "data_fim_vigencia": "2026-08-01T10:00:00",
+            },
+        ]
+
+        server.PNCP_RESULT_CACHE.clear()
+        with patch.object(server, "request_json", return_value={"items": rows, "total": 2}) as request:
+            response = server.search_pncp_open_bids({
+                "dataInicial": "20260725",
+                "dataFinal": "20260823",
+                "uf": "SP",
+                "tipoObjeto": "servico",
+                "codigoModalidadeContratacao": "6",
+                "pagina": "1",
+                "tamanhoPagina": "10",
+            })
+
+        self.assertEqual(response["total"], 1)
+        self.assertEqual(response["results"][0]["sequencial"], "2")
+        requested_url = next(
+            call.args[0]
+            for call in request.call_args_list
+            if call.args[0].startswith(server.PNCP_SEARCH_URL)
+        )
+        query = parse_qs(urlparse(requested_url).query)
+        self.assertEqual(query["modalidades"], ["6"])
+        self.assertEqual(query["ufs"], ["SP"])
+        server.PNCP_RESULT_CACHE.clear()
+
+    def test_multiple_ufs_are_queried_and_combined_without_duplicates(self):
+        def fake_request(url, timeout=18):
+            uf = parse_qs(urlparse(url).query)["ufs"][0]
+            return {
+                "items": [{
+                    "id": f"item-{uf}",
+                    "orgao_cnpj": "12345678000199",
+                    "ano": "2026",
+                    "numero_sequencial": "1" if uf == "SP" else "2",
+                    "orgao_nome": f"Orgao {uf}",
+                    "title": "Edital",
+                    "description": "Aquisicao de mobiliario",
+                    "uf": uf,
+                    "data_fim_vigencia": "2026-08-20T10:00:00",
+                }],
+                "total": 1,
+            }
+
+        server.PNCP_RESULT_CACHE.clear()
+        with patch.object(server, "request_json", side_effect=fake_request) as request:
+            response = server.search_pncp_open_bids({
+                "dataInicial": "20260801",
+                "dataFinal": "20260830",
+                "uf": "SP,RJ",
+                "pagina": "1",
+                "tamanhoPagina": "10",
+            })
+
+        requested_ufs = {
+            parse_qs(urlparse(call.args[0]).query)["ufs"][0]
+            for call in request.call_args_list
+        }
+        self.assertEqual(requested_ufs, {"SP", "RJ"})
+        self.assertEqual(response["total"], 2)
+        self.assertEqual({row["uf"] for row in response["results"]}, {"SP", "RJ"})
+        server.PNCP_RESULT_CACHE.clear()
+
+    def test_quick_preview_queries_each_selected_uf(self):
+        def fake_request(url, timeout=12):
+            uf = parse_qs(urlparse(url).query)["ufs"][0]
+            return {
+                "items": [{
+                    "id": f"preview-{uf}",
+                    "orgao_cnpj": "12345678000199",
+                    "ano": "2026",
+                    "numero_sequencial": "1" if uf == "SP" else "2",
+                    "orgao_nome": f"Orgao {uf}",
+                    "title": "Edital",
+                    "description": "Aquisicao de mobiliario",
+                    "uf": uf,
+                    "data_fim_vigencia": "2026-08-20T10:00:00",
+                }],
+                "total": 1,
+            }
+
+        with patch.object(server, "request_json", side_effect=fake_request) as request:
+            response = server.quick_pncp_search_preview({
+                "dataInicial": "20260801",
+                "dataFinal": "20260830",
+                "uf": "SP,RJ",
+            })
+
+        requested_ufs = {
+            parse_qs(urlparse(call.args[0]).query)["ufs"][0]
+            for call in request.call_args_list
+        }
+        self.assertEqual(requested_ufs, {"SP", "RJ"})
+        self.assertEqual({row["uf"] for row in response["results"]}, {"SP", "RJ"})
+
+    def test_invalid_object_type_is_rejected_before_requesting_pncp(self):
+        with patch.object(server, "request_json") as request:
+            with self.assertRaisesRegex(ValueError, "Tipo do objeto"):
+                server.search_pncp_open_bids({
+                    "dataInicial": "20260725",
+                    "dataFinal": "20260823",
+                    "tipoObjeto": "obra",
+                })
+
+        request.assert_not_called()
 
     def test_fast_search_returns_preview_then_completed_result(self):
         preview = {
@@ -1157,6 +1348,169 @@ class PncpSearchPaginationTests(unittest.TestCase):
         self.assertTrue(response["complete"])
         self.assertEqual(len(response["results"]), 50)
         server.PNCP_RESULT_CACHE.clear()
+
+
+class OpportunityDetailTests(unittest.TestCase):
+    def test_detail_combines_official_pncp_metadata_files_and_items(self):
+        metadata = {
+            "numero_compra": "164/2026",
+            "processo": "123/2026",
+            "modalidade": "Dispensa Eletrônica",
+            "objeto": "Aquisição de cadeiras e apoio de punho",
+            "orgao": "Órgão de teste",
+            "orgao_cnpj": "00394700000108",
+            "unidade": "Unidade compradora",
+            "municipio": "Brasília",
+            "uf": "DF",
+            "numero_controle_pncp": "controle",
+            "abertura": "2026-08-05T08:30:00",
+            "encerramento": "2026-08-05T14:30:00",
+            "situacao": "Divulgada",
+            "valor_total_estimado": 8283.58,
+            "modo_disputa": "Dispensa com Disputa",
+            "codigo_unidade": "102329",
+            "link_sistema_origem": "https://compras.gov.br/compra/164",
+        }
+        raw_items = [{
+            "numeroItem": 1,
+            "descricao": "Cadeira ergonômica",
+            "quantidade": 2,
+            "unidadeMedida": "UNIDADE",
+            "valorUnitarioEstimado": 100,
+            "criterioJulgamentoNome": "Menor preço",
+            "situacaoCompraItemNome": "Aberto",
+        }]
+        raw_files = [{
+            "titulo": "Termo de Referência",
+            "tipoDocumentoNome": "Termo de Referência",
+            "url": "https://pncp.gov.br/arquivo.pdf",
+        }]
+
+        with (
+            patch.object(server, "pncp_purchase_metadata", return_value=metadata),
+            patch.object(server, "list_pncp_item_payload", return_value=raw_items),
+            patch.object(server, "list_pncp_files", return_value=raw_files),
+        ):
+            result = server.opportunity_detail_from_pncp_link(
+                "https://pncp.gov.br/app/editais/00394700000108/2026/251"
+            )
+
+        self.assertEqual(result["oportunidade"]["portal_origem"], "Comprasnet")
+        self.assertEqual(result["oportunidade"]["codigo_unidade"], "102329")
+        self.assertIn("Mobiliário", result["oportunidade"]["categorias"])
+        self.assertIn("Acessórios ergonômicos", result["oportunidade"]["categorias"])
+        self.assertEqual(result["itens"][0]["valor_total_estimado"], 200.0)
+        self.assertEqual(result["arquivos"][0]["titulo"], "Termo de Referência")
+
+    def test_document_question_returns_only_matching_official_excerpts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            document = Path(temp_dir) / "termo.pdf"
+            document.write_bytes(b"%PDF-test")
+            source = {
+                "source_path": document,
+                "pncp": {
+                    "documento_usado": "Termo de Referência.pdf",
+                    "documento_tipo": "Termo de Referência",
+                },
+            }
+            text = (
+                "O prazo de entrega será de 15 dias úteis após o recebimento da ordem.\n\n"
+                "A garantia mínima dos equipamentos será de 12 meses."
+            )
+            with (
+                patch.object(server, "source_from_pncp_link", return_value=source),
+                patch.object(server, "catalog_document_text", return_value=text),
+            ):
+                result = server.answer_opportunity_question("link", "Qual é o prazo de entrega?")
+
+        self.assertEqual(result["tipo_documento"], "Termo de Referência")
+        self.assertEqual(len(result["trechos"]), 1)
+        self.assertIn("15 dias úteis", result["trechos"][0])
+
+
+class BusinessItemSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.data_dir = Path(self.temp_dir.name)
+        self.database_path_patch = patch.object(
+            server, "DATABASE_PATH", self.data_dir / "pncp.sqlite3"
+        )
+        self.data_dir_patch = patch.object(server, "DATA_DIR", self.data_dir)
+        self.database_path_patch.start()
+        self.data_dir_patch.start()
+        server.init_database()
+        self.link = "https://pncp.gov.br/app/editais/18428888000123/2026/138"
+        self.metadata = {
+            "numero_compra": "138/2026",
+            "processo": "123/2026",
+            "modalidade": "Pregão Eletrônico",
+            "objeto": "Aquisição de mobiliário",
+            "orgao": "Órgão de teste",
+            "orgao_cnpj": "18428888000123",
+            "unidade": "Unidade compradora",
+            "municipio": "São Paulo",
+            "uf": "SP",
+            "numero_controle_pncp": "controle",
+            "abertura": "2026-08-05T08:30:00",
+            "encerramento": "2026-08-05T14:30:00",
+            "situacao": "Divulgada",
+        }
+
+    def tearDown(self):
+        self.data_dir_patch.stop()
+        self.database_path_patch.stop()
+        self.temp_dir.cleanup()
+
+    def item(self, number, description):
+        return {
+            "numero": str(number),
+            "lote": "1",
+            "descricao": description,
+            "quantidade": "2",
+            "unidade": "UND",
+            "valor_unitario_estimado": 100,
+            "valor_total_estimado": 200,
+            "criterio_julgamento": "Menor preço",
+            "situacao": "Aberto",
+        }
+
+    def test_only_selected_items_are_persisted_and_returned_in_business_detail(self):
+        with patch.object(server, "pncp_purchase_metadata", return_value=self.metadata):
+            created = server.import_business({
+                "pncp_link": self.link,
+                "empresa": "Empresa Teste",
+                "itens": [self.item(1, "Cadeira"), self.item(3, "Armário")],
+            })
+
+        detail = server.get_business(created["negocio"]["id"], include_details=True)
+        self.assertEqual(detail["total_itens"], 2)
+        self.assertEqual([item["numero"] for item in detail["itens"]], ["1", "3"])
+        self.assertEqual(detail["itens"][1]["descricao"], "Armário")
+
+    def test_new_selection_replaces_items_of_existing_business(self):
+        with patch.object(server, "pncp_purchase_metadata", return_value=self.metadata):
+            first = server.import_business({
+                "pncp_link": self.link,
+                "empresa": "Empresa Teste",
+                "itens": [self.item(1, "Cadeira"), self.item(3, "Armário")],
+            })
+            server.import_business({
+                "pncp_link": self.link,
+                "empresa": "Empresa Teste",
+                "itens": [self.item(2, "Mesa")],
+            })
+
+        detail = server.get_business(first["negocio"]["id"], include_details=True)
+        self.assertEqual(detail["total_itens"], 1)
+        self.assertEqual(detail["itens"][0]["numero"], "2")
+
+    def test_empty_item_selection_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Selecione ao menos um item"):
+            server.import_business({
+                "pncp_link": self.link,
+                "empresa": "Empresa Teste",
+                "itens": [],
+            })
 
 
 if __name__ == "__main__":
