@@ -19,38 +19,17 @@ __pycache__/
 .venv/
 venv/
 
-# Node, testes e builds
+# Node e caches pesados
 node_modules/
 .vite/
 coverage/
 *.tsbuildinfo
-ocr_edital_web/frontend_dist/
-ocr_edital_web/frontend/package-lock.json
 
-# Dados e arquivos gerados pelo aplicativo
-ocr_edital_web/data/
-ocr_edital_web/uploads/
-ocr_edital_web/outputs/
+# Temporarios e logs locais
 ocr_edital_web/tmp/
-ocr_edital_web/*.json
 ocr_edital_web/*.log
-ocr_edital_web/*.html
-ocr_edital_web/*.js
-
-# Documentos de trabalho na raiz
-/*.pdf
-/*.docx
-/*.xlsx
-/*.zip
-
-# Capturas, consultas e utilitarios temporarios
-/.pncp_*
 /*.log
-/*.py
 /.cloudflared/
 /.codex-tmp/
 /tmp/
-/backups/
-/agents/
-/edital_pages_check/
 

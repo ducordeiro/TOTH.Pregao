@@ -1,0 +1,22 @@
+HTTP/1.1 200 OK
+date: Wed, 15 Jul 2026 18:31:29 GMT
+content-type: application/javascript
+content-length: 124211
+last-modified: Mon, 06 Jul 2026 11:59:42 GMT
+etag: "6a4b98ae-1e533"
+access-control-allow-origin: *
+vary: Origin
+access-control-allow-methods: HEAD, OPTIONS, TRACE, GET, POST, PUT, PATCH, DELETE
+access-control-allow-credentials: true
+access-control-allow-headers: origin, content-type, accept, Authorization, Content-Range,Cache-Control
+access-control-max-age: 864000
+x-ua-compatible: IE=Edge,chrome=1
+x-frame-options: SAMEORIGIN
+x-xss-protection: 1; mode=block
+x-content-security-policy: allow 'self';
+x-content-type-options: nosniff
+referrer-policy: no-referrer
+accept-ranges: bytes
+strict-transport-security: max-age=15768000
+Set-Cookie: TS4f634c10027=082670627aab20009ab3e9695b53c8bc3e944cd8f25bdff255cc4238a03a7a01fe9b0899f8e0066d0867174d65113000f3ea77c318d6db63fd2f95ee824714879f08f2d7384a5d5f7680aaedab59ae387d4966c75a2c485acdd7954847873f5e; Path=/
+
