@@ -95,9 +95,9 @@ textarea:focus-visible {
   flex-direction: column;
   height: 100vh;
   padding: 30px 18px 22px;
-  background: var(--orange);
-  color: #fff;
-  box-shadow: 8px 0 28px rgb(0 0 0 / 22%);
+  background: #fff;
+  color: #172637;
+  box-shadow: 8px 0 28px rgb(0 0 0 / 14%);
 }
 
 .app-brand {
@@ -122,17 +122,18 @@ textarea:focus-visible {
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
-  color: rgb(255 255 255 / 84%);
+  color: #405367;
   cursor: pointer;
   text-align: left;
 }
 
 .block-nav-item:hover {
-  background: rgb(7 21 33 / 16%);
+  background: #eef3f7;
+  color: #172637;
 }
 
 .block-nav-item.is-active {
-  border-color: rgb(255 255 255 / 32%);
+  border-color: #d9e2ea;
   background: #102b42;
   color: #fff;
 }
@@ -165,8 +166,8 @@ textarea:focus-visible {
 .sidebar-context {
   margin-top: auto;
   padding: 18px 10px 0;
-  border-top: 1px solid rgb(255 255 255 / 30%);
-  color: rgb(255 255 255 / 78%);
+  border-top: 1px solid #d9e2ea;
+  color: #6d7f91;
   font-size: 12px;
 }
 
