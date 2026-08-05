@@ -183,6 +183,10 @@ function businessPositionClass(position: number | null) {
   return "";
 }
 
+function positionSortValue(position: number | null) {
+  return position && position > 0 ? position : Number.POSITIVE_INFINITY;
+}
+
 interface BusinessCardProps {
   business: Business;
   onOpen: (id: string, tab?: DetailTab) => void;
@@ -1087,6 +1091,8 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
       return !tags || tagValues.includes(tags);
     });
     return rows.sort((a, b) => {
+      const positionOrder = positionSortValue(a.position_number) - positionSortValue(b.position_number);
+      if (positionOrder !== 0) return positionOrder;
       if (sort === "oldest") return parseDate(a.criado_em)!.getTime() - parseDate(b.criado_em)!.getTime();
       if (sort === "opening-near") return (parseDate(a.abertura)?.getTime() || Infinity) - (parseDate(b.abertura)?.getTime() || Infinity);
       if (sort === "opening-far") return (parseDate(b.abertura)?.getTime() || -Infinity) - (parseDate(a.abertura)?.getTime() || -Infinity);

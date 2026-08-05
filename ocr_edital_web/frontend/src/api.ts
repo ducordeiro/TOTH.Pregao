@@ -371,3 +371,6 @@ export async function saveKanbanProposal(input: KanbanProposalInput, id?: string
 export async function moveKanbanProposal(id: string, columnId: string) {
   return parseJson(await fetch(`/api/kanban/proposals/${encodeURIComponent(id)}/move`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ column_id: columnId }) }));
 }
+export async function deleteKanbanProposal(id: string) {
+  return parseJson(await fetch(`/api/kanban/proposals/${encodeURIComponent(id)}`, { method: "DELETE" }));
+}

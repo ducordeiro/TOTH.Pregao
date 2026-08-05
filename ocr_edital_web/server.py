@@ -1785,31 +1785,39 @@ def identify_items_from_pncp_link(link):
         return cached
 
     source_data = source_from_pncp_link(link)
+    extraction_error = None
     try:
         items = extract_items_cached(source_data["source_path"])
     except Exception as exc:
-        raise RuntimeError(
-            "Não foi possível transcrever os itens do Termo de Referência/Edital oficial. "
-            "A descrição resumida da aba PNCP não será usada como substituta."
-        ) from exc
-    if not items:
-        raise RuntimeError("Nenhum item foi encontrado no Termo de Referência/Edital oficial.")
+        items = []
+        extraction_error = exc
     try:
         pncp_items = list_pncp_items(cnpj, ano, sequencial)
     except Exception:
         pncp_items = []
+    source = "arquivo"
+    if not items:
+        if pncp_items:
+            items = pncp_items
+            source = "pncp"
+        elif extraction_error is not None:
+            raise RuntimeError(
+                "Não foi possível transcrever os itens do Termo de Referência/Edital oficial. "
+                "A lista oficial de itens do PNCP também não retornou dados para esta contratação."
+            ) from extraction_error
+        else:
+            raise RuntimeError("Nenhum item foi encontrado no Termo de Referência/Edital oficial.")
     quantity_reconciliation = reconcile_scanned_quantities(items, pncp_items)
     pncp_items_check = {
         "file_count": len(items),
         "pncp_count": len(pncp_items),
         "has_divergence": bool(pncp_items and len(items) != len(pncp_items)),
     }
-    source = "arquivo"
     identifications = build_item_identifications(items)
     description_review = build_description_review(
         items,
-        file_items=items,
-        pncp_items=[],
+        file_items=items if source == "arquivo" else [],
+        pncp_items=pncp_items if source == "pncp" else [],
     )
     result = {
         "count": len(identifications),
@@ -2379,6 +2387,18 @@ def sync_business_position_from_proposal(proposal):
         connection.execute(
             "UPDATE negocios SET position_number = ?, atualizado_em = ? WHERE id = ?",
             (proposal.get("position_number"), now, business_id),
+        )
+
+
+def clear_business_position_from_deleted_proposal(proposal):
+    business_id = proposal.get("business_id") if proposal else None
+    if not business_id:
+        return
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    with DATABASE_LOCK, database_connection() as connection:
+        connection.execute(
+            "UPDATE negocios SET position_number = NULL, atualizado_em = ? WHERE id = ?",
+            (now, business_id),
         )
 
 
@@ -4227,6 +4247,13 @@ def date_range_days(data_inicial, data_final):
     return (end - start).days + 1
 
 
+def is_historical_search_period(data_inicial, data_final):
+    if not data_inicial or not data_final:
+        return False
+    today = datetime.now().strftime("%Y%m%d")
+    return data_final <= today
+
+
 def bounded_int(value, default, minimum=1, maximum=50):
     try:
         number = int(value)
@@ -4262,6 +4289,39 @@ def map_search_item(row):
     }
 
 
+def consulta_row_to_search_item(row):
+    orgao = row.get("orgaoEntidade") or {}
+    unidade = row.get("unidadeOrgao") or {}
+    cnpj = orgao.get("cnpj", "")
+    ano = row.get("anoCompra", "")
+    sequencial = row.get("sequencialCompra", "")
+    return {
+        "id": row.get("numeroControlePNCP") or f"{cnpj}-{ano}-{sequencial}",
+        "orgao_cnpj": cnpj,
+        "orgao_nome": orgao.get("razaoSocial", ""),
+        "ano": ano,
+        "numero_sequencial": sequencial,
+        "title": row.get("numeroCompra") or row.get("numeroControlePNCP") or "",
+        "description": row.get("objetoCompra", ""),
+        "uf": unidade.get("ufSigla", ""),
+        "municipio_nome": unidade.get("municipioNome", ""),
+        "unidade_nome": unidade.get("nomeUnidade", ""),
+        "unidade_codigo": unidade.get("codigoUnidade", ""),
+        "modalidade_nome": row.get("modalidadeNome", ""),
+        "modo_disputa_nome": row.get("modoDisputaNome", ""),
+        "situacao_nome": row.get("situacaoCompraNome", ""),
+        "valor_total_estimado": row.get("valorTotalEstimado"),
+        "data_inicio_vigencia": row.get("dataAberturaProposta", ""),
+        "data_fim_vigencia": row.get("dataEncerramentoProposta", ""),
+        "data_publicacao_pncp": row.get("dataPublicacaoPncp", ""),
+        "data_atualizacao_pncp": row.get("dataAtualizacao", ""),
+        "numero_controle_pncp": row.get("numeroControlePNCP", ""),
+        "numero_compra": row.get("numeroCompra", ""),
+        "link_sistema_origem": row.get("linkSistemaOrigem", ""),
+        "item_url": f"/compras/{cnpj}/{ano}/{sequencial}" if cnpj and ano and sequencial else "",
+    }
+
+
 MATERIAL_SEARCH_TERMS = (
     "aquisicao", "compra", "fornecimento", "material", "materiais", "produto",
     "produtos", "equipamento", "equipamentos", "bem", "bens", "insumo",
@@ -4283,6 +4343,7 @@ BRAZILIAN_UFS = (
     "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI",
     "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO",
 )
+PNCP_MODALITY_IDS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
 
 
 def parse_search_ufs(value):
@@ -4842,6 +4903,140 @@ def search_pncp_app_editais(params, data_inicial, data_final):
     }
 
 
+def search_pncp_historical_bids(params, data_inicial, data_final):
+    keywords = split_search_keywords(params.get("palavraChave"))
+    search_terms = tuple(keywords) or ("",)
+    object_type = str(params.get("tipoObjeto") or "").strip().lower()
+    if object_type not in {"", "material", "servico"}:
+        raise ValueError("Tipo do objeto invalido.")
+    purchase_number = compact(params.get("numeroCompra"))
+    if len(purchase_number) > 80:
+        raise ValueError("Número da compra excede 80 caracteres.")
+    uasg = re.sub(r"\D", "", compact(params.get("uasg")))
+    if len(uasg) > 20:
+        raise ValueError("UASG excede 20 dígitos.")
+
+    page_size = bounded_int(params.get("tamanhoPagina"), 50, 10, 50)
+    start_page = bounded_int(params.get("pagina"), 1, 1, 1000)
+    source_page_size = 50
+    selected_ufs = parse_search_ufs(params.get("uf"))
+    ufs = selected_ufs or ("",)
+    modalidade = str(params.get("codigoModalidadeContratacao") or "").strip()
+    modalities = (int(modalidade),) if modalidade else PNCP_MODALITY_IDS
+    max_source_pages = 6 if (keywords or purchase_number or uasg or object_type) else 3
+
+    rows = []
+    seen = set()
+    source_total = 0
+    pages_checked = 0
+    source_urls = []
+    rate_limited = False
+    timed_out = False
+    failed_pages = []
+
+    def fetch_page(modality, uf, page):
+        query = {
+            "dataInicial": data_inicial,
+            "dataFinal": data_final,
+            "codigoModalidadeContratacao": modality,
+            "pagina": page,
+            "tamanhoPagina": source_page_size,
+        }
+        if uf:
+            query["uf"] = uf
+        if uasg:
+            query["codigoUnidadeAdministrativa"] = uasg
+        url = f"{PNCP_API_BASE}/consulta/v1/contratacoes/publicacao?{urlencode(query)}"
+        return url, request_json(url, timeout=30)
+
+    for modality in modalities:
+        for uf in ufs:
+            for page in range(1, max_source_pages + 1):
+                url, payload = fetch_page(modality, uf, page)
+                if not source_urls:
+                    source_urls.append(url)
+                pages_checked += 1
+                if payload.get("rate_limited"):
+                    rate_limited = True
+                    failed_pages.append(f"{modality}:{uf or '*'}:{page}")
+                    break
+                if payload.get("timeout"):
+                    timed_out = True
+                    failed_pages.append(f"{modality}:{uf or '*'}:{page}")
+                    break
+                page_rows = payload.get("data") or []
+                if page == 1:
+                    try:
+                        source_total += int(payload.get("totalRegistros", len(page_rows)))
+                    except (TypeError, ValueError):
+                        source_total += len(page_rows)
+                for source_row in page_rows:
+                    row = consulta_row_to_search_item(source_row)
+                    row_key = (
+                        row.get("numero_controle_pncp")
+                        or row.get("item_url")
+                        or hashlib.sha256(
+                            json.dumps(row, ensure_ascii=True, sort_keys=True, default=str).encode("utf-8")
+                        ).hexdigest()
+                    )
+                    if row_key in seen:
+                        continue
+                    if not row_matches_purchase_filters(row, purchase_number, uasg):
+                        continue
+                    if not row_matches_object_type(row, object_type):
+                        continue
+                    search_text = norm(
+                        f"{row.get('title', '')} {row.get('description', '')} {row.get('orgao_nome', '')}"
+                    )
+                    if keywords and not any(norm(term) in search_text for term in search_terms):
+                        continue
+                    seen.add(row_key)
+                    rows.append(row)
+                if not payload.get("paginasRestantes") or len(page_rows) < source_page_size:
+                    break
+                if len(rows) >= start_page * page_size and not (keywords or object_type):
+                    break
+                time.sleep(0.2)
+
+    rows.sort(
+        key=lambda row: str(
+            row.get("data_publicacao_pncp")
+            or row.get("data_atualizacao_pncp")
+            or row.get("data_fim_vigencia")
+            or ""
+        ),
+        reverse=True,
+    )
+    total = len(rows)
+    total_pages = max(1, (total + page_size - 1) // page_size) if total else 0
+    if total_pages:
+        start_page = min(start_page, total_pages)
+    offset = (start_page - 1) * page_size
+    page_results = [map_search_item(row) for row in rows[offset:offset + page_size]]
+    return {
+        "results": page_results,
+        "total": total,
+        "source_total": source_total,
+        "pagina": start_page,
+        "tamanhoPagina": page_size,
+        "total_pages": total_pages,
+        "has_previous": start_page > 1,
+        "has_next": start_page < total_pages,
+        "source_url": source_urls[0] if source_urls else "",
+        "source": "api/consulta/publicacao",
+        "pages_checked": pages_checked,
+        "source_pages": None,
+        "rate_limited": rate_limited,
+        "timed_out": timed_out,
+        "failed_pages": failed_pages,
+        "complete": not rate_limited and not timed_out,
+        "dataInicial": data_inicial,
+        "dataFinal": data_final,
+        "tipoObjeto": object_type,
+        "cache_hit": False,
+    }
+
+
 def search_pncp_open_bids(params):
     _, default_end = default_date_range()
     data_inicial = optional_yyyymmdd(params.get("dataInicial"))
@@ -4850,6 +5045,8 @@ def search_pncp_open_bids(params):
         raise ValueError("Data inicial nao pode ser maior que a data final.")
     if date_range_days(data_inicial, data_final) > 30:
         raise ValueError("O periodo maximo e de 30 dias corridos.")
+    if is_historical_search_period(data_inicial, data_final):
+        return search_pncp_historical_bids(params, data_inicial, data_final)
     app_search = search_pncp_app_editais(params, data_inicial, data_final)
     if app_search is not None:
         return app_search
@@ -4978,6 +5175,10 @@ def quick_pncp_search_preview(params):
         raise ValueError("Data inicial nao pode ser maior que a data final.")
     if date_range_days(data_inicial, data_final) > 30:
         raise ValueError("O periodo maximo e de 30 dias corridos.")
+    if is_historical_search_period(data_inicial, data_final):
+        result = search_pncp_historical_bids(params, data_inicial, data_final)
+        result["searching"] = False
+        return result
 
     object_type = str(params.get("tipoObjeto") or "").strip().lower()
     if object_type not in {"", "material", "servico"}:
@@ -9134,6 +9335,15 @@ class App(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         request_path = urlparse(self.path).path
+        proposal_match = re.fullmatch(r"/api/kanban/proposals/(\d+)", request_path)
+        if proposal_match:
+            try:
+                proposal = kanban_store.delete_proposal(DATABASE_PATH, proposal_match.group(1))
+                clear_business_position_from_deleted_proposal(proposal)
+                json_response(self, 200, {"deleted": proposal_match.group(1)})
+            except Exception as exc:
+                business_api_error(self, exc)
+            return
         column_match = re.fullmatch(r"/api/kanban/columns/(\d+)", request_path)
         if column_match:
             try:

@@ -184,6 +184,18 @@ def delete_column(database_path, column_id):
                 raise FileNotFoundError("Coluna não encontrada.")
     
     
+def delete_proposal(database_path, proposal_id):
+    initialize(database_path)
+    with closing(connect(database_path)) as connection:
+        with connection:
+            row = connection.execute("SELECT * FROM proposals WHERE id=?", (proposal_id,)).fetchone()
+            if not row:
+                raise FileNotFoundError("Cartão não encontrado.")
+            connection.execute("DELETE FROM proposal_stage_history WHERE proposal_id=?", (proposal_id,))
+            connection.execute("DELETE FROM proposals WHERE id=?", (proposal_id,))
+            return row_dict(row)
+    
+    
 def validated_proposal(payload):
     data = {field: str(payload.get(field) or "").strip() for field in FIELDS}
     if data["position_number"]:

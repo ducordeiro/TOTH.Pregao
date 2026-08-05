@@ -34,6 +34,20 @@ class KanbanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Mova os cartões"):
             kanban.delete_column(self.database, column["id"])
 
+    def test_delete_proposal_removes_card_and_history(self):
+        board = kanban.board(self.database)
+        first, second = board["columns"][:2]
+        proposal = kanban.save_proposal(self.database, {
+            "column_id": first["id"], "title": "Teste", "priority": "normal"
+        })
+        kanban.move_proposal(self.database, proposal["id"], second["id"])
+
+        deleted = kanban.delete_proposal(self.database, proposal["id"])
+
+        self.assertEqual(deleted["id"], proposal["id"])
+        self.assertEqual(kanban.board(self.database)["proposals"], [])
+        self.assertEqual(kanban.history(self.database, proposal["id"]), [])
+
     def test_duplicate_and_invalid_link_are_rejected(self):
         column = kanban.board(self.database)["columns"][0]
         payload = {"column_id": column["id"], "title": "Teste", "priority": "normal", "notice_number": "1", "uasg": "2"}
