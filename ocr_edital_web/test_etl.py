@@ -316,6 +316,7 @@ class EtlSmokeTests(unittest.TestCase):
             patch.object(server, "PNCPConnector", return_value=self.connector),
             patch.object(server, "ALLOW_RUNTIME_PNCP_API", False),
             patch.object(server, "ALLOW_DETAIL_DOCUMENT_ON_DEMAND", False),
+            patch.object(server, "ALLOW_DETAIL_ITEMS_ON_DEMAND", False),
         ):
             detail = server.internal_opportunity_detail(opportunity_id)
 
@@ -324,7 +325,7 @@ class EtlSmokeTests(unittest.TestCase):
         self.assertIn("banco local", detail["aviso_enriquecimento"])
         self.assertEqual(self.counts()["source_records"], 1)
 
-    def test_internal_detail_enriches_documents_only_on_demand(self):
+    def test_internal_detail_enriches_missing_items_and_documents_once(self):
         import server
 
         listing_service = ETLSyncService(self.repository, self.connector, PNCPMapper())
@@ -341,15 +342,29 @@ class EtlSmokeTests(unittest.TestCase):
             patch.object(server, "DATABASE_PATH", self.database_path),
             patch.object(server, "PNCPConnector", return_value=self.connector),
             patch.object(server, "ALLOW_DETAIL_DOCUMENT_ON_DEMAND", True),
+            patch.object(server, "ALLOW_DETAIL_ITEMS_ON_DEMAND", True),
         ):
             detail = server.internal_opportunity_detail(opportunity_id)
 
         self.assertEqual(len(detail["arquivos"]), 1)
-        self.assertEqual(len(detail["itens"]), 0)
-        self.assertIn("ETL completo", detail["aviso_enriquecimento"])
+        self.assertEqual(len(detail["itens"]), 2)
+        self.assertEqual(detail["aviso_enriquecimento"], "")
         counts = self.counts()
         self.assertEqual(counts["opportunity_documents"], 1)
-        self.assertEqual(counts["opportunity_items"], 0)
+        self.assertEqual(counts["opportunity_items"], 2)
+        self.assertEqual(counts["source_records"], 2)
+
+        with (
+            patch.object(server, "DATABASE_PATH", self.database_path),
+            patch.object(server, "PNCPConnector", side_effect=AssertionError("PNCP should not be called")),
+            patch.object(server, "ALLOW_DETAIL_DOCUMENT_ON_DEMAND", True),
+            patch.object(server, "ALLOW_DETAIL_ITEMS_ON_DEMAND", True),
+        ):
+            repeated = server.internal_opportunity_detail(opportunity_id)
+
+        self.assertEqual(len(repeated["arquivos"]), 1)
+        self.assertEqual(len(repeated["itens"]), 2)
+        self.assertEqual(self.counts()["source_records"], 2)
 
     def test_bloco2_enriches_one_missing_opportunity_and_reuses_sqlite(self):
         import server

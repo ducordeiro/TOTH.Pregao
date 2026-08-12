@@ -933,11 +933,11 @@ class StructuredItemPriorityTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["item"], "7")
         self.assertEqual(result["items"][0]["quantidade"], "12")
         self.assertEqual(result["items"][0]["unidade"], "UN")
-        self.assertTrue(result["pncp_items_check"]["api_available"])
+        self.assertFalse(result["pncp_items_check"]["api_available"])
         self.assertFalse(result["pncp_items_check"]["has_divergence"])
-        api_items.assert_called_once_with("12345678000199", 2026, 987654)
+        api_items.assert_not_called()
 
-    def test_structured_items_report_api_divergence_without_being_replaced(self):
+    def test_structured_items_are_not_compared_with_api(self):
         repository = SimpleNamespace(
             get_opportunity_by_pncp_identity=lambda *_args: {
                 "opportunity": {"id": "opportunity-2"},
@@ -965,15 +965,87 @@ class StructuredItemPriorityTests(unittest.TestCase):
                 "quantidade": "4",
                 "unidade": "UN",
                 "descricao": "Outro item na API",
-            }]),
+            }]) as api_items,
         ):
             result = server.identify_items_from_pncp_link(link)
 
         self.assertEqual(result["items"][0]["item"], "1")
         self.assertEqual(result["items"][0]["descricao"], "Descrição estruturada completa")
-        self.assertTrue(result["pncp_items_check"]["has_divergence"])
-        self.assertEqual(result["pncp_items_check"]["only_in_file"], ["1"])
-        self.assertEqual(result["pncp_items_check"]["added_from_pncp"], ["2"])
+        self.assertFalse(result["pncp_items_check"]["has_divergence"])
+        self.assertEqual(result["pncp_items_check"]["only_in_file"], [])
+        self.assertEqual(result["pncp_items_check"]["added_from_pncp"], [])
+        api_items.assert_not_called()
+
+    def test_missing_items_are_fetched_from_pncp_and_saved(self):
+        detail = {
+            "opportunity": {
+                "id": "opportunity-3",
+                "external_key": "12345678000199-1-987656/2026",
+            },
+            "items": [],
+            "documents": [],
+            "matches": [],
+        }
+        saved_items = []
+        finished_runs = []
+
+        def replace_items(opportunity_id, items):
+            self.assertEqual(opportunity_id, "opportunity-3")
+            saved_items.extend(items)
+            detail["items"] = [{
+                "source_item_id": item.source_item_id,
+                "lot_number": item.lot_number,
+                "item_number": item.item_number,
+                "title": item.title,
+                "description": item.description,
+                "technical_object": item.technical_object,
+                "quantity": item.quantity,
+                "unit": item.unit,
+            } for item in items]
+            return len(items)
+
+        def unexpected_failure(**_kwargs):
+            self.fail("A consulta de itens nao deveria registrar falha")
+
+        repository = SimpleNamespace(
+            get_opportunity_by_pncp_identity=lambda *_args: detail,
+            create_run=lambda *_args, **_kwargs: "run-1",
+            replace_opportunity_items=replace_items,
+            save_successful_source_record=lambda **_kwargs: None,
+            save_failed_source_record=unexpected_failure,
+            finish_run=lambda *args, **kwargs: finished_runs.append((args, kwargs)),
+        )
+        connector_calls = []
+
+        def iter_items(cnpj, year, sequence, max_pages):
+            connector_calls.append((cnpj, year, sequence, max_pages))
+            yield SimpleNamespace(
+                records=[{
+                    "numeroItem": 1,
+                    "descricao": "Cadeira giratoria com apoio de bracos",
+                    "quantidade": 6,
+                    "unidadeMedida": "UN",
+                }],
+                raw_payload={"data": [{"numeroItem": 1}]},
+                request_url="https://pncp.test/itens?pagina=1",
+            )
+
+        link = "https://pncp.gov.br/app/editais/12345678000199/2026/987656"
+        server.IDENTIFICATION_CACHE.clear()
+        with (
+            patch.object(server, "etl_repository", return_value=repository),
+            patch.object(server, "PNCPConnector", return_value=SimpleNamespace(iter_items=iter_items)),
+            patch.object(server, "ALLOW_BLOCO2_ON_DEMAND_ENRICHMENT", True),
+            patch.object(server, "ALLOW_RUNTIME_PNCP_API", False),
+        ):
+            result = server.identify_items_from_pncp_link(link)
+
+        self.assertEqual(connector_calls, [("12345678000199", 2026, 987656, 20)])
+        self.assertEqual(len(saved_items), 1)
+        self.assertEqual(result["source"], "opportunity_items_enriquecido_bloco2")
+        self.assertEqual(result["items"][0]["item"], "1")
+        self.assertEqual(result["items"][0]["quantidade"], "6")
+        self.assertEqual(finished_runs[0][1]["status"], "success")
 
 
 class DescriptionReviewRegressionTests(unittest.TestCase):

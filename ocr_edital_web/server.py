@@ -82,10 +82,14 @@ ALLOW_RUNTIME_PNCP_API = os.environ.get("TOTH_ALLOW_RUNTIME_PNCP_API", "").strip
 }
 ALLOW_BLOCO2_ON_DEMAND_ENRICHMENT = os.environ.get(
     "TOTH_BLOCO2_ON_DEMAND_ENRICHMENT",
-    "",
+    "1",
 ).strip().lower() in {"1", "true", "yes", "sim"}
 ALLOW_DETAIL_DOCUMENT_ON_DEMAND = os.environ.get(
     "TOTH_DETAIL_DOCUMENT_ON_DEMAND",
+    "1",
+).strip().lower() in {"1", "true", "yes", "sim"}
+ALLOW_DETAIL_ITEMS_ON_DEMAND = os.environ.get(
+    "TOTH_DETAIL_ITEMS_ON_DEMAND",
     "1",
 ).strip().lower() in {"1", "true", "yes", "sim"}
 SEARCH_CACHE = {}
@@ -1857,10 +1861,7 @@ def identify_items_from_opportunity_store(cnpj, ano, sequencial):
     }
 
 
-def enrich_items_for_bloco2(cnpj, ano, sequencial):
-    if not ALLOW_BLOCO2_ON_DEMAND_ENRICHMENT:
-        raise RuntimeError("Enriquecimento sob demanda do Bloco 2 esta desativado.")
-
+def enrich_opportunity_items(cnpj, ano, sequencial):
     with BLOCO2_ENRICHMENT_LOCK:
         structured = identify_items_from_opportunity_store(cnpj, ano, sequencial)
         if structured is not None:
@@ -1876,9 +1877,53 @@ def enrich_items_for_bloco2(cnpj, ano, sequencial):
             )
 
         opportunity_id = detail["opportunity"]["id"]
+        run_id = repository.create_run("pncp", "opportunity_item_enrichment", {
+            "opportunity_id": opportunity_id,
+            "cnpj": cnpj,
+            "year": ano,
+            "sequence": sequencial,
+        })
+        counters = {"fetched": 1, "inserted": 0, "updated": 0, "skipped": 0, "failed": 0}
+        request_url = pncp_app_link(cnpj, ano, sequencial)
+        raw_pages = []
         try:
-            enrich_internal_opportunity(opportunity_id, detail)
+            raw_items = []
+            for page in PNCPConnector().iter_items(cnpj, ano, sequencial, 20):
+                raw_items.extend(page.records)
+                raw_pages.append(page.raw_payload)
+                request_url = page.request_url
+            mapped_items = PNCPMapper().map_items(raw_items)
+            if not mapped_items:
+                raise RuntimeError("A API do PNCP nao retornou itens para esta oportunidade.")
+            repository.replace_opportunity_items(opportunity_id, mapped_items)
+            repository.save_successful_source_record(
+                run_id=run_id,
+                opportunity_id=opportunity_id,
+                source="pncp",
+                source_endpoint="opportunity_item_enrichment",
+                request_url=request_url,
+                raw_payload={"items": raw_pages},
+                external_key=detail["opportunity"].get("external_key"),
+            )
+            counters["updated"] = 1
+            repository.finish_run(run_id, status="success", counters=counters)
         except Exception as exc:
+            counters["failed"] = 1
+            repository.save_failed_source_record(
+                run_id=run_id,
+                source="pncp",
+                source_endpoint="opportunity_item_enrichment",
+                request_url=request_url,
+                raw_payload={"items": raw_pages},
+                error_message=str(exc),
+                external_key=detail["opportunity"].get("external_key"),
+            )
+            repository.finish_run(
+                run_id,
+                status="failed",
+                counters=counters,
+                error_message=str(exc),
+            )
             raise RuntimeError(
                 "Nao foi possivel enriquecer os itens desta oportunidade agora. "
                 "A oportunidade permanece salva no banco, mas os itens ficaram pendentes. "
@@ -1891,13 +1936,26 @@ def enrich_items_for_bloco2(cnpj, ano, sequencial):
                 "O enriquecimento concluiu, mas nenhum item foi gravado para esta oportunidade."
             )
 
-        structured["source"] = "opportunity_items_enriquecido_bloco2"
+        structured["source"] = "opportunity_items_enriquecido"
         structured["cache_status"] = "miss_enriched"
+        structured["description_review"]["message"] = (
+            f"{len(structured['items'])} item(ns) enriquecido(s), salvo(s) no banco "
+            "e carregado(s) da base local."
+        )
+        return structured
+
+
+def enrich_items_for_bloco2(cnpj, ano, sequencial):
+    if not ALLOW_BLOCO2_ON_DEMAND_ENRICHMENT:
+        raise RuntimeError("Enriquecimento sob demanda do Bloco 2 esta desativado.")
+    structured = enrich_opportunity_items(cnpj, ano, sequencial)
+    if structured.get("cache_status") == "miss_enriched":
+        structured["source"] = "opportunity_items_enriquecido_bloco2"
         structured["description_review"]["message"] = (
             f"{len(structured['items'])} item(ns) enriquecido(s), salvo(s) no banco "
             "e carregado(s) para o Bloco 2."
         )
-        return structured
+    return structured
 
 
 def identify_items_from_pncp_link(link):
@@ -1909,83 +1967,20 @@ def identify_items_from_pncp_link(link):
 
     structured = identify_items_from_opportunity_store(cnpj, ano, sequencial)
     if structured is not None:
-        if not ALLOW_RUNTIME_PNCP_API:
-            check = {
-                "file_count": 0,
-                "pncp_count": 0,
-                "structured_count": len(structured["items"]),
-                "added_from_pncp": [],
-                "only_in_file": [],
-                "has_divergence": False,
-                "api_available": False,
-                "api_error": "Conferencia online desativada; usando somente a base local.",
-                "source": "opportunity_items_base_local",
-            }
-            structured["description_review"]["status"] = "warn"
-            structured["description_review"]["message"] = (
-                f"{len(structured['items'])} item(ns) carregado(s) da base estruturada; "
-                "conferencia online desativada para manter o app independente da API."
-            )
-            structured["pncp_items_check"] = check
-            cache_set(IDENTIFICATION_CACHE, cache_key, structured)
-            return structured
-
-        try:
-            pncp_items = list_pncp_items(cnpj, ano, sequencial)
-            api_error = ""
-        except Exception as exc:
-            pncp_items = []
-            api_error = str(exc) or "API do PNCP indisponível para conferência."
-
-        if pncp_items:
-            check = build_pncp_items_check(structured["items"], pncp_items)
-            check.update({
-                "structured_count": len(structured["items"]),
-                "api_available": True,
-                "source": "opportunity_items_comparado_api_pncp",
-            })
-            review = build_description_review(
-                structured["items"],
-                file_items=structured["items"],
-                pncp_items=pncp_items,
-            )
-            for item_review in review.get("items", []):
-                item_review["source"] = "opportunity_items comparado com API PNCP"
-            if check["has_divergence"]:
-                review["status"] = "warn"
-                review["message"] = (
-                    f"{len(structured['items'])} item(ns) da base estruturada comparados com "
-                    f"{len(pncp_items)} item(ns) da API PNCP; foram encontradas divergências."
-                )
-            else:
-                review["message"] = (
-                    f"{len(structured['items'])} item(ns) da base estruturada conferidos "
-                    "com a API PNCP, sem divergências de lote ou numeração."
-                )
-            structured["description_review"] = review
-            structured["quantity_reconciliation"] = {
-                "source": "opportunity_items_comparado_api_pncp",
-                "matched_count": len(structured["items"]) - len(check["only_in_file"]),
-                "unmatched_file_count": len(check["only_in_file"]),
-                "unmatched_pncp_count": len(check["added_from_pncp"]),
-            }
-        else:
-            check = {
-                "file_count": 0,
-                "pncp_count": 0,
-                "structured_count": len(structured["items"]),
-                "added_from_pncp": [],
-                "only_in_file": [],
-                "has_divergence": False,
-                "api_available": False,
-                "api_error": api_error or "A API do PNCP não retornou itens para conferência.",
-                "source": "opportunity_items_sem_comparacao_api",
-            }
-            structured["description_review"]["status"] = "warn"
-            structured["description_review"]["message"] = (
-                f"{len(structured['items'])} item(ns) carregado(s) da base estruturada; "
-                "a API PNCP não retornou itens para comparação."
-            )
+        check = {
+            "file_count": 0,
+            "pncp_count": 0,
+            "structured_count": len(structured["items"]),
+            "added_from_pncp": [],
+            "only_in_file": [],
+            "has_divergence": False,
+            "api_available": False,
+            "api_error": "Itens encontrados no banco local; consulta ao PNCP nao necessaria.",
+            "source": "opportunity_items_base_local",
+        }
+        structured["description_review"]["message"] = (
+            f"{len(structured['items'])} item(ns) carregado(s) da base estruturada local."
+        )
         structured["pncp_items_check"] = check
         cache_set(IDENTIFICATION_CACHE, cache_key, structured)
         return structured
@@ -9276,9 +9271,23 @@ def internal_opportunity_detail(opportunity_id):
         else:
             enrichment_messages.append("Arquivos oficiais ainda nao carregados no banco local.")
     if not detail["items"]:
-        enrichment_messages.append(
-            "Itens ainda nao carregados no banco local; esta oportunidade precisa ser reprocessada pelo ETL completo."
-        )
+        if ALLOW_DETAIL_ITEMS_ON_DEMAND:
+            row = detail["opportunity"]
+            cnpj = compact(row.get("source_cnpj") or row.get("buyer_cnpj"))
+            year = row.get("year")
+            sequence = row.get("sequence")
+            if cnpj and year and sequence:
+                try:
+                    enrich_opportunity_items(cnpj, year, sequence)
+                    detail = etl_repository().get_opportunity(opportunity_id) or detail
+                except Exception as exc:
+                    enrichment_messages.append(f"Itens oficiais pendentes: {exc}")
+            else:
+                enrichment_messages.append(
+                    "Itens ainda nao carregados: a oportunidade nao possui identidade PNCP completa."
+                )
+        else:
+            enrichment_messages.append("Itens oficiais ainda nao carregados no banco local.")
     if enrichment_messages:
         detail["enrichment_error"] = " ".join(enrichment_messages)
     row = detail["opportunity"]

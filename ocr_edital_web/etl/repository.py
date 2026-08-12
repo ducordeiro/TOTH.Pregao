@@ -277,6 +277,43 @@ class ETLRepository:
                 ),
             )
 
+    def save_successful_source_record(
+        self,
+        *,
+        run_id: str,
+        opportunity_id: str,
+        source: str,
+        source_endpoint: str,
+        request_url: str,
+        raw_payload: Any,
+        external_key: str | None = None,
+    ) -> None:
+        raw_json = _json(raw_payload)
+        now = _now()
+        with self.connect() as connection, connection:
+            connection.execute(
+                """
+                INSERT INTO source_records (
+                    id, etl_run_id, opportunity_id, source, source_endpoint, request_url,
+                    external_key, raw_payload_json, raw_payload_hash, status, captured_at,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'success', ?, ?)
+                """,
+                (
+                    uuid.uuid4().hex,
+                    run_id,
+                    opportunity_id,
+                    source,
+                    source_endpoint,
+                    request_url,
+                    external_key,
+                    raw_json,
+                    _hash_text(raw_json),
+                    now,
+                    now,
+                ),
+            )
+
     def list_opportunities(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
         filters = filters or {}
         where: list[str] = []
