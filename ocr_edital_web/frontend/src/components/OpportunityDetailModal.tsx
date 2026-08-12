@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import {
   askOpportunityDocument,
+  convertOpportunityToBusiness,
   getOpportunityDetail,
   importBusiness,
 } from "../api";
@@ -124,7 +125,11 @@ export function OpportunityDetailModal({
     setAdding(true);
     setMessage(null);
     try {
-      await importBusiness(bid.link, "", selectedItems, detail.oportunidade);
+      if (bid.id) {
+        await convertOpportunityToBusiness(bid.id, selectedItems);
+      } else {
+        await importBusiness(bid.link, "", selectedItems, detail.oportunidade);
+      }
       setAdded(true);
       setSelectingForBusiness(false);
       setMessage({

@@ -48,6 +48,7 @@ from catalog import (
 )
 
 import kanban as kanban_store
+from etl import ETLRepository, ETLSyncService, OpportunityClassifier, PNCPConnector, PNCPMapper, SyncRequest
 
 
 ROOT = Path(__file__).resolve().parent
@@ -73,6 +74,20 @@ PORT = 8765
 PNCP_API_BASE = "https://pncp.gov.br/api"
 PNCP_APP_BASE = "https://pncp.gov.br/app/editais"
 PNCP_SEARCH_URL = "https://pncp.gov.br/api/search"
+ALLOW_RUNTIME_PNCP_API = os.environ.get("TOTH_ALLOW_RUNTIME_PNCP_API", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "sim",
+}
+ALLOW_BLOCO2_ON_DEMAND_ENRICHMENT = os.environ.get(
+    "TOTH_BLOCO2_ON_DEMAND_ENRICHMENT",
+    "",
+).strip().lower() in {"1", "true", "yes", "sim"}
+ALLOW_DETAIL_DOCUMENT_ON_DEMAND = os.environ.get(
+    "TOTH_DETAIL_DOCUMENT_ON_DEMAND",
+    "1",
+).strip().lower() in {"1", "true", "yes", "sim"}
 SEARCH_CACHE = {}
 PNCP_RESULT_CACHE = {}
 SEARCH_ITEM_CACHE = {}
@@ -82,6 +97,8 @@ SEARCH_CACHE_TTL = 300
 SOURCE_CACHE = {}
 EXTRACTED_ITEMS_CACHE = {}
 IDENTIFICATION_CACHE = {}
+BLOCO2_ENRICHMENT_LOCK = threading.Lock()
+DETAIL_DOCUMENT_ENRICHMENT_LOCK = threading.Lock()
 CATALOG_TEXT_CACHE = {}
 CATALOG_DRAFT_CACHE = {}
 DOCUMENT_CACHE_TTL = 900
@@ -393,6 +410,7 @@ def init_database():
                 "INSERT INTO app_migrations (chave, aplicado_em) VALUES (?, ?)",
                 (seed_migration, now),
             )
+    ETLRepository(DATABASE_PATH).initialize()
 
 
 def responsible_record(row):
@@ -1777,12 +1795,211 @@ def build_item_identifications(items):
     return identifications
 
 
+def identify_items_from_opportunity_store(cnpj, ano, sequencial):
+    detail = etl_repository().get_opportunity_by_pncp_identity(cnpj, ano, sequencial)
+    if not detail or not detail.get("items"):
+        return None
+
+    items = []
+    for stored in detail["items"]:
+        description = compact(
+            stored.get("description")
+            or stored.get("technical_object")
+            or stored.get("title")
+        )
+        item_number = compact(stored.get("item_number"))
+        if not item_number or not description:
+            continue
+        items.append({
+            "lote": compact(stored.get("lot_number")),
+            "item": item_number,
+            "quantidade": format_pncp_quantity(stored.get("quantity")),
+            "unidade": compact(stored.get("unit")) or STANDARD_UNIT,
+            "categoria": identify_item_category(description),
+            "descricao": description,
+        })
+    if not items:
+        return None
+
+    items.sort(key=item_sort_key)
+    description_review = build_description_review(items)
+    for review in description_review.get("items", []):
+        review["source"] = "opportunity_items"
+    description_review["message"] = (
+        f"{len(items)} item(ns) carregado(s) da base estruturada opportunity_items."
+    )
+    return {
+        "count": len(items),
+        "source": "opportunity_items",
+        "items": items,
+        "description_review": description_review,
+        "pncp_items_check": {
+            "file_count": 0,
+            "pncp_count": len(items),
+            "structured_count": len(items),
+            "has_divergence": False,
+            "source": "opportunity_items",
+        },
+        "quantity_reconciliation": {
+            "source": "opportunity_items",
+            "matched_count": len(items),
+            "unmatched_file_count": 0,
+            "unmatched_pncp_count": 0,
+        },
+        "pncp": {
+            "cnpj": cnpj,
+            "ano": ano,
+            "sequencial": sequencial,
+            "link": pncp_app_link(cnpj, ano, sequencial),
+            "documento_usado": "",
+            "documento_tipo": "Base estruturada",
+        },
+    }
+
+
+def enrich_items_for_bloco2(cnpj, ano, sequencial):
+    if not ALLOW_BLOCO2_ON_DEMAND_ENRICHMENT:
+        raise RuntimeError("Enriquecimento sob demanda do Bloco 2 esta desativado.")
+
+    with BLOCO2_ENRICHMENT_LOCK:
+        structured = identify_items_from_opportunity_store(cnpj, ano, sequencial)
+        if structured is not None:
+            structured["cache_status"] = "hit"
+            return structured
+
+        repository = etl_repository()
+        detail = repository.get_opportunity_by_pncp_identity(cnpj, ano, sequencial)
+        if detail is None:
+            raise RuntimeError(
+                "Esta contratacao ainda nao esta no banco local. "
+                "Extraia a oportunidade pelo Bloco 1 antes de usar o Bloco 2."
+            )
+
+        opportunity_id = detail["opportunity"]["id"]
+        try:
+            enrich_internal_opportunity(opportunity_id, detail)
+        except Exception as exc:
+            raise RuntimeError(
+                "Nao foi possivel enriquecer os itens desta oportunidade agora. "
+                "A oportunidade permanece salva no banco, mas os itens ficaram pendentes. "
+                f"Erro: {exc}"
+            ) from exc
+
+        structured = identify_items_from_opportunity_store(cnpj, ano, sequencial)
+        if structured is None:
+            raise RuntimeError(
+                "O enriquecimento concluiu, mas nenhum item foi gravado para esta oportunidade."
+            )
+
+        structured["source"] = "opportunity_items_enriquecido_bloco2"
+        structured["cache_status"] = "miss_enriched"
+        structured["description_review"]["message"] = (
+            f"{len(structured['items'])} item(ns) enriquecido(s), salvo(s) no banco "
+            "e carregado(s) para o Bloco 2."
+        )
+        return structured
+
+
 def identify_items_from_pncp_link(link):
     cnpj, ano, sequencial = parse_pncp_link(link)
     cache_key = pncp_app_link(cnpj, ano, sequencial)
     cached = cache_get(IDENTIFICATION_CACHE, cache_key, DOCUMENT_CACHE_TTL)
     if cached is not None:
         return cached
+
+    structured = identify_items_from_opportunity_store(cnpj, ano, sequencial)
+    if structured is not None:
+        if not ALLOW_RUNTIME_PNCP_API:
+            check = {
+                "file_count": 0,
+                "pncp_count": 0,
+                "structured_count": len(structured["items"]),
+                "added_from_pncp": [],
+                "only_in_file": [],
+                "has_divergence": False,
+                "api_available": False,
+                "api_error": "Conferencia online desativada; usando somente a base local.",
+                "source": "opportunity_items_base_local",
+            }
+            structured["description_review"]["status"] = "warn"
+            structured["description_review"]["message"] = (
+                f"{len(structured['items'])} item(ns) carregado(s) da base estruturada; "
+                "conferencia online desativada para manter o app independente da API."
+            )
+            structured["pncp_items_check"] = check
+            cache_set(IDENTIFICATION_CACHE, cache_key, structured)
+            return structured
+
+        try:
+            pncp_items = list_pncp_items(cnpj, ano, sequencial)
+            api_error = ""
+        except Exception as exc:
+            pncp_items = []
+            api_error = str(exc) or "API do PNCP indisponível para conferência."
+
+        if pncp_items:
+            check = build_pncp_items_check(structured["items"], pncp_items)
+            check.update({
+                "structured_count": len(structured["items"]),
+                "api_available": True,
+                "source": "opportunity_items_comparado_api_pncp",
+            })
+            review = build_description_review(
+                structured["items"],
+                file_items=structured["items"],
+                pncp_items=pncp_items,
+            )
+            for item_review in review.get("items", []):
+                item_review["source"] = "opportunity_items comparado com API PNCP"
+            if check["has_divergence"]:
+                review["status"] = "warn"
+                review["message"] = (
+                    f"{len(structured['items'])} item(ns) da base estruturada comparados com "
+                    f"{len(pncp_items)} item(ns) da API PNCP; foram encontradas divergências."
+                )
+            else:
+                review["message"] = (
+                    f"{len(structured['items'])} item(ns) da base estruturada conferidos "
+                    "com a API PNCP, sem divergências de lote ou numeração."
+                )
+            structured["description_review"] = review
+            structured["quantity_reconciliation"] = {
+                "source": "opportunity_items_comparado_api_pncp",
+                "matched_count": len(structured["items"]) - len(check["only_in_file"]),
+                "unmatched_file_count": len(check["only_in_file"]),
+                "unmatched_pncp_count": len(check["added_from_pncp"]),
+            }
+        else:
+            check = {
+                "file_count": 0,
+                "pncp_count": 0,
+                "structured_count": len(structured["items"]),
+                "added_from_pncp": [],
+                "only_in_file": [],
+                "has_divergence": False,
+                "api_available": False,
+                "api_error": api_error or "A API do PNCP não retornou itens para conferência.",
+                "source": "opportunity_items_sem_comparacao_api",
+            }
+            structured["description_review"]["status"] = "warn"
+            structured["description_review"]["message"] = (
+                f"{len(structured['items'])} item(ns) carregado(s) da base estruturada; "
+                "a API PNCP não retornou itens para comparação."
+            )
+        structured["pncp_items_check"] = check
+        cache_set(IDENTIFICATION_CACHE, cache_key, structured)
+        return structured
+
+    if ALLOW_BLOCO2_ON_DEMAND_ENRICHMENT:
+        structured = enrich_items_for_bloco2(cnpj, ano, sequencial)
+        cache_set(IDENTIFICATION_CACHE, cache_key, structured)
+        return structured
+
+    if not ALLOW_RUNTIME_PNCP_API:
+        raise RuntimeError(
+            "Esta contratacao ainda nao tem itens no banco local. "
+            "Importe o JSON de itens ou rode o enriquecimento ETL fora da tela do app."
+        )
 
     source_data = source_from_pncp_link(link)
     extraction_error = None
@@ -8847,9 +9064,400 @@ def business_api_error(handler, exc):
     json_response(handler, status, {"error": message})
 
 
+def etl_repository():
+    return ETLRepository(DATABASE_PATH)
+
+
+def _etl_query_date(value, end_of_day=False):
+    text = compact(value)
+    if not text:
+        return ""
+    try:
+        parsed = datetime.strptime(text, "%Y%m%d")
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(text[:10])
+        except ValueError:
+            return text
+    suffix = "T23:59:59" if end_of_day else "T00:00:00"
+    return f"{parsed.date().isoformat()}{suffix}"
+
+
+def sync_internal_pncp(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("Dados da sincronizacao invalidos.")
+    endpoint = compact(payload.get("source_endpoint") or payload.get("endpoint") or "proposta")
+    raw_filters = payload.get("filters")
+    raw_filters = raw_filters if isinstance(raw_filters, dict) else {}
+    data_final = compact(raw_filters.get("dataFinal"))
+    if not data_final:
+        data_final = (datetime.now() + timedelta(days=29)).strftime("%Y%m%d")
+    base_filters = {"dataFinal": data_final}
+    if endpoint in {"publicacao", "atualizacao"}:
+        base_filters["dataInicial"] = compact(raw_filters.get("dataInicial")) or datetime.now().strftime("%Y%m%d")
+    modality = compact(raw_filters.get("codigoModalidadeContratacao"))
+    if modality:
+        base_filters["codigoModalidadeContratacao"] = int(modality)
+    for name in ("codigoMunicipioIbge", "cnpj", "codigoUnidadeAdministrativa", "idUsuario"):
+        value = compact(raw_filters.get(name))
+        if value:
+            base_filters[name] = value
+
+    ufs = [value.strip().upper() for value in compact(raw_filters.get("uf")).split(",") if value.strip()]
+    queries = [{**base_filters, "uf": uf} for uf in ufs] if ufs else [base_filters]
+    service = ETLSyncService(
+        etl_repository(),
+        PNCPConnector(),
+        PNCPMapper(),
+        OpportunityClassifier(),
+    )
+    max_pages = min(max(int(payload.get("max_pages") or 1), 1), 20)
+    max_records = min(max(int(payload.get("max_records") or 100), 1), 2000)
+    results = []
+    for filters in queries:
+        results.append(service.sync(SyncRequest(
+            endpoint=endpoint,
+            filters=filters,
+            run_type=compact(payload.get("run_type")) or "manual",
+            dry_run=bool(payload.get("dry_run", False)),
+            max_pages=max_pages,
+            max_records=max_records,
+            fetch_details=bool(payload.get("fetch_details", True)),
+            company_profile=payload.get("company_profile") if isinstance(payload.get("company_profile"), dict) else {},
+        )))
+    counters = {
+        key: sum(int(result.get(key, 0)) for result in results)
+        for key in ("fetched", "inserted", "updated", "skipped", "failed")
+    }
+    return {
+        "run_id": results[0]["run_id"] if len(results) == 1 else None,
+        "run_ids": [result["run_id"] for result in results],
+        "status": "partial" if counters["failed"] else ("dry_run" if payload.get("dry_run") else "success"),
+        "total_fetched": counters["fetched"],
+        "total_inserted": counters["inserted"],
+        "total_updated": counters["updated"],
+        "total_skipped": counters["skipped"],
+        "total_failed": counters["failed"],
+        "dry_run": bool(payload.get("dry_run", False)),
+    }
+
+
+def internal_opportunities_response(query):
+    page = max(int(query.get("pagina") or query.get("page") or 1), 1)
+    page_size = min(max(int(query.get("tamanhoPagina") or query.get("page_size") or 10), 1), 100)
+    filters = {
+        "limit": page_size,
+        "offset": (page - 1) * page_size,
+        "radar_status": query.get("radar_status") or "new,triage,selected,converted_to_proposal",
+        "uf": query.get("uf"),
+        "keywords": [term.strip() for term in compact(query.get("palavraChave")).split(";") if term.strip()],
+        "object_type": query.get("tipoObjeto"),
+        "modality_code": query.get("codigoModalidadeContratacao"),
+        "purchase_number": query.get("numeroCompra"),
+        "uasg": query.get("uasg"),
+        "proposal_from": _etl_query_date(query.get("dataInicial")),
+        "proposal_to": _etl_query_date(query.get("dataFinal"), end_of_day=True),
+        "score_min": query.get("score_min"),
+    }
+    payload = etl_repository().list_opportunities(filters)
+    results = []
+    for row in payload["items"]:
+        cnpj = compact(row.get("source_cnpj") or row.get("buyer_cnpj"))
+        year = row.get("year") or 0
+        sequence = row.get("sequence") or 0
+        link = compact(row.get("detail_url") or row.get("source_url"))
+        if not link and cnpj and year and sequence:
+            link = pncp_app_link(cnpj, year, sequence)
+        results.append({
+            "id": row["id"],
+            "score": row.get("score", 0),
+            "radar_status": row.get("radar_status", "new"),
+            "orgao": compact(row.get("buyer_name")),
+            "cnpj": cnpj,
+            "ano": year,
+            "sequencial": sequence,
+            "numeroCompra": compact(row.get("title")),
+            "processo": compact(row.get("process_number")),
+            "modalidade": compact(row.get("modality")),
+            "objeto": compact(row.get("description") or row.get("title")),
+            "uf": compact(row.get("uf")),
+            "municipio": compact(row.get("city")),
+            "unidade": "",
+            "codigoUnidade": compact(row.get("uasg")),
+            "valorTotalEstimado": row.get("estimated_value"),
+            "modoDisputa": "",
+            "situacao": compact(row.get("status")),
+            "linkOrigem": compact(row.get("origin_url")),
+            "abertura": compact(row.get("proposal_start_at")),
+            "encerramento": compact(row.get("proposal_end_at")),
+            "link": link,
+        })
+    total = int(payload["total"])
+    total_pages = (total + page_size - 1) // page_size if total else 0
+    return {
+        "results": results,
+        "total": total,
+        "source_total": total,
+        "pagina": page,
+        "tamanhoPagina": page_size,
+        "total_pages": total_pages,
+        "has_previous": page > 1,
+        "has_next": page < total_pages,
+        "complete": True,
+        "searching": False,
+        "source": "sqlite-radar",
+    }
+
+
+def _payload_records(payload):
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    for key in ("data", "items", "content", "results", "resultado"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            records = _payload_records(value)
+            if records:
+                return records
+    return []
+
+
+def enrich_detail_documents(opportunity_id, current_detail):
+    if not ALLOW_DETAIL_DOCUMENT_ON_DEMAND:
+        return current_detail
+    row = current_detail["opportunity"]
+    cnpj = compact(row.get("source_cnpj") or row.get("buyer_cnpj"))
+    year = row.get("year")
+    sequence = row.get("sequence")
+    if not (cnpj and year and sequence):
+        return current_detail
+
+    with DETAIL_DOCUMENT_ENRICHMENT_LOCK:
+        fresh = etl_repository().get_opportunity(opportunity_id)
+        if fresh and fresh.get("documents"):
+            return fresh
+
+        repository = etl_repository()
+        run_id = repository.create_run("pncp", "detail_documents", {
+            "opportunity_id": opportunity_id,
+            "cnpj": cnpj,
+            "year": year,
+            "sequence": sequence,
+        })
+        counters = {"fetched": 1, "inserted": 0, "updated": 0, "skipped": 0, "failed": 0}
+        try:
+            fetched = PNCPConnector().fetch_documents(cnpj, year, sequence)
+            raw_documents = _payload_records(fetched.payload)
+            documents = PNCPMapper().map_documents(raw_documents, default_source="pncp")
+            repository.replace_opportunity_documents(opportunity_id, documents)
+            counters["updated"] = 1
+            repository.finish_run(run_id, status="success", counters=counters)
+        except Exception as exc:
+            counters["failed"] = 1
+            repository.finish_run(run_id, status="failed", counters=counters, error_message=str(exc))
+            raise
+    return etl_repository().get_opportunity(opportunity_id) or current_detail
+
+
+def internal_opportunity_detail(opportunity_id):
+    detail = etl_repository().get_opportunity(opportunity_id)
+    if detail is None:
+        raise FileNotFoundError("Oportunidade nao localizada no radar interno.")
+    enrichment_messages = []
+    if not detail["documents"]:
+        if ALLOW_DETAIL_DOCUMENT_ON_DEMAND:
+            try:
+                detail = enrich_detail_documents(opportunity_id, detail)
+            except Exception as exc:
+                enrichment_messages.append(f"Arquivos oficiais pendentes: {exc}")
+        else:
+            enrichment_messages.append("Arquivos oficiais ainda nao carregados no banco local.")
+    if not detail["items"]:
+        enrichment_messages.append(
+            "Itens ainda nao carregados no banco local; esta oportunidade precisa ser reprocessada pelo ETL completo."
+        )
+    if enrichment_messages:
+        detail["enrichment_error"] = " ".join(enrichment_messages)
+    row = detail["opportunity"]
+    items = [{
+        "numero": compact(item.get("item_number")),
+        "lote": compact(item.get("lot_number")),
+        "descricao": compact(item.get("description") or item.get("title")),
+        "quantidade": format_pncp_quantity(item.get("quantity")),
+        "unidade": compact(item.get("unit")) or STANDARD_UNIT,
+        "valor_unitario_estimado": item.get("estimated_unit_value"),
+        "valor_total_estimado": item.get("estimated_total_value"),
+        "criterio_julgamento": compact(item.get("technical_object")),
+        "situacao": compact(item.get("status")),
+        "tipo": compact(item.get("title")),
+        "granularity": compact(item.get("granularity")),
+        "confidence": item.get("confidence"),
+    } for item in detail["items"]]
+    link = compact(row.get("detail_url") or row.get("source_url"))
+    opportunity = {
+        "numero_compra": compact(row.get("title")),
+        "processo": compact(row.get("process_number")),
+        "modalidade": compact(row.get("modality")),
+        "objeto": compact(row.get("description") or row.get("title")),
+        "orgao": compact(row.get("buyer_name")),
+        "orgao_cnpj": compact(row.get("buyer_cnpj") or row.get("source_cnpj")),
+        "unidade": "",
+        "codigo_unidade": compact(row.get("uasg")),
+        "municipio": compact(row.get("city")),
+        "uf": compact(row.get("uf")),
+        "abertura": compact(row.get("proposal_start_at")),
+        "encerramento": compact(row.get("proposal_end_at")),
+        "situacao": compact(row.get("status")),
+        "valor_total_estimado": row.get("estimated_value"),
+        "modo_disputa": "",
+        "link_pncp": link,
+        "link_origem": compact(row.get("origin_url")),
+        "portal_origem": opportunity_source_portal(row.get("origin_url") or link),
+        "categorias": opportunity_categories(row.get("description") or row.get("title") or "", items),
+        "numero_controle_pncp": compact(row.get("pncp_control_number")),
+    }
+    return {
+        "oportunidade": opportunity,
+        "arquivos": [{
+            "titulo": compact(document.get("title") or document.get("filename") or "Arquivo oficial"),
+            "tipo": compact(document.get("document_type")),
+            "url": compact(document.get("url")),
+        } for document in detail["documents"]],
+        "itens": items,
+        "fontes": {
+            "oportunidade": "Banco interno normalizado",
+            "arquivos": "Auditoria ETL do PNCP",
+            "itens": "Auditoria ETL do PNCP",
+        },
+        "aviso_enriquecimento": detail.get("enrichment_error", ""),
+    }
+
+
+def enrich_internal_opportunity(opportunity_id, current_detail):
+    row = current_detail["opportunity"]
+    cnpj = compact(row.get("source_cnpj") or row.get("buyer_cnpj"))
+    year = row.get("year")
+    sequence = row.get("sequence")
+    if not (cnpj and year and sequence):
+        return current_detail
+    connector = PNCPConnector()
+    detail_payload = connector.fetch_detail(cnpj, year, sequence)
+    raw_items = []
+    item_pages = []
+    for page in connector.iter_items(cnpj, year, sequence, 20):
+        raw_items.extend(page.records)
+        item_pages.append(page.raw_payload)
+    documents_payload = connector.fetch_documents(cnpj, year, sequence)
+    documents = documents_payload.payload
+    if isinstance(documents, dict):
+        documents = (
+            documents.get("data")
+            or documents.get("items")
+            or documents.get("content")
+            or []
+        )
+    if not isinstance(documents, list):
+        documents = []
+    listing = {
+        "numeroControlePNCP": row.get("pncp_control_number"),
+        "numeroCnpj": cnpj,
+        "anoCompra": year,
+        "sequencialCompra": sequence,
+        "numeroCompra": row.get("title"),
+        "processo": row.get("process_number"),
+        "objetoCompra": row.get("description"),
+    }
+    mapper = PNCPMapper()
+    normalized = mapper.map(
+        listing,
+        detail=detail_payload.payload if isinstance(detail_payload.payload, dict) else None,
+        items=raw_items,
+        documents=documents,
+    )
+    repository = etl_repository()
+    run_id = repository.create_run("pncp", "detail", {
+        "opportunity_id": opportunity_id,
+        "cnpj": cnpj,
+        "year": year,
+        "sequence": sequence,
+    })
+    counters = {"fetched": 1, "inserted": 0, "updated": 0, "skipped": 0, "failed": 0}
+    try:
+        outcome, _ = repository.persist_record(
+            run_id=run_id,
+            source_endpoint="detail",
+            request_url=detail_payload.request_url,
+            raw_payload={
+                "listing": listing,
+                "detail": detail_payload.payload,
+                "items": item_pages,
+                "documents": documents_payload.payload,
+            },
+            opportunity=normalized,
+            match=OpportunityClassifier().classify(normalized, {}),
+        )
+        counters[outcome] += 1
+        repository.finish_run(run_id, status="success", counters=counters)
+    except Exception as exc:
+        counters["failed"] = 1
+        repository.finish_run(run_id, status="failed", counters=counters, error_message=str(exc))
+        raise
+    return repository.get_opportunity(opportunity_id) or current_detail
+
+
+def convert_internal_opportunity(opportunity_id, payload):
+    detail = internal_opportunity_detail(opportunity_id)
+    selected_items = payload.get("itens") if isinstance(payload, dict) else None
+    result = import_business({
+        "pncp_link": detail["oportunidade"]["link_pncp"],
+        "empresa": compact(payload.get("empresa")) if isinstance(payload, dict) else "",
+        "itens": selected_items,
+        "oportunidade": detail["oportunidade"],
+    })
+    etl_repository().update_radar_status(
+        opportunity_id,
+        "converted_to_proposal",
+        int(result["negocio"]["id"]),
+    )
+    return result
+
+
 class App(BaseHTTPRequestHandler):
     def do_GET(self):
         request_path = urlparse(self.path).path
+        if request_path in {"/internal/opportunities", "/api/internal/opportunities"}:
+            try:
+                query = {
+                    key: values[0]
+                    for key, values in parse_qs(urlparse(self.path).query).items()
+                }
+                json_response(self, 200, internal_opportunities_response(query))
+            except ValueError as exc:
+                json_response(self, 422, {"error": str(exc)})
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc) or "Nao foi possivel consultar o radar interno."})
+            return
+        internal_detail_match = re.fullmatch(
+            r"/(?:api/)?internal/opportunities/([a-f0-9]{32})",
+            request_path,
+        )
+        if internal_detail_match:
+            try:
+                json_response(self, 200, internal_opportunity_detail(internal_detail_match.group(1)))
+            except FileNotFoundError as exc:
+                json_response(self, 404, {"error": str(exc)})
+            except Exception as exc:
+                json_response(self, 500, {"error": str(exc) or "Nao foi possivel carregar a oportunidade."})
+            return
+        if request_path in {"/internal/etl/runs", "/api/internal/etl/runs"}:
+            query = parse_qs(urlparse(self.path).query)
+            limit = int((query.get("limit") or ["50"])[0])
+            offset = int((query.get("offset") or ["0"])[0])
+            json_response(self, 200, etl_repository().list_runs(limit, offset))
+            return
         if request_path == "/api/kanban":
             json_response(self, 200, kanban_store.board(DATABASE_PATH))
             return
@@ -9000,6 +9608,42 @@ class App(BaseHTTPRequestHandler):
 
     def do_POST(self):
         request_path = urlparse(self.path).path
+        if request_path in {"/internal/etl/pncp-sync", "/api/internal/etl/pncp-sync"}:
+            expected_token = os.environ.get("TOTH_ETL_ADMIN_TOKEN", "")
+            if expected_token and self.headers.get("X-ETL-Token", "") != expected_token:
+                json_response(self, 403, {"error": "Token administrativo do ETL invalido."})
+                return
+            try:
+                json_response(self, 200, sync_internal_pncp(parse_json_body(self)))
+            except ValueError as exc:
+                json_response(self, 422, {"error": str(exc)})
+            except Exception as exc:
+                json_response(self, 502, {"error": str(exc) or "Nao foi possivel sincronizar o PNCP."})
+            return
+        internal_ignore_match = re.fullmatch(
+            r"/(?:api/)?internal/opportunities/([a-f0-9]{32})/ignore",
+            request_path,
+        )
+        if internal_ignore_match:
+            if not etl_repository().update_radar_status(internal_ignore_match.group(1), "ignored"):
+                json_response(self, 404, {"error": "Oportunidade nao localizada."})
+            else:
+                json_response(self, 200, {"id": internal_ignore_match.group(1), "radar_status": "ignored"})
+            return
+        internal_convert_match = re.fullmatch(
+            r"/(?:api/)?internal/opportunities/([a-f0-9]{32})/convert-to-proposal",
+            request_path,
+        )
+        if internal_convert_match:
+            try:
+                result = convert_internal_opportunity(
+                    internal_convert_match.group(1),
+                    parse_json_body(self),
+                )
+                json_response(self, 201 if result.get("criado") else 200, result)
+            except Exception as exc:
+                business_api_error(self, exc)
+            return
         if request_path == "/api/oportunidades/conversar":
             try:
                 payload = parse_json_body(self)

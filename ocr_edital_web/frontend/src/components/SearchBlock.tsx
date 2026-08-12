@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, ChevronDown, ChevronLeft, ChevronRight, Search, Trash2 } from "lucide-react";
-import { searchBids } from "../api";
-import type { Bid, UiMessage } from "../types";
+import { searchBids, searchOnlineBids } from "../api";
+import type { Bid, SearchResponse, UiMessage } from "../types";
 import { localIsoDate, toPncpDate } from "../utils";
 import { DateRangePicker } from "./DateRangePicker";
 import { KeywordTagInput } from "./KeywordTagInput";
@@ -20,6 +20,14 @@ function defaultDates() {
 }
 
 const PAGE_SIZE = 10;
+
+function hasSearchMatches(payload: SearchResponse) {
+  return (payload.results?.length ?? 0) > 0 || (payload.total ?? 0) > 0;
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "erro desconhecido";
+}
 
 const BRAZILIAN_UFS = [
   ["AC", "Acre"],
@@ -62,7 +70,7 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
   const [keywords, setKeywords] = useState<string[]>([]);
   const [keywordDraft, setKeywordDraft] = useState("");
   const [objectType, setObjectType] = useState("");
-  const [modality, setModality] = useState("6");
+  const [modality, setModality] = useState("");
   const [purchaseNumber, setPurchaseNumber] = useState("");
   const [uasg, setUasg] = useState("");
   const [results, setResults] = useState<Bid[]>([]);
@@ -126,7 +134,7 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
     searchRequestRef.current = requestId;
     setBusy(true);
     setSearchingAll(false);
-    setMessage({ kind: "info", text: "Consultando contratações no PNCP..." });
+    setMessage({ kind: "info", text: "Consultando a base interna reorganizada..." });
     try {
       const effectiveKeywords = [
         ...keywords,
@@ -151,8 +159,37 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
         tamanhoPagina: String(PAGE_SIZE),
         rapido: "1",
       });
-      let payload = await searchBids(params);
-      for (let poll = 0; poll < 90; poll += 1) {
+      let payload: SearchResponse;
+      let usedOnlineFallback = false;
+      let fallbackReason: "empty" | "error" | null = null;
+      try {
+        payload = await searchBids(params);
+        if (!hasSearchMatches(payload)) {
+          usedOnlineFallback = true;
+          fallbackReason = "empty";
+          setMessage({
+            kind: "info",
+            text: "Base interna sem resultado para estes filtros; consultando o PNCP online como contingencia.",
+          });
+          payload = await searchOnlineBids(params);
+        }
+      } catch (localError) {
+        usedOnlineFallback = true;
+        fallbackReason = "error";
+        setMessage({
+          kind: "warning",
+          text: "Base interna indisponivel; consultando o PNCP online como contingencia.",
+        });
+        try {
+          payload = await searchOnlineBids(params);
+        } catch (onlineError) {
+          throw new Error(
+            `Base interna indisponivel (${errorMessage(localError)}) e contingencia PNCP falhou (${errorMessage(onlineError)}).`,
+          );
+        }
+      }
+      const maxPolls = usedOnlineFallback ? 90 : 1;
+      for (let poll = 0; poll < maxPolls; poll += 1) {
         if (requestId !== searchRequestRef.current) return;
         const nextResults = payload.results || [];
         const nextPage = payload.pagina || targetPage;
@@ -163,30 +200,35 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
         setPage(nextPage);
         setTotal(nextTotal);
         setTotalPages(nextTotalPages);
-        setSearchingAll(Boolean(payload.searching));
+        setSearchingAll(usedOnlineFallback && Boolean(payload.searching));
         setBusy(false);
+        const sourceLabel = usedOnlineFallback ? "PNCP online" : "base interna";
         setMessage({
-          kind: payload.searching
+          kind: usedOnlineFallback && payload.searching
             ? "info"
             : payload.complete === false
               ? "warning"
               : nextResults.length
                 ? "success"
                 : "warning",
-          text: payload.searching
-            ? `Exibindo ${nextResults.length} edital(is) iniciais. A busca completa continua em segundo plano.`
+          text: usedOnlineFallback && payload.searching
+            ? `Exibindo ${nextResults.length} edital(is) iniciais do PNCP online. A busca completa continua em segundo plano.`
             : payload.complete === false
-              ? `Foram encontrados ${nextTotal.toLocaleString("pt-BR")} edital(is), mas o PNCP não respondeu a todas as páginas. Tente novamente para completar a consulta.`
+              ? `Foram encontrados ${nextTotal.toLocaleString("pt-BR")} edital(is), mas a consulta em ${sourceLabel} nao respondeu a todas as paginas. Tente novamente para completar a consulta.`
               : nextResults.length
-                ? `${nextResults.length} edital(is) nesta página, de ${nextTotal.toLocaleString("pt-BR")} encontrado(s) com todos os filtros.`
+                ? `${nextResults.length} edital(is) nesta pagina, de ${nextTotal.toLocaleString("pt-BR")} encontrado(s) na ${sourceLabel}.`
                 : nextTotal
-                  ? "Nenhum edital desta página corresponde aos filtros utilizados."
-                  : "Nenhum edital encontrado com estes filtros.",
+                  ? `Nenhum edital desta pagina corresponde aos filtros utilizados na ${sourceLabel}.`
+                  : fallbackReason === "empty"
+                    ? "Base interna e PNCP online nao retornaram editais com estes filtros."
+                    : fallbackReason === "error"
+                      ? "PNCP online nao retornou editais apos falha da base interna."
+                      : "Nenhum edital encontrado com estes filtros na base interna.",
         });
-        if (!payload.searching) break;
+        if (!usedOnlineFallback || !payload.searching) break;
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
         if (requestId !== searchRequestRef.current) return;
-        payload = await searchBids(params);
+        payload = await searchOnlineBids(params);
       }
     } catch (error) {
       setMessage({
@@ -307,9 +349,9 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
         <label>
           Modalidade
           <select value={modality} onChange={(e) => setModality(e.target.value)}>
+            <option value="">Todas</option>
             <option value="6">Pregão eletrônico</option>
             <option value="8">Dispensa eletrônica</option>
-            <option value="">Todas</option>
           </select>
         </label>
         <label>

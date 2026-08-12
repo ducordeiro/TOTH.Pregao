@@ -113,12 +113,55 @@ export async function deleteResponsible(id: string): Promise<void> {
   await parseJson<{ deleted: string }>(response);
 }
 
-export async function searchBids(params: URLSearchParams): Promise<SearchResponse> {
+export async function searchLocalBids(params: URLSearchParams): Promise<SearchResponse> {
+  const response = await fetch(`/internal/opportunities?${params.toString()}`);
+  return parseJson<SearchResponse>(response);
+}
+
+export async function searchOnlineBids(params: URLSearchParams): Promise<SearchResponse> {
   const response = await fetch(`/pncp-search?${params.toString()}`);
   return parseJson<SearchResponse>(response);
 }
 
+export async function searchBids(params: URLSearchParams): Promise<SearchResponse> {
+  return searchLocalBids(params);
+}
+
+export interface EtlSyncResult {
+  run_id?: string;
+  status: string;
+  total_fetched: number;
+  total_inserted: number;
+  total_updated: number;
+  total_skipped: number;
+  total_failed: number;
+  dry_run?: boolean;
+}
+
+export async function syncPncpOpportunities(
+  params: URLSearchParams,
+): Promise<EtlSyncResult> {
+  const response = await fetch("/internal/etl/pncp-sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      run_type: "manual",
+      source_endpoint: "proposta",
+      max_pages: 2,
+      max_records: 100,
+      fetch_details: false,
+      dry_run: false,
+      filters: Object.fromEntries(params.entries()),
+    }),
+  });
+  return parseJson<EtlSyncResult>(response);
+}
+
 export async function getOpportunityDetail(bid: Bid): Promise<OpportunityDetail> {
+  if (bid.id) {
+    const response = await fetch(`/internal/opportunities/${encodeURIComponent(bid.id)}`);
+    return parseJson<OpportunityDetail>(response);
+  }
   const params = new URLSearchParams({
     pncp_link: bid.link,
     numero_compra: bid.numeroCompra,
@@ -139,6 +182,22 @@ export async function getOpportunityDetail(bid: Bid): Promise<OpportunityDetail>
   });
   const response = await fetch(`/api/oportunidades/detalhe?${params.toString()}`);
   return parseJson<OpportunityDetail>(response);
+}
+
+export async function convertOpportunityToBusiness(
+  opportunityId: string,
+  items: OpportunityItem[],
+): Promise<Business> {
+  const response = await fetch(
+    `/internal/opportunities/${encodeURIComponent(opportunityId)}/convert-to-proposal`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ itens: items }),
+    },
+  );
+  const payload = await parseJson<{ negocio: Business }>(response);
+  return payload.negocio;
 }
 
 export async function askOpportunityDocument(

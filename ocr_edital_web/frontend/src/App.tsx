@@ -136,11 +136,15 @@ export default function App() {
             <h1>{header.title}</h1>
             <p>{header.description}</p>
           </div>
-          <div className="catalog-status">
-            {catalogMessage
-              ? catalogMessage.text
-              : `${templates.length} template(s) · ${responsibles.length} responsável(is)`}
-          </div>
+          {activeBlock !== "search" ? (
+            <div className="catalog-status">
+              {catalogMessage
+                ? catalogMessage.text
+                : `${templates.length} template(s) · ${responsibles.length} responsável(is)`}
+            </div>
+          ) : (
+            <div className="catalog-status-placeholder" aria-hidden="true" />
+          )}
         </header>
 
         <main>

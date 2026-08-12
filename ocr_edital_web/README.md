@@ -46,3 +46,41 @@ Python sem mudar os contratos da API ou o banco SQLite.
 cd .\ocr_edital_web
 python -m unittest -v
 ```
+
+## Radar ETL
+
+O Bloco 1 consulta as oportunidades normalizadas no SQLite. As coletas do PNCP
+e do Compras.gov ficam isoladas em `etl/`, com auditoria do JSON bruto nas
+tabelas criadas por `migrations/001_create_opportunity_radar_tables.sql`.
+
+Executar uma carga diaria limitada:
+
+```powershell
+cd .\ocr_edital_web
+python -m etl daily --date 2026-08-05 --modality-code 6 --max-pages 2 --max-records 100
+```
+
+Validar sem gravar oportunidades ou payloads:
+
+```powershell
+python -m etl daily --dry-run --max-pages 1 --max-records 10
+```
+
+Coletar atualizacoes ou a fonte complementar:
+
+```powershell
+python -m etl update --date-from 2026-08-05 --date-to 2026-08-05 --modality-code 6
+python -m etl compras --max-pages 1 --max-records 50 --filters-json '{"dataPublicacaoPncpInicial":"2026-08-05","dataPublicacaoPncpFinal":"2026-08-05","codigoModalidade":6}'
+```
+
+Rotas internas principais:
+
+- `GET /internal/opportunities`
+- `GET /internal/opportunities/{id}`
+- `POST /internal/opportunities/{id}/ignore`
+- `POST /internal/opportunities/{id}/convert-to-proposal`
+- `GET /internal/etl/runs`
+- `POST /internal/etl/pncp-sync`
+
+Defina `TOTH_ETL_ADMIN_TOKEN` para exigir o cabecalho `X-ETL-Token` na
+sincronizacao manual exposta pelo servidor.

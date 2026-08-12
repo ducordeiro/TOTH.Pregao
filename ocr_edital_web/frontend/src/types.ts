@@ -20,6 +20,9 @@ export interface Responsible {
 }
 
 export interface Bid {
+  id?: string;
+  score?: number;
+  radar_status?: "new" | "triage" | "ignored" | "selected" | "converted_to_proposal";
   orgao: string;
   cnpj: string;
   ano: number;
@@ -64,6 +67,12 @@ export interface PncpCheck {
   has_divergence: boolean;
   file_count: number;
   pncp_count: number;
+  structured_count?: number;
+  api_available?: boolean;
+  api_error?: string;
+  added_from_pncp?: string[];
+  only_in_file?: string[];
+  source?: string;
   file_error?: string;
 }
 
@@ -132,6 +141,8 @@ export interface OpportunityItem {
   criterio_julgamento: string;
   situacao: string;
   tipo: string;
+  granularity?: string;
+  confidence?: number | string | null;
 }
 
 export interface OpportunityFile {

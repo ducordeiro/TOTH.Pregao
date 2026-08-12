@@ -136,8 +136,11 @@ export function ProposalBlock({
         setFilePreview(null);
         setDownload(null);
         const review = payload.description_review;
+        const verification = payload.pncp_items_check;
         setIdentifyMessage({
-          kind: payload.pncp_items_check?.has_divergence ? "warning" : "success",
+          kind: verification?.has_divergence || verification?.api_available === false
+            ? "warning"
+            : "success",
           text: `${payload.items.length} item(ns) encontrado(s).${
             review ? ` ${review.message}` : ""
           }`,

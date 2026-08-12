@@ -889,6 +889,93 @@ class CatalogGenerationTests(unittest.TestCase):
                 self.assertEqual(len([name for name in archive.namelist() if name.endswith(".png")]), 2)
 
 
+class StructuredItemPriorityTests(unittest.TestCase):
+    def test_identification_uses_opportunity_items_before_official_files(self):
+        repository = SimpleNamespace(
+            get_opportunity_by_pncp_identity=lambda *_args: {
+                "opportunity": {"id": "opportunity-1"},
+                "items": [{
+                    "lot_number": "2",
+                    "item_number": "7",
+                    "title": "Cadeira giratoria",
+                    "description": "Cadeira giratoria com apoio de bracos",
+                    "technical_object": None,
+                    "quantity": 12,
+                    "unit": "UN",
+                }],
+                "documents": [],
+                "matches": [],
+            }
+        )
+        link = "https://pncp.gov.br/app/editais/12345678000199/2026/987654"
+        server.IDENTIFICATION_CACHE.clear()
+
+        with (
+            patch.object(server, "etl_repository", return_value=repository),
+            patch.object(server, "ALLOW_RUNTIME_PNCP_API", True),
+            patch.object(server, "list_pncp_items", return_value=[{
+                "lote": "2",
+                "item": "7",
+                "quantidade": "12",
+                "unidade": "UN",
+                "descricao": "Cadeira giratoria com apoio de bracos",
+            }]) as api_items,
+            patch.object(
+                server,
+                "source_from_pncp_link",
+                side_effect=AssertionError("arquivo oficial não deveria ser consultado"),
+            ),
+        ):
+            result = server.identify_items_from_pncp_link(link)
+
+        self.assertEqual(result["source"], "opportunity_items")
+        self.assertEqual(result["items"][0]["lote"], "2")
+        self.assertEqual(result["items"][0]["item"], "7")
+        self.assertEqual(result["items"][0]["quantidade"], "12")
+        self.assertEqual(result["items"][0]["unidade"], "UN")
+        self.assertTrue(result["pncp_items_check"]["api_available"])
+        self.assertFalse(result["pncp_items_check"]["has_divergence"])
+        api_items.assert_called_once_with("12345678000199", 2026, 987654)
+
+    def test_structured_items_report_api_divergence_without_being_replaced(self):
+        repository = SimpleNamespace(
+            get_opportunity_by_pncp_identity=lambda *_args: {
+                "opportunity": {"id": "opportunity-2"},
+                "items": [{
+                    "lot_number": "",
+                    "item_number": "1",
+                    "title": "Item interno",
+                    "description": "Descrição estruturada completa",
+                    "technical_object": None,
+                    "quantity": 4,
+                    "unit": "UN",
+                }],
+                "documents": [],
+                "matches": [],
+            }
+        )
+        link = "https://pncp.gov.br/app/editais/12345678000199/2026/987655"
+        server.IDENTIFICATION_CACHE.clear()
+        with (
+            patch.object(server, "etl_repository", return_value=repository),
+            patch.object(server, "ALLOW_RUNTIME_PNCP_API", True),
+            patch.object(server, "list_pncp_items", return_value=[{
+                "lote": "",
+                "item": "2",
+                "quantidade": "4",
+                "unidade": "UN",
+                "descricao": "Outro item na API",
+            }]),
+        ):
+            result = server.identify_items_from_pncp_link(link)
+
+        self.assertEqual(result["items"][0]["item"], "1")
+        self.assertEqual(result["items"][0]["descricao"], "Descrição estruturada completa")
+        self.assertTrue(result["pncp_items_check"]["has_divergence"])
+        self.assertEqual(result["pncp_items_check"]["only_in_file"], ["1"])
+        self.assertEqual(result["pncp_items_check"]["added_from_pncp"], ["2"])
+
+
 class DescriptionReviewRegressionTests(unittest.TestCase):
     def test_continuation_punctuation_is_a_warning_not_a_blocker(self):
         item = make_item("1", "Cadeira giratoria com estrutura em aco;")

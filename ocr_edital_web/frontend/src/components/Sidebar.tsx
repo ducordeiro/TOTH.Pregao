@@ -1,4 +1,5 @@
 import { BookOpen, BriefcaseBusiness, ClipboardList, FileSearch, FileText } from "lucide-react";
+import tothLogo from "../assets/toth-logo.png";
 
 export type ActiveBlock = "search" | "proposal" | "catalog" | "business" | "structure";
 
@@ -10,7 +11,9 @@ interface SidebarProps {
 export function Sidebar({ active, onChange }: SidebarProps) {
   return (
     <aside className="app-sidebar" aria-label="Navegação principal">
-      <div className="app-brand">TOTH</div>
+      <div className="app-brand">
+        <img src={tothLogo} alt="TOTH" />
+      </div>
       <nav className="block-navigation" aria-label="Etapas da proposta">
         <button
           className={`block-nav-item${active === "search" ? " is-active" : ""}`}
