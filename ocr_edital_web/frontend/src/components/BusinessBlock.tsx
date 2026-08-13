@@ -1,4 +1,4 @@
-import {
+﻿import {
   Archive,
   ArrowDownUp,
   Building2,
@@ -32,10 +32,13 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   addBusinessTask,
+  createBusinessStage,
   getBusiness,
   importBusiness,
+  listBusinessStages,
   listBusinesses,
   moveBusiness,
+  updateBusinessStage,
   updateBusiness,
   updateBusinessTask,
 } from "../api";
@@ -43,39 +46,35 @@ import type {
   Business,
   BusinessDetail,
   BusinessStage,
+  BusinessStageDefinition,
   Responsible,
 } from "../types";
 import { Modal } from "./Modal";
 
-const STAGES: Array<{
-  id: BusinessStage;
-  label: string;
-  description: string;
-}> = [
+const DEFAULT_STAGES: BusinessStageDefinition[] = [
   {
     id: "oportunidade",
     label: "Oportunidade",
-    description: "Identificada e em avaliação inicial",
+    description: "Identificada e em avaliaÃ§Ã£o inicial",
+    position: 1,
   },
   {
     id: "qualificacao",
-    label: "Qualificação",
-    description: "Análise técnica, comercial e documental",
+    label: "QualificaÃ§Ã£o",
+    description: "AnÃ¡lise tÃ©cnica, comercial e documental",
+    position: 2,
   },
   {
     id: "disputa",
     label: "Disputa",
-    description: "Participação confirmada",
-  },
-  {
-    id: "classificacao",
-    label: "Classificação",
-    description: "Resultado e posicionamento",
+    description: "ParticipaÃ§Ã£o confirmada",
+    position: 3,
   },
   {
     id: "contrato",
     label: "Contrato",
-    description: "Formalização e execução",
+    description: "FormalizaÃ§Ã£o e execuÃ§Ã£o",
+    position: 4,
   },
 ];
 
@@ -104,10 +103,6 @@ const EMPTY_FILTERS: BusinessFilters = {
   tags: "",
 };
 
-const STAGE_INDEX = Object.fromEntries(
-  STAGES.map((stage, index) => [stage.id, index]),
-) as Record<BusinessStage, number>;
-
 function parseDate(value: string) {
   if (!value) return null;
   const date = new Date(value);
@@ -116,7 +111,7 @@ function parseDate(value: string) {
 
 function formatDateTime(value: string) {
   const date = parseDate(value);
-  if (!date) return "Data não informada";
+  if (!date) return "Data nÃ£o informada";
   return new Intl.DateTimeFormat("pt-BR", {
     dateStyle: "short",
     timeStyle: "short",
@@ -124,21 +119,28 @@ function formatDateTime(value: string) {
 }
 
 function formatCurrency(value: string) {
-  if (!value) return "Não informado";
+  if (!value) return "NÃ£o informado";
   const number = Number(value.replace(",", "."));
   if (!Number.isFinite(number)) return value;
   return number.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+function toDateTimeLocalValue(value: string) {
+  const date = parseDate(value);
+  if (!date) return "";
+  const offsetMs = date.getTimezoneOffset() * 60 * 1000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
 function openingLabel(value: string) {
   const date = parseDate(value);
-  if (!date) return "Abertura não informada";
+  if (!date) return "Abertura nÃ£o informada";
   const day = new Intl.DateTimeFormat("pt-BR").format(date);
   const time = new Intl.DateTimeFormat("pt-BR", {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
-  return `Abertura em ${day} às ${time}`;
+  return `Abertura em ${day} Ã s ${time}`;
 }
 
 function urgency(business: Business) {
@@ -146,13 +148,13 @@ function urgency(business: Business) {
   if (!date) return { label: "Sem prazo", kind: "neutral" };
   const hours = (date.getTime() - Date.now()) / 3_600_000;
   if (hours < 0) return { label: "Prazo encerrado", kind: "closed" };
-  if (hours <= 24) return { label: "Abre em até 24h", kind: "critical" };
-  if (hours <= 72) return { label: "Abre em até 3 dias", kind: "warning" };
+  if (hours <= 24) return { label: "Abre em atÃ© 24h", kind: "critical" };
+  if (hours <= 72) return { label: "Abre em atÃ© 3 dias", kind: "warning" };
   return { label: "Prazo regular", kind: "ok" };
 }
 
 function priorityLabel(priority: number) {
-  return priority === 1 ? "Alta prioridade" : priority === 2 ? "Prioridade média" : "Baixa prioridade";
+  return priority === 1 ? "Alta prioridade" : priority === 2 ? "Prioridade mÃ©dia" : "Baixa prioridade";
 }
 
 function shortText(value: string, maximum = 115) {
@@ -187,11 +189,16 @@ function positionSortValue(position: number | null) {
   return position && position > 0 ? position : Number.POSITIVE_INFINITY;
 }
 
+function openingSortValue(value: string) {
+  return parseDate(value)?.getTime() ?? Number.POSITIVE_INFINITY;
+}
+
 interface BusinessCardProps {
   business: Business;
   onOpen: (id: string, tab?: DetailTab) => void;
   onRename: (business: Business, title: string) => Promise<void>;
   onPositionChange: (business: Business, position: number | null) => Promise<void>;
+  onOpeningChange: (business: Business, opening: string) => Promise<void>;
   onArchive: (business: Business) => void;
   onRemove: (business: Business) => void;
 }
@@ -202,6 +209,7 @@ function BusinessCard({
   onRename,
   onArchive,
   onPositionChange,
+  onOpeningChange,
   onRemove,
 }: BusinessCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -227,7 +235,7 @@ function BusinessCard({
       await onRename(business, title);
       setEditingTitle(false);
     } catch {
-      // A mensagem de erro é exibida pelo bloco e o editor permanece aberto.
+      // A mensagem de erro Ã© exibida pelo bloco e o editor permanece aberto.
     } finally {
       setSavingTitle(false);
     }
@@ -235,7 +243,7 @@ function BusinessCard({
   const editPosition = async () => {
     setMenuOpen(false);
     const answer = window.prompt(
-      "Informe a posição do item. Deixe em branco para remover:",
+      "Informe a posiÃ§Ã£o do item. Deixe em branco para remover:",
       business.position_number ? String(business.position_number) : "",
     );
     if (answer === null) return;
@@ -243,7 +251,7 @@ function BusinessCard({
     let position: number | null = null;
     if (value) {
       if (!/^\d+$/.test(value) || Number(value) < 1) {
-        window.alert("A posição deve ser um número inteiro maior que zero.");
+        window.alert("A posiÃ§Ã£o deve ser um nÃºmero inteiro maior que zero.");
         return;
       }
       position = Number(value);
@@ -251,7 +259,20 @@ function BusinessCard({
     try {
       await onPositionChange(business, position);
     } catch {
-      // A mensagem de erro é exibida pelo bloco.
+      // A mensagem de erro Ã© exibida pelo bloco.
+    }
+  };
+
+  const editOpening = async () => {
+    const answer = window.prompt(
+      "Informe a data e hora de abertura:",
+      toDateTimeLocalValue(business.abertura),
+    );
+    if (answer === null) return;
+    try {
+      await onOpeningChange(business, answer.trim());
+    } catch {
+      // A mensagem de erro Ã© exibida pelo bloco.
     }
   };
 
@@ -271,7 +292,7 @@ function BusinessCard({
         <span className={`urgency-label is-${deadline.kind}`}>{deadline.label}</span>
       </div>
       <div className="business-card-reference">
-        <strong>{business.modalidade || "Modalidade não informada"}</strong>
+        <strong>{business.modalidade || "Modalidade nÃ£o informada"}</strong>
         <span>{business.numero_compra || `PNCP ${business.ano}/${business.sequencial}`}</span>
       </div>
       {editingTitle ? (
@@ -287,7 +308,7 @@ function BusinessCard({
             autoFocus
             rows={3}
             value={titleDraft}
-            aria-label="Título do negócio"
+            aria-label="TÃ­tulo do negÃ³cio"
             onChange={(event) => setTitleDraft(event.target.value)}
           />
           <div>
@@ -306,13 +327,13 @@ function BusinessCard({
       ) : (
         <div className="business-card-title-row">
           <h3 title={business.titulo_oficial || business.titulo}>
-            {shortText(business.titulo || "Objeto da contratação não informado")}
+            {shortText(business.titulo || "Objeto da contrataÃ§Ã£o nÃ£o informado")}
           </h3>
           <button
             className="business-title-edit-button"
             type="button"
-            title="Editar título"
-            aria-label={`Editar título de ${business.titulo}`}
+            title="Editar tÃ­tulo"
+            aria-label={`Editar tÃ­tulo de ${business.titulo}`}
             onClick={(event) => {
               event.stopPropagation();
               beginTitleEdit();
@@ -324,17 +345,29 @@ function BusinessCard({
       )}
       <div className="business-card-org" title={business.orgao}>
         <Building2 size={15} aria-hidden="true" />
-        <span>{business.orgao || "Órgão não informado"}</span>
+        <span>{business.orgao || "Ã“rgÃ£o nÃ£o informado"}</span>
       </div>
       <div className="business-card-location">
         <MapPin size={14} aria-hidden="true" />
         <span>
-          {[business.municipio, business.uf].filter(Boolean).join(" / ") || "Local não informado"}
+          {[business.municipio, business.uf].filter(Boolean).join(" / ") || "Local nÃ£o informado"}
         </span>
       </div>
       <div className="business-card-opening">
         <CalendarClock size={14} aria-hidden="true" />
         <span>{openingLabel(business.abertura)}</span>
+        <button
+          className="business-inline-edit-button"
+          type="button"
+          title="Editar data e hora de abertura"
+          aria-label="Editar data e hora de abertura"
+          onClick={(event) => {
+            event.stopPropagation();
+            void editOpening();
+          }}
+        >
+          <Pencil size={11} />
+        </button>
       </div>
       <div className="business-tags" aria-label="Marcadores">
         <span>{business.modalidade || "Sem modalidade"}</span>
@@ -344,14 +377,14 @@ function BusinessCard({
         <button
           className="business-position-button"
           type="button"
-          title="Definir posição"
-          aria-label={`Posição atual: ${business.position_number ?? "não definida"}. Editar posição`}
+          title="Definir posiÃ§Ã£o"
+          aria-label={`PosiÃ§Ã£o atual: ${business.position_number ?? "nÃ£o definida"}. Editar posiÃ§Ã£o`}
           onClick={(event) => {
             event.stopPropagation();
             void editPosition();
           }}
         >
-          Posição: <strong>{business.position_number ?? "definir"}</strong>
+          PosiÃ§Ã£o: <strong>{business.position_number ?? "definir"}</strong>
           <Pencil size={10} />
         </button>
       </div>
@@ -373,7 +406,7 @@ function BusinessCard({
             className="business-icon-button"
             type="button"
             title="Arquivar"
-            aria-label="Arquivar negócio"
+            aria-label="Arquivar negÃ³cio"
             onClick={(event) => {
               event.stopPropagation();
               onArchive(business);
@@ -385,7 +418,7 @@ function BusinessCard({
             className="business-icon-button"
             type="button"
             title="Remover"
-            aria-label="Remover negócio"
+            aria-label="Remover negÃ³cio"
             onClick={(event) => {
               event.stopPropagation();
               onRemove(business);
@@ -397,7 +430,7 @@ function BusinessCard({
             className="business-icon-button"
             type="button"
             title="Ver detalhes"
-            aria-label="Ver detalhes do negócio"
+            aria-label="Ver detalhes do negÃ³cio"
             onClick={(event) => {
               event.stopPropagation();
               onOpen(business.id);
@@ -408,8 +441,8 @@ function BusinessCard({
           <button
             className="business-icon-button"
             type="button"
-            title="Mais ações"
-            aria-label="Mais ações do negócio"
+            title="Mais aÃ§Ãµes"
+            aria-label="Mais aÃ§Ãµes do negÃ³cio"
             onClick={(event) => {
               event.stopPropagation();
               setMenuOpen((current) => !current);
@@ -422,7 +455,7 @@ function BusinessCard({
       {menuOpen && (
         <div className="business-card-menu" onClick={(event) => event.stopPropagation()}>
           <button type="button" onClick={beginTitleEdit}>
-            <Pencil size={14} /> Editar título
+            <Pencil size={14} /> Editar tÃ­tulo
           </button>
           <button
             type="button"
@@ -451,6 +484,8 @@ function BusinessCard({
 interface BusinessDetailModalProps {
   businessId: string;
   initialTab: DetailTab;
+  stages: BusinessStageDefinition[];
+  stageIndex: Record<BusinessStage, number>;
   onClose: () => void;
   onBusinessChange: (business: Business) => void;
   onMove: (business: Business, stage: BusinessStage) => Promise<void>;
@@ -461,6 +496,8 @@ interface BusinessDetailModalProps {
 function BusinessDetailModal({
   businessId,
   initialTab,
+  stages,
+  stageIndex,
   onClose,
   onBusinessChange,
   onMove,
@@ -476,6 +513,7 @@ function BusinessDetailModal({
   const [draft, setDraft] = useState({
     titulo: "",
     prioridade: 2 as 1 | 2 | 3,
+    abertura: "",
     responsavel: "",
     prazo_interno: "",
     anotacoes: "",
@@ -485,6 +523,7 @@ function BusinessDetailModal({
     ? (
       draft.titulo !== detail.titulo
       || draft.prioridade !== detail.prioridade
+      || draft.abertura !== toDateTimeLocalValue(detail.abertura)
       || draft.responsavel !== detail.responsavel
       || draft.prazo_interno !== detail.prazo_interno
       || draft.anotacoes !== detail.anotacoes
@@ -493,7 +532,7 @@ function BusinessDetailModal({
     : false;
   const requestClose = useCallback(() => {
     if (busy) return;
-    if (hasPendingChanges && !window.confirm("Descartar as alterações não salvas?")) return;
+    if (hasPendingChanges && !window.confirm("Descartar as alteraÃ§Ãµes nÃ£o salvas?")) return;
     onClose();
   }, [busy, hasPendingChanges, onClose]);
 
@@ -505,13 +544,14 @@ function BusinessDetailModal({
       setDraft({
         titulo: loaded.titulo,
         prioridade: loaded.prioridade,
+        abertura: toDateTimeLocalValue(loaded.abertura),
         responsavel: loaded.responsavel,
         prazo_interno: loaded.prazo_interno,
         anotacoes: loaded.anotacoes,
         decisao_comercial: loaded.decisao_comercial,
       });
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível carregar o negócio.");
+      setError(reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel carregar o negÃ³cio.");
     }
   }, [businessId]);
 
@@ -540,6 +580,7 @@ function BusinessDetailModal({
       const updated = await updateBusiness(detail.id, {
         titulo_interno: draft.titulo,
         prioridade: draft.prioridade,
+        abertura: draft.abertura,
         responsavel: draft.responsavel,
         prazo_interno: draft.prazo_interno,
         anotacoes: draft.anotacoes,
@@ -548,7 +589,7 @@ function BusinessDetailModal({
       onBusinessChange(updated);
       await loadDetail();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível salvar.");
+      setError(reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel salvar.");
     } finally {
       setBusy(false);
     }
@@ -563,7 +604,7 @@ function BusinessDetailModal({
       setDetail(updated);
       onBusinessChange(updated);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível atualizar a tarefa.");
+      setError(reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel atualizar a tarefa.");
     } finally {
       setBusy(false);
     }
@@ -578,7 +619,7 @@ function BusinessDetailModal({
       onBusinessChange(updated);
       setNewTask("");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível criar a tarefa.");
+      setError(reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel criar a tarefa.");
     } finally {
       setBusy(false);
     }
@@ -589,7 +630,7 @@ function BusinessDetailModal({
     try {
       await navigator.clipboard.writeText(url);
     } catch {
-      window.prompt("Link do negócio", url);
+      window.prompt("Link do negÃ³cio", url);
     }
   };
 
@@ -604,12 +645,12 @@ function BusinessDetailModal({
         className={`business-detail-modal${fullscreen ? " is-fullscreen" : ""}`}
         role="dialog"
         aria-modal="true"
-        aria-label="Detalhes do negócio"
+        aria-label="Detalhes do negÃ³cio"
       >
         <header className="business-detail-header">
           <div>
-            <span>Negócio #{businessId}</span>
-            <strong>{detail?.numero_compra || "Carregando contratação"}</strong>
+            <span>NegÃ³cio #{businessId}</span>
+            <strong>{detail?.numero_compra || "Carregando contrataÃ§Ã£o"}</strong>
           </div>
           <div className="business-detail-top-actions">
             <button
@@ -627,7 +668,7 @@ function BusinessDetailModal({
                   setDetail({ ...detail, ...updated });
                   onBusinessChange(updated);
                 } catch (reason) {
-                  setError(reason instanceof Error ? reason.message : "Não foi possível atualizar o favorito.");
+                  setError(reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel atualizar o favorito.");
                 }
               }}
             >
@@ -676,18 +717,18 @@ function BusinessDetailModal({
           <>
             <div className="business-identification-strip">
               <span><strong>Fonte</strong>{detail.plataforma}</span>
-              <span><strong>Modalidade</strong>{detail.modalidade || "Não informada"}</span>
-              <span><strong>Compra</strong>{detail.numero_compra || "Não informada"}</span>
-              <span><strong>Processo</strong>{detail.processo || "Não informado"}</span>
-              <span><strong>Comprador</strong>{detail.orgao || "Não informado"}</span>
+              <span><strong>Modalidade</strong>{detail.modalidade || "NÃ£o informada"}</span>
+              <span><strong>Compra</strong>{detail.numero_compra || "NÃ£o informada"}</span>
+              <span><strong>Processo</strong>{detail.processo || "NÃ£o informado"}</span>
+              <span><strong>Comprador</strong>{detail.orgao || "NÃ£o informado"}</span>
             </div>
             <div className="business-detail-title">
-              <span>Título oficial</span>
-              <h2>{detail.titulo_oficial || "Objeto não informado"}</h2>
+              <span>TÃ­tulo oficial</span>
+              <h2>{detail.titulo_oficial || "Objeto nÃ£o informado"}</h2>
             </div>
 
-            <div className="business-stage-selector" aria-label="Etapa do negócio">
-              {STAGES.map((stage) => (
+            <div className="business-stage-selector" aria-label="Etapa do negÃ³cio">
+              {stages.map((stage) => (
                 <button
                   key={stage.id}
                   type="button"
@@ -700,13 +741,13 @@ function BusinessDetailModal({
                       await onMove(detail, stage.id);
                       await loadDetail();
                     } catch (reason) {
-                      setError(reason instanceof Error ? reason.message : "Não foi possível alterar a etapa.");
+                      setError(reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel alterar a etapa.");
                     } finally {
                       setBusy(false);
                     }
                   }}
                 >
-                  <span>{STAGE_INDEX[stage.id] + 1}</span>
+                  <span>{(stageIndex[stage.id] ?? 0) + 1}</span>
                   {stage.label}
                 </button>
               ))}
@@ -728,7 +769,7 @@ function BusinessDetailModal({
               </button>
               <button type="button" className="business-operation" onClick={() => setTab("documentos")}>
                 <FileText size={19} />
-                <span><strong>Documentação</strong><small>Arquivos internos</small></span>
+                <span><strong>DocumentaÃ§Ã£o</strong><small>Arquivos internos</small></span>
               </button>
               <button type="button" className="business-operation" onClick={() => setTab("arquivos")}>
                 <FileArchive size={19} />
@@ -736,14 +777,14 @@ function BusinessDetailModal({
               </button>
             </div>
 
-            <nav className="business-detail-tabs" aria-label="Conteúdo do negócio">
+            <nav className="business-detail-tabs" aria-label="ConteÃºdo do negÃ³cio">
               {([
                 ["dados", "Dados"],
                 ["itens", `Itens (${detail.itens.length})`],
                 ["tarefas", "Checklist"],
-                ["documentos", "Documentação"],
+                ["documentos", "DocumentaÃ§Ã£o"],
                 ["arquivos", "Edital"],
-                ["historico", "Histórico"],
+                ["historico", "HistÃ³rico"],
               ] as Array<[DetailTab, string]>).map(([id, label]) => (
                 <button
                   key={id}
@@ -760,12 +801,12 @@ function BusinessDetailModal({
               {tab === "dados" && (
                 <div className="business-detail-grid">
                   <label className="business-field is-wide">
-                    Título interno
+                    TÃ­tulo interno
                     <input
                       value={draft.titulo}
                       onChange={(event) => setDraft({ ...draft, titulo: event.target.value })}
                     />
-                    <small>O título oficial acima permanece inalterado.</small>
+                    <small>O tÃ­tulo oficial acima permanece inalterado.</small>
                   </label>
                   <label className="business-field">
                     Prioridade
@@ -777,16 +818,16 @@ function BusinessDetailModal({
                       })}
                     >
                       <option value="1">Alta</option>
-                      <option value="2">Média</option>
+                      <option value="2">MÃ©dia</option>
                       <option value="3">Baixa</option>
                     </select>
                   </label>
                   <label className="business-field">
-                    Responsável
+                    ResponsÃ¡vel
                     <input
                       value={draft.responsavel}
                       onChange={(event) => setDraft({ ...draft, responsavel: event.target.value })}
-                      placeholder="Nome do responsável"
+                      placeholder="Nome do responsÃ¡vel"
                     />
                   </label>
                   <label className="business-field">
@@ -799,21 +840,25 @@ function BusinessDetailModal({
                   </label>
                   <div className="business-readonly-field">
                     <strong>Local</strong>
-                    <span>{[detail.municipio, detail.uf].filter(Boolean).join(" / ") || "Não informado"}</span>
+                    <span>{[detail.municipio, detail.uf].filter(Boolean).join(" / ") || "NÃ£o informado"}</span>
                   </div>
-                  <div className="business-readonly-field">
-                    <strong>Abertura oficial</strong>
-                    <span>{formatDateTime(detail.abertura)}</span>
-                  </div>
+                  <label className="business-field">
+                    Abertura oficial
+                    <input
+                      type="datetime-local"
+                      value={draft.abertura}
+                      onChange={(event) => setDraft({ ...draft, abertura: event.target.value })}
+                    />
+                  </label>
                   <label className="business-field is-wide">
-                    Anotações
+                    AnotaÃ§Ãµes
                     <textarea
                       value={draft.anotacoes}
                       onChange={(event) => setDraft({ ...draft, anotacoes: event.target.value })}
                     />
                   </label>
                   <label className="business-field is-wide">
-                    Decisão comercial
+                    DecisÃ£o comercial
                     <textarea
                       value={draft.decisao_comercial}
                       onChange={(event) => setDraft({ ...draft, decisao_comercial: event.target.value })}
@@ -822,7 +867,7 @@ function BusinessDetailModal({
                   <div className="business-detail-save is-wide">
                     <button className="button button-primary" type="button" disabled={busy} onClick={save}>
                       {busy ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />}
-                      Salvar alterações
+                      Salvar alteraÃ§Ãµes
                     </button>
                   </div>
                 </div>
@@ -833,7 +878,7 @@ function BusinessDetailModal({
                   <div className="business-checklist-heading">
                     <div>
                       <strong>Checklist operacional</strong>
-                      <span>{detail.checklist_concluido} de {detail.checklist_total} concluídas</span>
+                      <span>{detail.checklist_concluido} de {detail.checklist_total} concluÃ­das</span>
                     </div>
                     <div className="business-progress-track">
                       <span
@@ -884,16 +929,16 @@ function BusinessDetailModal({
                   {detail.itens.length ? detail.itens.map((item) => (
                     <article key={item.id}>
                       <header>
-                        <span>Item {item.numero}{item.lote ? ` · Lote ${item.lote}` : ""}</span>
+                        <span>Item {item.numero}{item.lote ? ` Â· Lote ${item.lote}` : ""}</span>
                         {item.situacao && <em>{item.situacao}</em>}
                       </header>
                       <p>{item.descricao}</p>
                       <dl>
-                        <div><dt>Quantidade</dt><dd>{item.quantidade || "Não informada"}</dd></div>
+                        <div><dt>Quantidade</dt><dd>{item.quantidade || "NÃ£o informada"}</dd></div>
                         <div><dt>Unidade</dt><dd>{item.unidade || "UND"}</dd></div>
-                        <div><dt>Valor unitário</dt><dd>{formatCurrency(item.valor_unitario_estimado)}</dd></div>
+                        <div><dt>Valor unitÃ¡rio</dt><dd>{formatCurrency(item.valor_unitario_estimado)}</dd></div>
                         <div><dt>Valor total</dt><dd>{formatCurrency(item.valor_total_estimado)}</dd></div>
-                        <div><dt>Critério</dt><dd>{item.criterio_julgamento || "Não informado"}</dd></div>
+                        <div><dt>CritÃ©rio</dt><dd>{item.criterio_julgamento || "NÃ£o informado"}</dd></div>
                       </dl>
                     </article>
                   )) : (
@@ -910,7 +955,7 @@ function BusinessDetailModal({
                 <div className="business-empty-detail">
                   <FileText size={26} />
                   <strong>Nenhum documento interno vinculado</strong>
-                  <span>Os arquivos oficiais permanecem disponíveis na aba Edital.</span>
+                  <span>Os arquivos oficiais permanecem disponÃ­veis na aba Edital.</span>
                 </div>
               )}
 
@@ -935,7 +980,7 @@ function BusinessDetailModal({
                     <div className="business-empty-detail">
                       <FileArchive size={26} />
                       <strong>Nenhum arquivo retornado</strong>
-                      <span>A fonte oficial pode ser acessada pelo botão Acessar.</span>
+                      <span>A fonte oficial pode ser acessada pelo botÃ£o Acessar.</span>
                     </div>
                   )}
                 </div>
@@ -950,7 +995,7 @@ function BusinessDetailModal({
                         <strong>{entry.evento}</strong>
                         {(entry.etapa_anterior || entry.etapa_nova) && (
                           <small>
-                            {entry.etapa_anterior || "Início"} <ChevronRight size={12} /> {entry.etapa_nova}
+                            {entry.etapa_anterior || "InÃ­cio"} <ChevronRight size={12} /> {entry.etapa_nova}
                           </small>
                         )}
                         {entry.justificativa && <p>{entry.justificativa}</p>}
@@ -990,11 +1035,11 @@ function BusinessDetailModal({
 
 interface BusinessBlockProps {
   responsibles: Responsible[];
-  onOpenClassifications: () => void;
 }
 
-export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessBlockProps) {
+export function BusinessBlock({ responsibles }: BusinessBlockProps) {
   const [businesses, setBusinesses] = useState<Business[]>([]);
+  const [stages, setStages] = useState<BusinessStageDefinition[]>(DEFAULT_STAGES);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -1007,6 +1052,9 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
   const [importBusy, setImportBusy] = useState(false);
   const [detailId, setDetailId] = useState("");
   const [detailTab, setDetailTab] = useState<DetailTab>("dados");
+  const stageIndex = useMemo(() => Object.fromEntries(
+    stages.map((stage, index) => [stage.id, index]),
+  ) as Record<BusinessStage, number>, [stages]);
 
   const companies = useMemo(() => Array.from(new Set(
     [
@@ -1023,9 +1071,14 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
     setLoading(true);
     setError("");
     try {
-      setBusinesses(await listBusinesses());
+      const [loadedBusinesses, loadedStages] = await Promise.all([
+        listBusinesses(),
+        listBusinessStages(),
+      ]);
+      setBusinesses(loadedBusinesses);
+      setStages(loadedStages.length ? loadedStages : DEFAULT_STAGES);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível carregar os negócios.");
+      setError(reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel carregar os negÃ³cios.");
     } finally {
       setLoading(false);
     }
@@ -1114,7 +1167,7 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
       const updated = await updateBusiness(business.id, { titulo_interno: title });
       replaceBusiness(updated);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Não foi possível alterar o título.";
+      const message = reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel alterar o tÃ­tulo.";
       setError(message);
       throw reason;
     }
@@ -1126,7 +1179,19 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
       const updated = await updateBusiness(business.id, { position_number: position });
       replaceBusiness(updated);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Não foi possível alterar a posição.";
+      const message = reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel alterar a posiÃ§Ã£o.";
+      setError(message);
+      throw reason;
+    }
+  };
+
+  const changeBusinessOpening = async (business: Business, opening: string) => {
+    setError("");
+    try {
+      const updated = await updateBusiness(business.id, { abertura: opening });
+      replaceBusiness(updated);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel alterar a abertura.";
       setError(message);
       throw reason;
     }
@@ -1134,10 +1199,12 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
 
   const changeStage = async (business: Business, stage: BusinessStage) => {
     if (business.etapa === stage) return;
-    const sensitive = stage === "contrato" || STAGE_INDEX[stage] < STAGE_INDEX[business.etapa];
+    const currentIndex = stageIndex[business.etapa] ?? stageIndex[stage] ?? 0;
+    const targetIndex = stageIndex[stage] ?? currentIndex;
+    const sensitive = stage === "contrato" || targetIndex < currentIndex;
     let justification = "";
     if (sensitive) {
-      justification = window.prompt("Informe a justificativa desta movimentação:")?.trim() || "";
+      justification = window.prompt("Informe a justificativa desta movimentaÃ§Ã£o:")?.trim() || "";
       if (!justification) return;
     }
     const previous = business;
@@ -1146,31 +1213,60 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
       replaceBusiness(await moveBusiness(business.id, stage, justification));
     } catch (reason) {
       replaceBusiness(previous);
-      const message = reason instanceof Error ? reason.message : "Não foi possível mover o negócio.";
+      const message = reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel mover o negÃ³cio.";
       setError(`${message} A etapa anterior foi restaurada.`);
       throw reason;
     }
   };
 
-  const archiveBusiness = async (business: Business) => {
-    if (!window.confirm(`Arquivar o negócio "${shortText(business.titulo, 60)}"?`)) return;
+  const addStage = async () => {
+    const label = window.prompt("Informe o titulo da nova coluna:");
+    if (label === null) return;
+    const title = label.trim();
+    if (!title) return;
+    setError("");
     try {
-      await updateBusiness(business.id, { arquivado: true, justificativa: "Arquivado pelo usuário" });
+      setStages(await createBusinessStage(title));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel criar a coluna.");
+    }
+  };
+
+  const renameStage = async (stage: BusinessStageDefinition) => {
+    const label = window.prompt("Editar titulo da coluna:", stage.label);
+    if (label === null) return;
+    const title = label.trim();
+    if (!title || title === stage.label) return;
+    setError("");
+    try {
+      setStages(await updateBusinessStage(stage.id, {
+        label: title,
+        description: stage.description,
+      }));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel renomear a coluna.");
+    }
+  };
+
+  const archiveBusiness = async (business: Business) => {
+    if (!window.confirm(`Arquivar o negÃ³cio "${shortText(business.titulo, 60)}"?`)) return;
+    try {
+      await updateBusiness(business.id, { arquivado: true, justificativa: "Arquivado pelo usuÃ¡rio" });
       setBusinesses((current) => current.filter((item) => item.id !== business.id));
       if (detailId === business.id) setDetailId("");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível arquivar.");
+      setError(reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel arquivar.");
     }
   };
 
   const removeBusiness = async (business: Business) => {
-    if (!window.confirm("Remover este negócio da visão ativa? O histórico será preservado.")) return;
+    if (!window.confirm("Remover este negÃ³cio da visÃ£o ativa? O histÃ³rico serÃ¡ preservado.")) return;
     try {
-      await updateBusiness(business.id, { removido: true, justificativa: "Removido pelo usuário" });
+      await updateBusiness(business.id, { removido: true, justificativa: "Removido pelo usuÃ¡rio" });
       setBusinesses((current) => current.filter((item) => item.id !== business.id));
       if (detailId === business.id) setDetailId("");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível remover.");
+      setError(reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel remover.");
     }
   };
 
@@ -1188,7 +1284,7 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
       setImportLink("");
       setImportOpen(false);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível adicionar a oportunidade.");
+      setError(reason instanceof Error ? reason.message : "NÃ£o foi possÃ­vel adicionar a oportunidade.");
     } finally {
       setImportBusy(false);
     }
@@ -1216,23 +1312,23 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
           </button>
           <label className="business-sort">
             <ArrowDownUp size={16} aria-hidden="true" />
-            <select value={sort} aria-label="Ordenar negócios" onChange={(event) => setSort(event.target.value)}>
-              <option value="updated">Última atualização</option>
+            <select value={sort} aria-label="Ordenar negÃ³cios" onChange={(event) => setSort(event.target.value)}>
+              <option value="updated">Ãšltima atualizaÃ§Ã£o</option>
               <option value="newest">Mais recentes</option>
               <option value="oldest">Mais antigos</option>
-              <option value="opening-near">Abertura mais próxima</option>
+              <option value="opening-near">Abertura mais prÃ³xima</option>
               <option value="opening-far">Abertura mais distante</option>
               <option value="priority">Maior prioridade</option>
             </select>
           </label>
         </div>
         <div className="business-toolbar-actions">
-          <div className="business-view-switcher" aria-label="Modo de visualização">
+          <div className="business-view-switcher" aria-label="Modo de visualizaÃ§Ã£o">
             <button
               type="button"
               className={view === "kanban" ? "is-active" : ""}
               title="Kanban"
-              aria-label="Visualização Kanban"
+              aria-label="VisualizaÃ§Ã£o Kanban"
               onClick={() => setView("kanban")}
             >
               <Grid3X3 size={17} />
@@ -1241,7 +1337,7 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
               type="button"
               className={view === "list" ? "is-active" : ""}
               title="Lista"
-              aria-label="Visualização em lista"
+              aria-label="VisualizaÃ§Ã£o em lista"
               onClick={() => setView("list")}
             >
               <List size={17} />
@@ -1250,12 +1346,15 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
               type="button"
               className={view === "table" ? "is-active" : ""}
               title="Tabela compacta"
-              aria-label="Visualização em tabela"
+              aria-label="VisualizaÃ§Ã£o em tabela"
               onClick={() => setView("table")}
             >
               <Table2 size={17} />
             </button>
           </div>
+          <button className="button button-secondary" type="button" onClick={() => void addStage()}>
+            <Plus size={17} /> Nova coluna
+          </button>
           <button className="button button-primary" type="button" onClick={() => setImportOpen(true)}>
             <Plus size={17} /> Adicionar
           </button>
@@ -1270,7 +1369,7 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
               <Search size={16} />
               <input
                 value={filters.keyword}
-                placeholder="Objeto, órgão, processo..."
+                placeholder="Objeto, Ã³rgÃ£o, processo..."
                 onChange={(event) => setFilters({ ...filters, keyword: event.target.value })}
               />
             </div>
@@ -1315,7 +1414,7 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
             Etapa
             <select value={filters.etapa} onChange={(event) => setFilters({ ...filters, etapa: event.target.value })}>
               <option value="">Todas</option>
-              {STAGES.map((stage) => <option key={stage.id} value={stage.id}>{stage.label}</option>)}
+              {stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.label}</option>)}
             </select>
           </label>
           <label>
@@ -1367,12 +1466,20 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
       {loading ? (
         <div className="business-loading">
           <LoaderCircle className="spin" size={22} />
-          Carregando negócios...
+          Carregando negÃ³cios...
         </div>
       ) : view === "kanban" ? (
         <div className="business-kanban">
-          {STAGES.map((stage) => {
-            const stageBusinesses = filtered.filter((business) => business.etapa === stage.id);
+          {stages.map((stage) => {
+            const stageBusinesses = filtered
+              .filter((business) => business.etapa === stage.id)
+              .sort((a, b) => {
+                const openingOrder = openingSortValue(a.abertura) - openingSortValue(b.abertura);
+                if (openingOrder !== 0) return openingOrder;
+                const positionOrder = positionSortValue(a.position_number) - positionSortValue(b.position_number);
+                if (positionOrder !== 0) return positionOrder;
+                return (parseDate(b.atualizado_em)?.getTime() || 0) - (parseDate(a.atualizado_em)?.getTime() || 0);
+              });
             return (
               <section
                 key={stage.id}
@@ -1390,20 +1497,24 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
               >
                 <header>
                   <div>
-                    <h2>{stage.label}</h2>
+                    <h2>
+                      {stage.label}
+                      <button
+                        className="business-column-title-edit"
+                        type="button"
+                        title="Editar titulo da coluna"
+                        aria-label={`Editar titulo da coluna ${stage.label}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void renameStage(stage);
+                        }}
+                      >
+                        <Pencil size={12} />
+                      </button>
+                    </h2>
                     <p>{stage.description}</p>
                   </div>
                   <span>{stageBusinesses.length}</span>
-                  {stage.id === "classificacao" ? (
-                    <button
-                      className="business-classification-button"
-                      type="button"
-                      onClick={onOpenClassifications}
-                      aria-label="Visualizar classificações por portal"
-                    >
-                      <Eye size={15} /> Visualizar classificações
-                    </button>
-                  ) : null}
                 </header>
                 <div className="business-column-scroll">
                   {stageBusinesses.length ? stageBusinesses.map((business) => (
@@ -1416,13 +1527,14 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
                         setDetailId(id);
                       }}
                       onPositionChange={changeBusinessPosition}
+                      onOpeningChange={changeBusinessOpening}
                       onArchive={(item) => void archiveBusiness(item)}
                       onRemove={(item) => void removeBusiness(item)}
                     />
                   )) : (
                     <div className="business-column-empty">
                       <ClipboardList size={22} />
-                      <span>Nenhum negócio nesta etapa</span>
+                      <span>Nenhum negÃ³cio nesta etapa</span>
                     </div>
                   )}
                 </div>
@@ -1445,14 +1557,14 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
               <span className={`business-list-priority priority-${business.prioridade}`} />
               <span>
                 <strong>{business.titulo}</strong>
-                <small>{business.orgao} · {[business.municipio, business.uf].filter(Boolean).join(" / ")}</small>
+                <small>{business.orgao} Â· {[business.municipio, business.uf].filter(Boolean).join(" / ")}</small>
               </span>
-              <em>{STAGES.find((stage) => stage.id === business.etapa)?.label}</em>
+              <em>{stages.find((stage) => stage.id === business.etapa)?.label || business.etapa}</em>
               <span>{openingLabel(business.abertura)}</span>
               <ChevronRight size={18} />
             </button>
           ))}
-          {!filtered.length && <div className="business-empty-view">Nenhum negócio corresponde aos filtros.</div>}
+          {!filtered.length && <div className="business-empty-view">Nenhum negÃ³cio corresponde aos filtros.</div>}
         </div>
       ) : (
         <div className="business-table-wrap">
@@ -1461,7 +1573,7 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
               <tr>
                 <th>Compra</th>
                 <th>Objeto</th>
-                <th>Órgão</th>
+                <th>Ã“rgÃ£o</th>
                 <th>Etapa</th>
                 <th>Abertura</th>
                 <th>Checklist</th>
@@ -1483,14 +1595,14 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
                   <td>{business.numero_compra || `${business.ano}/${business.sequencial}`}</td>
                   <td title={business.titulo_oficial}>{shortText(business.titulo, 90)}</td>
                   <td>{business.orgao}</td>
-                  <td>{STAGES.find((stage) => stage.id === business.etapa)?.label}</td>
+                  <td>{stages.find((stage) => stage.id === business.etapa)?.label || business.etapa}</td>
                   <td>{formatDateTime(business.abertura)}</td>
                   <td>{business.checklist_concluido}/{business.checklist_total}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {!filtered.length && <div className="business-empty-view">Nenhum negócio corresponde aos filtros.</div>}
+          {!filtered.length && <div className="business-empty-view">Nenhum negÃ³cio corresponde aos filtros.</div>}
         </div>
       )}
 
@@ -1501,7 +1613,7 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
         onClose={() => setImportOpen(false)}
       >
         <div className="business-import-form">
-          <p>Informe o link público da contratação. Os dados serão consultados diretamente na API oficial do PNCP.</p>
+          <p>Informe o link pÃºblico da contrataÃ§Ã£o. Os dados serÃ£o consultados diretamente na API oficial do PNCP.</p>
           <label>
             Empresa
             <select value={selectedCompany} onChange={(event) => setSelectedCompany(event.target.value)}>
@@ -1533,6 +1645,8 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
         <BusinessDetailModal
           businessId={detailId}
           initialTab={detailTab}
+          stages={stages}
+          stageIndex={stageIndex}
           onClose={() => {
             setDetailId("");
             if (window.location.hash.startsWith("#negocio-")) history.replaceState(null, "", window.location.pathname);

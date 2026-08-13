@@ -331,12 +331,14 @@ export interface UiMessage {
   text: string;
 }
 
-export type BusinessStage =
-  | "oportunidade"
-  | "qualificacao"
-  | "disputa"
-  | "classificacao"
-  | "contrato";
+export type BusinessStage = string;
+
+export interface BusinessStageDefinition {
+  id: BusinessStage;
+  label: string;
+  description: string;
+  position: number;
+}
 
 export interface Business {
   id: string;

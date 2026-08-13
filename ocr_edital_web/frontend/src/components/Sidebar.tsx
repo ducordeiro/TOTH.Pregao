@@ -1,7 +1,7 @@
-import { BookOpen, BriefcaseBusiness, ClipboardList, FileSearch, FileText } from "lucide-react";
+import { BookOpen, BriefcaseBusiness, ClipboardList, Columns3, FileSearch, FileText } from "lucide-react";
 import tothLogo from "../assets/toth-logo.png";
 
-export type ActiveBlock = "search" | "proposal" | "catalog" | "business" | "structure";
+export type ActiveBlock = "search" | "proposal" | "catalog" | "business" | "structure" | "classification";
 
 interface SidebarProps {
   active: ActiveBlock;
@@ -73,6 +73,18 @@ export function Sidebar({ active, onChange }: SidebarProps) {
           <span className="block-nav-copy">
             <strong>Bloco 5</strong>
             <small>Estrutura</small>
+          </span>
+        </button>
+        <button
+          className={`block-nav-item${active === "classification" ? " is-active" : ""}`}
+          type="button"
+          onClick={() => onChange("classification")}
+        >
+          <span className="block-nav-number">06</span>
+          <Columns3 size={18} aria-hidden="true" />
+          <span className="block-nav-copy">
+            <strong>Bloco 6</strong>
+            <small>ClassificaÃ§Ãµes</small>
           </span>
         </button>
       </nav>

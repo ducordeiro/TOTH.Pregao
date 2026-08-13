@@ -123,8 +123,13 @@ BUSINESS_STAGES = (
     "oportunidade",
     "qualificacao",
     "disputa",
-    "classificacao",
     "contrato",
+)
+DEFAULT_BUSINESS_STAGE_DEFINITIONS = (
+    ("oportunidade", "Oportunidade", "Identificada e em avaliacao inicial"),
+    ("qualificacao", "Qualificacao", "Analise tecnica, comercial e documental"),
+    ("disputa", "Disputa", "Participacao confirmada"),
+    ("contrato", "Contrato", "Formalizacao e execucao"),
 )
 DEFAULT_BUSINESS_TASKS = (
     "Validar objeto da contratação",
@@ -318,6 +323,16 @@ def init_database():
                 UNIQUE (empresa, cnpj_orgao, ano, sequencial)
             );
 
+            CREATE TABLE IF NOT EXISTS negocio_etapas (
+                id TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                position INTEGER NOT NULL DEFAULT 0,
+                system INTEGER NOT NULL DEFAULT 0 CHECK (system IN (0, 1)),
+                criado_em TEXT NOT NULL,
+                atualizado_em TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS negocio_historico (
                 id INTEGER PRIMARY KEY,
                 negocio_id INTEGER NOT NULL REFERENCES negocios(id) ON DELETE CASCADE,
@@ -373,6 +388,8 @@ def init_database():
                 ON negocios (empresa, etapa, arquivado, removido);
             CREATE INDEX IF NOT EXISTS idx_negocios_abertura
                 ON negocios (abertura);
+            CREATE INDEX IF NOT EXISTS idx_negocio_etapas_position
+                ON negocio_etapas (position, id);
             CREATE INDEX IF NOT EXISTS idx_negocio_historico
                 ON negocio_historico (negocio_id, criado_em);
             CREATE INDEX IF NOT EXISTS idx_negocio_tarefas
@@ -381,6 +398,40 @@ def init_database():
                 ON negocio_itens (negocio_id, ordem, id);
             """
         )
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        for position, (stage_id, label, description) in enumerate(DEFAULT_BUSINESS_STAGE_DEFINITIONS, start=1):
+            connection.execute(
+                """
+                INSERT INTO negocio_etapas (
+                    id, label, description, position, system, criado_em, atualizado_em
+                ) VALUES (?, ?, ?, ?, 1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    position = excluded.position,
+                    system = 1
+                """,
+                (stage_id, label, description, position, now, now),
+            )
+        max_position = connection.execute(
+            "SELECT COALESCE(MAX(position), 0) FROM negocio_etapas"
+        ).fetchone()[0]
+        for row in connection.execute(
+            """
+            SELECT DISTINCT etapa FROM negocios
+            WHERE etapa <> ''
+              AND etapa NOT IN (SELECT id FROM negocio_etapas)
+            ORDER BY etapa
+            """
+        ):
+            max_position += 1
+            stage_id = row["etapa"]
+            connection.execute(
+                """
+                INSERT INTO negocio_etapas (
+                    id, label, description, position, system, criado_em, atualizado_em
+                ) VALUES (?, ?, '', ?, 0, ?, ?)
+                """,
+                (stage_id, stage_id.replace("_", " ").replace("-", " ").title(), max_position, now, now),
+            )
         business_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(negocios)")
         }
@@ -2145,6 +2196,98 @@ def business_record(row):
     }
 
 
+def business_stage_record(row):
+    return {
+        "id": row["id"],
+        "label": row["label"],
+        "description": row["description"],
+        "position": int(row["position"] or 0),
+    }
+
+
+def list_business_stages():
+    init_database()
+    with DATABASE_LOCK, database_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM negocio_etapas ORDER BY position, id"
+        ).fetchall()
+    return [business_stage_record(row) for row in rows]
+
+
+def business_stage_ids(connection):
+    return [
+        row["id"]
+        for row in connection.execute(
+            "SELECT id FROM negocio_etapas ORDER BY position, id"
+        ).fetchall()
+    ]
+
+
+def business_stage_slug(label):
+    text = unicodedata.normalize("NFKD", label)
+    text = text.encode("ascii", "ignore").decode("ascii").lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    return text or f"coluna-{uuid.uuid4().hex[:8]}"
+
+
+def create_business_stage(payload):
+    label = compact((payload or {}).get("label"))
+    if not label:
+        raise ValueError("Informe o titulo da coluna.")
+    if len(label) > 80:
+        raise ValueError("O titulo da coluna deve ter ate 80 caracteres.")
+    init_database()
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    with DATABASE_LOCK, database_connection() as connection:
+        base = business_stage_slug(label)
+        stage_id = base
+        suffix = 2
+        while connection.execute(
+            "SELECT 1 FROM negocio_etapas WHERE id = ?", (stage_id,)
+        ).fetchone():
+            stage_id = f"{base}-{suffix}"
+            suffix += 1
+        position = connection.execute(
+            "SELECT COALESCE(MAX(position), 0) + 1 FROM negocio_etapas"
+        ).fetchone()[0]
+        connection.execute(
+            """
+            INSERT INTO negocio_etapas (
+                id, label, description, position, system, criado_em, atualizado_em
+            ) VALUES (?, ?, '', ?, 0, ?, ?)
+            """,
+            (stage_id, label, position, now, now),
+        )
+    return list_business_stages()
+
+
+def update_business_stage(stage_id, payload):
+    stage_id = compact(stage_id).lower()
+    label = compact((payload or {}).get("label"))
+    description = compact((payload or {}).get("description"))
+    if not label:
+        raise ValueError("Informe o titulo da coluna.")
+    if len(label) > 80:
+        raise ValueError("O titulo da coluna deve ter ate 80 caracteres.")
+    init_database()
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    with DATABASE_LOCK, database_connection() as connection:
+        current = connection.execute(
+            "SELECT 1 FROM negocio_etapas WHERE id = ?", (stage_id,)
+        ).fetchone()
+        if not current:
+            raise FileNotFoundError("Coluna nao encontrada.")
+        connection.execute(
+            """
+            UPDATE negocio_etapas
+            SET label = ?, description = ?, atualizado_em = ?
+            WHERE id = ?
+            """,
+            (label, description, now, stage_id),
+        )
+    return list_business_stages()
+
+
 BUSINESS_SELECT = """
     SELECT n.*,
         (SELECT COUNT(*) FROM negocio_tarefas t
@@ -2623,6 +2766,7 @@ def validate_business_update(payload):
         "prioridade",
         "favorito",
         "position_number",
+        "abertura",
         "responsavel",
         "prazo_interno",
         "anotacoes",
@@ -2643,7 +2787,7 @@ def update_business(business_id, payload):
     justification = compact(payload.get("justificativa"))
     classification = None
     requested_stage = compact(changes.get("etapa")).lower() if "etapa" in changes else ""
-    if requested_stage == "classificacao":
+    if requested_stage == "classificacao" and requested_stage in BUSINESS_STAGES:
         with DATABASE_LOCK, database_connection() as connection:
             stage_row = connection.execute(
                 "SELECT etapa FROM negocios WHERE id = ?", (business_id,)
@@ -2661,11 +2805,17 @@ def update_business(business_id, payload):
             raise FileNotFoundError("Negócio não encontrado.")
         if "etapa" in changes:
             stage = compact(changes["etapa"]).lower()
-            if stage not in BUSINESS_STAGES:
+            stage_ids = business_stage_ids(connection)
+            if stage not in stage_ids:
                 raise ValueError("Etapa do negócio inválida.")
             previous = current["etapa"]
             if stage != previous:
-                backward = BUSINESS_STAGES.index(stage) < BUSINESS_STAGES.index(previous)
+                previous_index = (
+                    stage_ids.index(previous)
+                    if previous in stage_ids
+                    else stage_ids.index(stage)
+                )
+                backward = stage_ids.index(stage) < previous_index
                 if (stage == "contrato" or backward) and not justification:
                     raise ValueError("Informe uma justificativa para esta movimentação.")
                 connection.execute(
@@ -2699,7 +2849,7 @@ def update_business(business_id, payload):
             if boolean_field in changes:
                 changes[boolean_field] = 1 if bool(changes[boolean_field]) else 0
         for text_field in (
-            "titulo_interno", "responsavel", "prazo_interno", "anotacoes", "decisao_comercial",
+            "titulo_interno", "abertura", "responsavel", "prazo_interno", "anotacoes", "decisao_comercial",
         ):
             if text_field in changes:
                 changes[text_field] = str(changes[text_field] or "").strip()
@@ -2712,6 +2862,11 @@ def update_business(business_id, payload):
             connection.execute(
                 "UPDATE proposals SET position_number = ?, updated_at = ? WHERE business_id = ?",
                 (changes["position_number"], now, business_id),
+            )
+        if "abertura" in changes:
+            connection.execute(
+                "UPDATE proposals SET opening_at = ?, updated_at = ? WHERE business_id = ?",
+                (changes["abertura"], now, business_id),
             )
         if "arquivado" in changes or "removido" in changes:
             event = "Negócio arquivado" if changes.get("arquivado") else "Negócio removido"
@@ -9499,6 +9654,12 @@ class App(BaseHTTPRequestHandler):
             json_response(self, 200, {"responsaveis": list_responsibles()})
             return
         request_path = urlparse(self.path).path
+        if request_path == "/api/negocios/etapas":
+            try:
+                json_response(self, 200, {"etapas": list_business_stages()})
+            except Exception as exc:
+                business_api_error(self, exc)
+            return
         if request_path == "/api/negocios":
             query = parse_qs(urlparse(self.path).query)
             include_archived = (query.get("arquivados") or ["0"])[0] == "1"
@@ -9507,7 +9668,7 @@ class App(BaseHTTPRequestHandler):
                 200,
                 {
                     "negocios": list_businesses(include_archived),
-                    "etapas": list(BUSINESS_STAGES),
+                    "etapas": list_business_stages(),
                 },
             )
             return
@@ -9669,6 +9830,12 @@ class App(BaseHTTPRequestHandler):
         if request_path == "/api/kanban/columns":
             try:
                 json_response(self, 201, {"column": kanban_store.create_column(DATABASE_PATH, parse_json_body(self))})
+            except Exception as exc:
+                business_api_error(self, exc)
+            return
+        if request_path == "/api/negocios/etapas":
+            try:
+                json_response(self, 201, {"etapas": create_business_stage(parse_json_body(self))})
             except Exception as exc:
                 business_api_error(self, exc)
             return
@@ -9928,6 +10095,17 @@ class App(BaseHTTPRequestHandler):
         if column_match:
             try:
                 json_response(self, 200, {"column": kanban_store.update_column(DATABASE_PATH, column_match.group(1), parse_json_body(self))})
+            except Exception as exc:
+                business_api_error(self, exc)
+            return
+        business_stage_match = re.fullmatch(r"/api/negocios/etapas/([a-z0-9-]+)", request_path)
+        if business_stage_match:
+            try:
+                json_response(
+                    self,
+                    200,
+                    {"etapas": update_business_stage(business_stage_match.group(1), parse_json_body(self))},
+                )
             except Exception as exc:
                 business_api_error(self, exc)
             return

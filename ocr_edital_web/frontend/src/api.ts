@@ -17,6 +17,7 @@ import type {
   KanbanProposalInput,
   BusinessDetail,
   BusinessStage,
+  BusinessStageDefinition,
   Bid,
   OpportunityAnswer,
   OpportunityData,
@@ -309,6 +310,37 @@ export async function listBusinesses(includeArchived = false): Promise<Business[
   return payload.negocios;
 }
 
+export async function listBusinessStages(): Promise<BusinessStageDefinition[]> {
+  const response = await fetch("/api/negocios/etapas", {
+    headers: { Accept: "application/json" },
+  });
+  const payload = await parseJson<{ etapas: BusinessStageDefinition[] }>(response);
+  return payload.etapas;
+}
+
+export async function createBusinessStage(label: string): Promise<BusinessStageDefinition[]> {
+  const response = await fetch("/api/negocios/etapas", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label }),
+  });
+  const payload = await parseJson<{ etapas: BusinessStageDefinition[] }>(response);
+  return payload.etapas;
+}
+
+export async function updateBusinessStage(
+  id: string,
+  update: Partial<Pick<BusinessStageDefinition, "label" | "description">>,
+): Promise<BusinessStageDefinition[]> {
+  const response = await fetch(`/api/negocios/etapas/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
+  const payload = await parseJson<{ etapas: BusinessStageDefinition[] }>(response);
+  return payload.etapas;
+}
+
 export async function getBusiness(id: string): Promise<BusinessDetail> {
   const response = await fetch(`/api/negocios/${encodeURIComponent(id)}`, {
     headers: { Accept: "application/json" },
@@ -344,6 +376,7 @@ export type BusinessUpdate = Partial<Pick<
   | "prioridade"
   | "position_number"
   | "favorito"
+  | "abertura"
   | "responsavel"
   | "prazo_interno"
   | "anotacoes"

@@ -5,9 +5,10 @@ from contextlib import closing
 from urllib.parse import urlparse
 
 DEFAULT_COLUMNS = (
-    "BLL", "BNC", "ComprasBR", "Licitações-e", "Licitanet", "Licita PP",
-    "Licitar Digital", "NovoBBMNet", "Portal de Compras Públicas",
-    "Portal de Compras RS", "SISLOG",
+    "PNCP", "Comprasnet", "BLL", "BNC", "ComprasBR", "Licita\u00e7\u00f5es-e",
+    "Licitanet", "Licita PP", "Licitar Digital", "NovoBBMNet",
+    "Portal de Compras P\u00fablicas", "Portal de Compras RS", "SISLOG",
+    "Outros / PNCP",
 )
 
 FIELDS = (
@@ -75,9 +76,18 @@ def initialize(database_path):
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_proposals_business "
                 "ON proposals(user_id, business_id) WHERE business_id IS NOT NULL"
             )
-            for position, name in enumerate(DEFAULT_COLUMNS, 1):
+            for name in DEFAULT_COLUMNS:
+                exists = connection.execute(
+                    "SELECT 1 FROM kanban_columns WHERE user_id='local' AND lower(name)=lower(?)",
+                    (name,),
+                ).fetchone()
+                if exists:
+                    continue
+                position = connection.execute(
+                    "SELECT COALESCE(MAX(position),0)+1 FROM kanban_columns WHERE user_id='local'"
+                ).fetchone()[0]
                 connection.execute(
-                    "INSERT OR IGNORE INTO kanban_columns(user_id,name,position,created_at,updated_at) VALUES('local',?,?,?,?)",
+                    "INSERT INTO kanban_columns(user_id,name,position,created_at,updated_at) VALUES('local',?,?,?,?)",
                     (name, position, now, now),
                 )
     

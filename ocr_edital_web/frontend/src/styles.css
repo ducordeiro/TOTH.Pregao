@@ -3460,15 +3460,22 @@ input[type="checkbox"] {
 
 /* Bloco 5 - Estrutura */
 .app-shell.is-structure-active,
-.app-shell.is-structure-active .app-content {
+.app-shell.is-structure-active .app-content,
+.app-shell.is-classification-active,
+.app-shell.is-classification-active .app-content {
   background: #101714;
 }
 
-.is-structure-active .app-header {
+.is-structure-active .app-header,
+.is-classification-active .app-header {
   border-color: #33483d;
 }
 
 #structure-workspace {
+  scroll-margin-top: 16px;
+}
+
+#classification-workspace {
   scroll-margin-top: 16px;
 }
 
@@ -3936,8 +3943,32 @@ input[type="checkbox"] {
 }
 
 .business-column > header h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin: 0 0 4px;
   font-size: 15px;
+}
+
+.business-column-title-edit {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #8fa2a8;
+  cursor: pointer;
+  opacity: .72;
+}
+
+.business-column-title-edit:hover,
+.business-column-title-edit:focus-visible {
+  border-color: #50646c;
+  background: #223239;
+  color: #e5edef;
+  opacity: 1;
 }
 
 .business-column > header p {
@@ -4154,6 +4185,29 @@ input[type="checkbox"] {
 .business-card-opening svg {
   flex: 0 0 auto;
   margin-top: 1px;
+}
+
+.business-inline-edit-button {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #8fa2a8;
+  cursor: pointer;
+  opacity: .7;
+}
+
+.business-card:hover .business-inline-edit-button,
+.business-inline-edit-button:focus-visible {
+  border-color: #50646c;
+  background: #223239;
+  color: #e5edef;
+  opacity: 1;
 }
 
 .business-card-org span {
@@ -5175,7 +5229,9 @@ body,
 .app-shell.is-business-active,
 .app-shell.is-business-active .app-content,
 .app-shell.is-structure-active,
-.app-shell.is-structure-active .app-content {
+.app-shell.is-structure-active .app-content,
+.app-shell.is-classification-active,
+.app-shell.is-classification-active .app-content {
   background: var(--brand-background);
 }
 
@@ -5183,7 +5239,8 @@ body,
 .is-search-active .app-header,
 .is-catalog-active .app-header,
 .is-business-active .app-header,
-.is-structure-active .app-header {
+.is-structure-active .app-header,
+.is-classification-active .app-header {
   border-bottom-color: rgb(255 255 255 / 12%);
   background: transparent;
 }
@@ -5524,7 +5581,9 @@ body,
 .app-shell.is-business-active,
 .app-shell.is-business-active .app-content,
 .app-shell.is-structure-active,
-.app-shell.is-structure-active .app-content {
+.app-shell.is-structure-active .app-content,
+.app-shell.is-classification-active,
+.app-shell.is-classification-active .app-content {
   background: var(--brand-background);
   color: var(--text);
 }
@@ -5595,7 +5654,8 @@ body {
 .is-search-active .app-header,
 .is-catalog-active .app-header,
 .is-business-active .app-header,
-.is-structure-active .app-header {
+.is-structure-active .app-header,
+.is-classification-active .app-header {
   border-bottom-color: var(--line);
   background: transparent;
 }
@@ -5692,6 +5752,9 @@ textarea,
 #structure-workspace input,
 #structure-workspace select,
 #structure-workspace textarea,
+#classification-workspace input,
+#classification-workspace select,
+#classification-workspace textarea,
 .proposal-editor input,
 .proposal-editor select,
 .proposal-editor textarea {
@@ -5718,7 +5781,10 @@ textarea:hover,
 #business-workspace textarea:hover,
 #structure-workspace input:hover,
 #structure-workspace select:hover,
-#structure-workspace textarea:hover {
+#structure-workspace textarea:hover,
+#classification-workspace input:hover,
+#classification-workspace select:hover,
+#classification-workspace textarea:hover {
   border-color: rgb(255 138 76 / 42%);
   background: #171925;
   box-shadow: 0 0 0 3px rgb(255 138 76 / 6%);
