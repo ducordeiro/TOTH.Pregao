@@ -69,8 +69,8 @@ export function normalizeMoney(value: string): string | null {
   return cents === null ? null : formatCents(cents);
 }
 
-function parseDecimal(value: string): { coefficient: bigint; scale: number } | null {
-  const normalized = String(value || "").trim().replace(/\./g, "").replace(",", ".");
+function parseDecimal(value: string | number | null): { coefficient: bigint; scale: number } | null {
+  const normalized = String(value ?? "").trim().replace(/\./g, "").replace(",", ".");
   if (!/^\d+(?:\.\d+)?$/.test(normalized)) return null;
   const [integer, decimal = ""] = normalized.split(".");
   return {
@@ -79,7 +79,7 @@ function parseDecimal(value: string): { coefficient: bigint; scale: number } | n
   };
 }
 
-export function calculateItemTotal(quantity: string, unitValue: string): string {
+export function calculateItemTotal(quantity: string | number | null, unitValue: string): string {
   const parsedQuantity = parseDecimal(quantity);
   const unitCents = parseMoneyToCents(unitValue);
   if (!parsedQuantity || unitCents === null) return "";
@@ -113,4 +113,11 @@ export function localIsoDate(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+export function parseLocalDate(value: string): Date {
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value.trim())
+    ? `${value.trim()}T00:00:00`
+    : value;
+  return new Date(normalized);
 }

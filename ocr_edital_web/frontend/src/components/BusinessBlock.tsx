@@ -45,6 +45,7 @@ import type {
   BusinessStage,
   Responsible,
 } from "../types";
+import { parseLocalDate } from "../utils";
 import { Modal } from "./Modal";
 
 const STAGES: Array<{
@@ -110,7 +111,7 @@ const STAGE_INDEX = Object.fromEntries(
 
 function parseDate(value: string) {
   if (!value) return null;
-  const date = new Date(value);
+  const date = parseLocalDate(value);
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
@@ -617,9 +618,11 @@ function BusinessDetailModal({
               className={`business-icon-button${detail?.favorito ? " is-favorite" : ""}`}
               title={detail?.favorito ? "Remover dos favoritos" : "Adicionar aos favoritos"}
               aria-label="Alternar favorito"
+              aria-pressed={Boolean(detail?.favorito)}
               disabled={!detail || busy}
               onClick={async () => {
                 if (!detail) return;
+                setBusy(true);
                 try {
                   const updated = await updateBusiness(detail.id, {
                     favorito: !detail.favorito,
@@ -628,6 +631,8 @@ function BusinessDetailModal({
                   onBusinessChange(updated);
                 } catch (reason) {
                   setError(reason instanceof Error ? reason.message : "Não foi possível atualizar o favorito.");
+                } finally {
+                  setBusy(false);
                 }
               }}
             >

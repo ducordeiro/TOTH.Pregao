@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, ChevronDown, ChevronLeft, ChevronRight, Search, Trash2 } from "lucide-react";
 import { searchBids, searchOnlineBids } from "../api";
 import type { Bid, SearchResponse, UiMessage } from "../types";
-import { localIsoDate, toPncpDate } from "../utils";
+import { localIsoDate, parseLocalDate, toPncpDate } from "../utils";
 import { DateRangePicker } from "./DateRangePicker";
 import { KeywordTagInput } from "./KeywordTagInput";
 import { OpportunityDetailModal } from "./OpportunityDetailModal";
@@ -20,10 +20,6 @@ function defaultDates() {
 }
 
 const PAGE_SIZE = 10;
-
-function hasSearchMatches(payload: SearchResponse) {
-  return (payload.results?.length ?? 0) > 0 || (payload.total ?? 0) > 0;
-}
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "erro desconhecido";
@@ -65,6 +61,7 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
   const defaults = useMemo(defaultDates, []);
   const [startDate, setStartDate] = useState(defaults.start);
   const [endDate, setEndDate] = useState(defaults.end);
+  const [includeMissingEndDate, setIncludeMissingEndDate] = useState(true);
   const [ufs, setUfs] = useState<string[]>([]);
   const [ufMenuOpen, setUfMenuOpen] = useState(false);
   const [keywords, setKeywords] = useState<string[]>([]);
@@ -95,6 +92,7 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
     searchRequestRef.current += 1;
     setStartDate("");
     setEndDate("");
+    setIncludeMissingEndDate(true);
     setUfs([]);
     setUfMenuOpen(false);
     setKeywords([]);
@@ -149,6 +147,7 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
       const params = new URLSearchParams({
         dataInicial: toPncpDate(startDate),
         dataFinal: toPncpDate(endDate),
+        incluirSemDataEncerramento: includeMissingEndDate ? "1" : "0",
         uf: ufs.join(","),
         palavraChave: effectiveKeywords.join(";"),
         tipoObjeto: objectType,
@@ -159,38 +158,7 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
         tamanhoPagina: String(PAGE_SIZE),
         rapido: "1",
       });
-      let payload: SearchResponse;
-      let usedOnlineFallback = false;
-      let fallbackReason: "empty" | "error" | null = null;
-      try {
-        payload = await searchBids(params);
-        if (!hasSearchMatches(payload)) {
-          usedOnlineFallback = true;
-          fallbackReason = "empty";
-          setMessage({
-            kind: "info",
-            text: "Base interna sem resultado para estes filtros; consultando o PNCP online como contingencia.",
-          });
-          payload = await searchOnlineBids(params);
-        }
-      } catch (localError) {
-        usedOnlineFallback = true;
-        fallbackReason = "error";
-        setMessage({
-          kind: "warning",
-          text: "Base interna indisponivel; consultando o PNCP online como contingencia.",
-        });
-        try {
-          payload = await searchOnlineBids(params);
-        } catch (onlineError) {
-          throw new Error(
-            `Base interna indisponivel (${errorMessage(localError)}) e contingencia PNCP falhou (${errorMessage(onlineError)}).`,
-          );
-        }
-      }
-      const maxPolls = usedOnlineFallback ? 90 : 1;
-      for (let poll = 0; poll < maxPolls; poll += 1) {
-        if (requestId !== searchRequestRef.current) return;
+      const applyLocalPayload = (payload: SearchResponse) => {
         const nextResults = payload.results || [];
         const nextPage = payload.pagina || targetPage;
         const nextTotal = payload.total || 0;
@@ -200,35 +168,93 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
         setPage(nextPage);
         setTotal(nextTotal);
         setTotalPages(nextTotalPages);
-        setSearchingAll(usedOnlineFallback && Boolean(payload.searching));
-        setBusy(false);
-        const sourceLabel = usedOnlineFallback ? "PNCP online" : "base interna";
-        setMessage({
-          kind: usedOnlineFallback && payload.searching
-            ? "info"
-            : payload.complete === false
-              ? "warning"
-              : nextResults.length
-                ? "success"
-                : "warning",
-          text: usedOnlineFallback && payload.searching
-            ? `Exibindo ${nextResults.length} edital(is) iniciais do PNCP online. A busca completa continua em segundo plano.`
-            : payload.complete === false
-              ? `Foram encontrados ${nextTotal.toLocaleString("pt-BR")} edital(is), mas a consulta em ${sourceLabel} nao respondeu a todas as paginas. Tente novamente para completar a consulta.`
-              : nextResults.length
-                ? `${nextResults.length} edital(is) nesta pagina, de ${nextTotal.toLocaleString("pt-BR")} encontrado(s) na ${sourceLabel}.`
-                : nextTotal
-                  ? `Nenhum edital desta pagina corresponde aos filtros utilizados na ${sourceLabel}.`
-                  : fallbackReason === "empty"
-                    ? "Base interna e PNCP online nao retornaram editais com estes filtros."
-                    : fallbackReason === "error"
-                      ? "PNCP online nao retornou editais apos falha da base interna."
-                      : "Nenhum edital encontrado com estes filtros na base interna.",
-        });
-        if (!usedOnlineFallback || !payload.searching) break;
-        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      };
+
+      let initialTotal = 0;
+      let localAvailable = false;
+      let localFailure: unknown = null;
+      try {
+        const localPayload = await searchBids(params);
         if (requestId !== searchRequestRef.current) return;
-        payload = await searchOnlineBids(params);
+        applyLocalPayload(localPayload);
+        initialTotal = localPayload.total || 0;
+        localAvailable = true;
+        setBusy(false);
+        setSearchingAll(true);
+        setMessage({
+          kind: "info",
+          text: `Exibindo ${initialTotal.toLocaleString("pt-BR")} edital(is) da base interna. Verificando novas oportunidades no PNCP...`,
+        });
+      } catch (error) {
+        localFailure = error;
+        setSearchingAll(true);
+        setMessage({
+          kind: "warning",
+          text: "Base interna indisponivel. Tentando atualizar os dados pelo PNCP...",
+        });
+      }
+
+      if (targetPage !== 1 && localAvailable) {
+        const pageStart = (targetPage - 1) * PAGE_SIZE;
+        const pageCount = Math.max(0, Math.min(PAGE_SIZE, initialTotal - pageStart));
+        setSearchingAll(false);
+        setMessage({
+          kind: pageCount ? "success" : "warning",
+          text: `${pageCount} edital(is) nesta pagina, de ${initialTotal.toLocaleString("pt-BR")} filtrado(s).`,
+        });
+        return;
+      }
+
+      const reconciliationParams = new URLSearchParams(params);
+      reconciliationParams.set("pagina", "1");
+      reconciliationParams.set("reconciliar", "1");
+      try {
+        let onlinePayload = await searchOnlineBids(reconciliationParams);
+        for (let poll = 0; onlinePayload.searching && poll < 180; poll += 1) {
+          if (requestId !== searchRequestRef.current) return;
+          setSearchingAll(true);
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+          if (requestId !== searchRequestRef.current) return;
+          onlinePayload = await searchOnlineBids(reconciliationParams);
+        }
+        if (requestId !== searchRequestRef.current) return;
+        if (onlinePayload.searching) {
+          setSearchingAll(false);
+          setMessage({
+            kind: "warning",
+            text: "A base interna continua disponível, mas a verificação completa do PNCP excedeu três minutos.",
+          });
+          return;
+        }
+
+        const refreshedPayload = await searchBids(params);
+        if (requestId !== searchRequestRef.current) return;
+        applyLocalPayload(refreshedPayload);
+        const refreshedTotal = refreshedPayload.total || 0;
+        const reconciliation = onlinePayload.reconciliation;
+        const inserted = reconciliation?.inserted ?? Math.max(0, refreshedTotal - initialTotal);
+        const updated = reconciliation?.updated ?? 0;
+        const incomplete = onlinePayload.complete === false
+          || reconciliation?.status === "partial"
+          || reconciliation?.status === "failed";
+        setSearchingAll(false);
+        setMessage({
+          kind: incomplete ? "warning" : refreshedTotal ? "success" : "warning",
+          text: incomplete
+            ? `Base local atualizada com ${inserted} nova(s) oportunidade(s), mas o PNCP nao respondeu integralmente. Uma nova consulta pode completar os dados.`
+            : `${refreshedPayload.results.length} edital(is) nesta pagina, de ${refreshedTotal.toLocaleString("pt-BR")} na base atualizada. ${inserted} nova(s) e ${updated} atualizada(s) nesta verificacao.`,
+        });
+      } catch (onlineError) {
+        setSearchingAll(false);
+        if (!localAvailable) {
+          throw new Error(
+            `Base interna indisponivel (${errorMessage(localFailure)}) e verificacao PNCP falhou (${errorMessage(onlineError)}).`,
+          );
+        }
+        setMessage({
+          kind: "warning",
+          text: `Exibindo ${initialTotal.toLocaleString("pt-BR")} edital(is) locais. A verificacao online falhou: ${errorMessage(onlineError)}.`,
+        });
       }
     } catch (error) {
       setMessage({
@@ -257,7 +283,7 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
 
       <form className="search-form" onSubmit={submit}>
         <div className="period-field">
-          <span className="field-label">Período</span>
+          <span className="field-label">Encerramento das propostas</span>
           <DateRangePicker
             startDate={startDate}
             endDate={endDate}
@@ -267,6 +293,14 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
             }}
           />
           <small>Selecione um período de até 30 dias.</small>
+          <label className="period-missing-date-option">
+            <input
+              type="checkbox"
+              checked={includeMissingEndDate}
+              onChange={(event) => setIncludeMissingEndDate(event.target.checked)}
+            />
+            Incluir publicadas no período sem data de encerramento
+          </label>
         </div>
         <div className="uf-field" ref={ufFieldRef}>
           <span className="field-label">UF</span>
@@ -420,7 +454,9 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
                   <td>{[bid.municipio, bid.uf].filter(Boolean).join(" / ")}</td>
                   <td>{bid.numeroCompra}</td>
                   <td className="description-cell">{bid.objeto}</td>
-                  <td>{bid.encerramento ? new Date(bid.encerramento).toLocaleDateString("pt-BR") : ""}</td>
+                  <td>{bid.encerramento
+                    ? parseLocalDate(bid.encerramento).toLocaleDateString("pt-BR")
+                    : "Não informada"}</td>
                   <td>
                     <button
                       className="button button-small button-secondary"

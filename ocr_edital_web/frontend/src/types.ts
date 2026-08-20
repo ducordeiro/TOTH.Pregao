@@ -41,16 +41,19 @@ export interface Bid {
   linkOrigem?: string;
   abertura: string;
   encerramento: string;
+  dataEncerramentoInformada?: boolean;
   link: string;
 }
 
 export interface ProposalItem {
   lote?: string;
   item: string;
-  quantidade: string;
-  unidade: string;
+  quantidade: string | null;
+  unidade: string | null;
   categoria?: string;
   descricao: string;
+  valor_unitario_estimado?: number | null;
+  valor_total_estimado?: number | null;
   marca: string;
   valor_unitario: string;
   valor_total: string;
@@ -128,6 +131,16 @@ export interface SearchResponse {
   cache_hit?: boolean;
   rate_limited?: boolean;
   timed_out?: boolean;
+  reconciliation?: {
+    run_id?: string;
+    status: "success" | "partial" | "failed";
+    fetched: number;
+    inserted: number;
+    updated: number;
+    skipped: number;
+    failed: number;
+    error?: string;
+  } | null;
 }
 
 export interface OpportunityItem {
@@ -210,6 +223,7 @@ export interface ProposalPreviewResponse {
   preview_url: string;
   expires_at: string;
   cached: boolean;
+  renderer?: "word" | "compatible";
 }
 
 export interface CatalogData {

@@ -310,9 +310,11 @@ export function ProposalBlock({
       setDownload(null);
       setMessage({
         kind: "success",
-        text: response.cached
-          ? "Pré-visualização atualizada."
-          : "Pré-visualização gerada com sucesso.",
+        text: response.renderer === "compatible"
+          ? "Pré-visualização gerada em modo compatível. O arquivo Word final preserva o template selecionado."
+          : response.cached
+            ? "Pré-visualização atualizada."
+            : "Pré-visualização gerada com sucesso.",
       });
     } catch (error) {
       setFilePreview(null);

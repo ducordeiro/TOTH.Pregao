@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import MatchResult, NormalizedOpportunity, OpportunityDocument, OpportunityItem
+from .search_filters import classify_object_text, fold_search_text
 
 
 RADAR_STATUSES = {"new", "triage", "ignored", "selected", "converted_to_proposal"}
@@ -28,6 +29,8 @@ class ETLRepository:
     def connect(self):
         connection = sqlite3.connect(self.database_path, timeout=30)
         connection.row_factory = sqlite3.Row
+        connection.create_function("fold_search_text", 1, fold_search_text, deterministic=True)
+        connection.create_function("classify_object_text", 1, classify_object_text, deterministic=True)
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 30000")
         try:
@@ -346,47 +349,90 @@ class ETLRepository:
             where.append("LTRIM(COALESCE(o.uasg, ''), '0') = LTRIM(?, '0')")
             params.append(str(filters["uasg"]))
         if filters.get("purchase_number"):
-            purchase_number = f"%{filters['purchase_number']}%"
-            where.append("(o.title LIKE ? OR o.process_number LIKE ? OR o.pncp_control_number LIKE ?)")
+            purchase_number = _like_pattern(filters["purchase_number"])
+            where.append(
+                "(fold_search_text(o.title) LIKE ? ESCAPE '\\' "
+                "OR fold_search_text(o.process_number) LIKE ? ESCAPE '\\' "
+                "OR fold_search_text(o.pncp_control_number) LIKE ? ESCAPE '\\')"
+            )
             params.extend([purchase_number, purchase_number, purchase_number])
         if filters.get("published_from"):
             where.append("o.published_at >= ?")
-            params.append(filters["published_from"])
+            params.append(_date_lower_bound(filters["published_from"]))
         if filters.get("published_to"):
             where.append("o.published_at <= ?")
             params.append(filters["published_to"])
         if filters.get("proposal_open"):
             where.append("(o.proposal_end_at IS NULL OR o.proposal_end_at >= ?)")
             params.append(_now())
-        if filters.get("proposal_from"):
-            where.append("o.proposal_end_at >= ?")
-            params.append(filters["proposal_from"])
-        if filters.get("proposal_to"):
-            where.append("o.proposal_end_at <= ?")
-            params.append(filters["proposal_to"])
+        include_missing_proposal_dates = bool(filters.get("include_missing_proposal_dates"))
+        date_union_bounds: tuple[str, Any] | None = None
+        proposal_from = filters.get("proposal_from")
+        proposal_to = filters.get("proposal_to")
+        if proposal_from and proposal_to and include_missing_proposal_dates:
+            lower_bound = _date_lower_bound(proposal_from)
+            if score_min is None and not filters.get("sort_by_score"):
+                date_union_bounds = (lower_bound, proposal_to)
+            else:
+                where.append(
+                    "(((o.proposal_end_at IS NOT NULL AND o.proposal_end_at <> '') "
+                    "AND o.proposal_end_at >= ? AND o.proposal_end_at <= ?) OR "
+                    "((o.proposal_end_at IS NULL OR o.proposal_end_at = '') "
+                    "AND o.published_at >= ? AND o.published_at <= ?))"
+                )
+                params.extend([lower_bound, proposal_to, lower_bound, proposal_to])
+        elif proposal_from:
+            if include_missing_proposal_dates:
+                where.append(
+                    "(o.proposal_end_at >= ? OR "
+                    "((o.proposal_end_at IS NULL OR o.proposal_end_at = '') "
+                    "AND o.published_at >= ?))"
+                )
+                lower_bound = _date_lower_bound(proposal_from)
+                params.extend([lower_bound, lower_bound])
+            else:
+                where.append("o.proposal_end_at >= ?")
+                params.append(_date_lower_bound(proposal_from))
+        if proposal_to and not (proposal_from and include_missing_proposal_dates):
+            if include_missing_proposal_dates:
+                where.append(
+                    "(o.proposal_end_at <= ? OR "
+                    "((o.proposal_end_at IS NULL OR o.proposal_end_at = '') "
+                    "AND o.published_at <= ?))"
+                )
+                params.extend([proposal_to, proposal_to])
+            else:
+                where.append("o.proposal_end_at <= ?")
+                params.append(proposal_to)
         keywords = _as_list(filters.get("keywords"))
         if keywords:
             alternatives = []
             for keyword in keywords:
-                query = f"%{keyword}%"
+                query = _like_pattern(keyword)
                 alternatives.append(
-                    "(o.title LIKE ? OR o.description LIKE ? OR o.buyer_name LIKE ? "
+                    "(fold_search_text(o.title) LIKE ? ESCAPE '\\' "
+                    "OR fold_search_text(o.description) LIKE ? ESCAPE '\\' "
+                    "OR fold_search_text(o.buyer_name) LIKE ? ESCAPE '\\' "
                     "OR EXISTS (SELECT 1 FROM opportunity_items oi "
-                    "WHERE oi.opportunity_id = o.id AND (oi.title LIKE ? OR oi.description LIKE ?)))"
+                    "WHERE oi.opportunity_id = o.id "
+                    "AND (fold_search_text(oi.title) LIKE ? ESCAPE '\\' "
+                    "OR fold_search_text(oi.description) LIKE ? ESCAPE '\\')))"
                 )
                 params.extend([query, query, query, query, query])
             where.append(f"({' OR '.join(alternatives)})")
         object_type = str(filters.get("object_type") or "").lower()
-        if object_type == "material":
+        if object_type in {"material", "servico"}:
+            object_text = "COALESCE(o.title, '') || ' ' || COALESCE(o.description, '')"
+            item_text = "COALESCE(oi.title, '') || ' ' || COALESCE(oi.description, '')"
             where.append(
-                "EXISTS (SELECT 1 FROM opportunity_items oi WHERE oi.opportunity_id = o.id "
-                "AND LOWER(oi.title) LIKE '%material%')"
+                f"(classify_object_text({object_text}) = ? "
+                "OR EXISTS (SELECT 1 FROM opportunity_items oi "
+                f"WHERE oi.opportunity_id = o.id AND classify_object_text({item_text}) = ?) "
+                f"OR (classify_object_text({object_text}) = '' "
+                "AND NOT EXISTS (SELECT 1 FROM opportunity_items oi "
+                f"WHERE oi.opportunity_id = o.id AND classify_object_text({item_text}) <> '')))"
             )
-        elif object_type == "servico":
-            where.append(
-                "EXISTS (SELECT 1 FROM opportunity_items oi WHERE oi.opportunity_id = o.id "
-                "AND (LOWER(oi.title) LIKE '%servi%' OR LOWER(oi.title) LIKE '%service%'))"
-            )
+            params.extend([object_type, object_type])
         if filters.get("q"):
             query = f"%{filters['q']}%"
             where.append(
@@ -396,34 +442,121 @@ class ETLRepository:
         limit = min(max(_integer(filters.get("limit")) or 50, 1), 500)
         offset = max(_integer(filters.get("offset")) or 0, 0)
         clause = f"WHERE {' AND '.join(where)}" if where else ""
-        join_params = [profile_id]
+        use_score_order = score_min is not None or bool(filters.get("sort_by_score"))
+        source_sql = "opportunities o"
+        source_params = list(params)
+        if date_union_bounds is not None:
+            lower_bound, upper_bound = date_union_bounds
+            common_conditions = " AND ".join(where)
+            common_prefix = f"{common_conditions} AND " if common_conditions else ""
+            source_sql = f"""
+                (
+                    SELECT o.id, o.proposal_end_at, o.published_at FROM opportunities o
+                    INDEXED BY idx_opportunities_proposal_end
+                    WHERE {common_prefix}
+                      o.proposal_end_at IS NOT NULL AND o.proposal_end_at <> ''
+                      AND o.proposal_end_at >= ? AND o.proposal_end_at <= ?
+                    UNION ALL
+                    SELECT o.id, o.proposal_end_at, o.published_at FROM opportunities o
+                    INDEXED BY idx_opportunities_missing_end_published
+                    WHERE {common_prefix}
+                      (o.proposal_end_at IS NULL OR o.proposal_end_at = '')
+                      AND o.published_at >= ? AND o.published_at <= ?
+                ) o
+            """
+            source_params = (
+                params + [lower_bound, upper_bound]
+                + params + [lower_bound, upper_bound]
+            )
+            clause = ""
+        match_map: dict[str, sqlite3.Row] = {}
+        window_total: int | None = None
         with self.connect() as connection:
-            total = connection.execute(
-                f"""
-                SELECT COUNT(*) FROM opportunities o
-                LEFT JOIN opportunity_matches m
-                  ON m.opportunity_id = o.id AND m.company_profile_id = ?
-                {clause}
-                """,
-                join_params + params,
-            ).fetchone()[0]
-            rows = connection.execute(
-                f"""
-                SELECT o.*, COALESCE(m.score, 0) AS score, m.reasons_json
-                FROM opportunities o
-                LEFT JOIN opportunity_matches m
-                  ON m.opportunity_id = o.id AND m.company_profile_id = ?
-                {clause}
-                ORDER BY COALESCE(m.score, 0) DESC,
-                         CASE WHEN o.proposal_end_at IS NULL THEN 1 ELSE 0 END,
-                         o.proposal_end_at ASC, o.published_at DESC
-                LIMIT ? OFFSET ?
-                """,
-                join_params + params + [limit, offset],
-            ).fetchall()
+            if use_score_order:
+                rows = connection.execute(
+                    f"""
+                    SELECT o.*, COALESCE(m.score, 0) AS score, m.reasons_json,
+                           COUNT(*) OVER() AS filtered_total
+                    FROM opportunities o
+                    LEFT JOIN opportunity_matches m
+                      ON m.opportunity_id = o.id AND m.company_profile_id = ?
+                    {clause}
+                    ORDER BY COALESCE(m.score, 0) DESC,
+                             CASE WHEN o.proposal_end_at IS NULL THEN 1 ELSE 0 END,
+                             o.proposal_end_at ASC, o.published_at DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    [profile_id] + params + [limit, offset],
+                ).fetchall()
+            else:
+                page_rows = connection.execute(
+                    f"""
+                    SELECT o.*, COUNT(*) OVER() AS filtered_total
+                    FROM {source_sql}
+                    {clause}
+                    ORDER BY CASE WHEN o.proposal_end_at IS NULL THEN 1 ELSE 0 END,
+                             o.proposal_end_at ASC, o.published_at DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    source_params + [limit, offset],
+                ).fetchall()
+                window_total = int(page_rows[0]["filtered_total"]) if page_rows else None
+                if date_union_bounds is not None:
+                    page_ids = [row["id"] for row in page_rows]
+                    full_rows = connection.execute(
+                        f"""
+                        SELECT * FROM opportunities
+                        WHERE id IN ({','.join('?' for _ in page_ids)})
+                        """,
+                        page_ids,
+                    ).fetchall() if page_ids else []
+                    full_map = {row["id"]: row for row in full_rows}
+                    rows = [full_map[opportunity_id] for opportunity_id in page_ids]
+                else:
+                    rows = page_rows
+                opportunity_ids = [row["id"] for row in rows]
+                if opportunity_ids:
+                    matches = connection.execute(
+                        f"""
+                        SELECT opportunity_id, score, reasons_json
+                        FROM opportunity_matches
+                        WHERE company_profile_id = ?
+                          AND opportunity_id IN ({','.join('?' for _ in opportunity_ids)})
+                        """,
+                        [profile_id] + opportunity_ids,
+                    ).fetchall()
+                    match_map = {row["opportunity_id"]: row for row in matches}
+            total = (
+                window_total
+                if window_total is not None
+                else (int(rows[0]["filtered_total"]) if rows else 0)
+            )
+            if not rows and offset:
+                if use_score_order:
+                    total = connection.execute(
+                        f"""
+                        SELECT COUNT(*) FROM opportunities o
+                        LEFT JOIN opportunity_matches m
+                          ON m.opportunity_id = o.id AND m.company_profile_id = ?
+                        {clause}
+                        """,
+                        [profile_id] + params,
+                    ).fetchone()[0]
+                else:
+                    total = connection.execute(
+                        f"SELECT COUNT(*) FROM {source_sql} {clause}",
+                        source_params,
+                    ).fetchone()[0]
         items = [_row(row) for row in rows]
         for item in items:
-            item["reasons"] = _decode_json(item.pop("reasons_json", None), [])
+            item.pop("filtered_total", None)
+            match = match_map.get(item["id"])
+            if match is not None:
+                item["score"] = match["score"]
+                item["reasons"] = _decode_json(match["reasons_json"], [])
+            else:
+                item["score"] = item.get("score", 0)
+                item["reasons"] = _decode_json(item.pop("reasons_json", None), [])
         return {"items": items, "total": total, "limit": limit, "offset": offset}
 
     def get_opportunity(self, opportunity_id: str) -> dict[str, Any] | None:
@@ -769,6 +902,156 @@ class ETLRepository:
             )
         return len(items)
 
+    def persist_opportunity_items_enrichment(
+        self,
+        *,
+        run_id: str,
+        opportunity_id: str,
+        items: list[OpportunityItem],
+        request_url: str,
+        audit_summary: dict[str, Any],
+        external_key: str | None = None,
+        finish_run: bool = True,
+    ) -> dict[str, Any]:
+        if not items:
+            raise ValueError("cannot persist an empty opportunity item enrichment")
+
+        now = _now()
+        raw_json = _json(audit_summary)
+        with self.connect() as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                opportunity = connection.execute(
+                    "SELECT id FROM opportunities WHERE id = ?",
+                    (opportunity_id,),
+                ).fetchone()
+                if opportunity is None:
+                    raise KeyError(f"opportunity not found: {opportunity_id}")
+
+                existing_count = connection.execute(
+                    """
+                    SELECT COUNT(*) FROM opportunity_items
+                    WHERE opportunity_id = ?
+                      AND TRIM(item_number) <> ''
+                      AND TRIM(COALESCE(description, title, '')) <> ''
+                    """,
+                    (opportunity_id,),
+                ).fetchone()[0]
+                if existing_count:
+                    if finish_run:
+                        connection.execute(
+                            """
+                            UPDATE etl_runs SET
+                                status = 'success', finished_at = ?, total_fetched = 0,
+                                total_inserted = 0, total_updated = 0, total_skipped = 1,
+                                total_failed = 0, error_message = NULL, updated_at = ?
+                            WHERE id = ?
+                            """,
+                            (now, now, run_id),
+                        )
+                    connection.commit()
+                    return {"persisted": False, "count": int(existing_count)}
+
+                connection.execute(
+                    "DELETE FROM opportunity_items WHERE opportunity_id = ?",
+                    (opportunity_id,),
+                )
+                self._insert_items(connection, opportunity_id, items, now)
+                connection.execute(
+                    "UPDATE opportunities SET updated_at = ? WHERE id = ?",
+                    (now, opportunity_id),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO source_records (
+                        id, etl_run_id, opportunity_id, source, source_endpoint,
+                        request_url, external_key, raw_payload_json, raw_payload_hash,
+                        status, captured_at, created_at
+                    ) VALUES (?, ?, ?, 'pncp', 'opportunity_item_enrichment',
+                              ?, ?, ?, ?, 'success', ?, ?)
+                    """,
+                    (
+                        uuid.uuid4().hex,
+                        run_id,
+                        opportunity_id,
+                        request_url,
+                        external_key,
+                        raw_json,
+                        _hash_text(raw_json),
+                        now,
+                        now,
+                    ),
+                )
+                if finish_run:
+                    connection.execute(
+                        """
+                        UPDATE etl_runs SET
+                            status = 'success', finished_at = ?, total_fetched = ?,
+                            total_inserted = ?, total_updated = 0, total_skipped = 0,
+                            total_failed = 0, error_message = NULL, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (now, len(items), len(items), now, run_id),
+                    )
+                connection.commit()
+                return {"persisted": True, "count": len(items)}
+            except Exception:
+                connection.rollback()
+                raise
+
+    def record_opportunity_items_enrichment_failure(
+        self,
+        *,
+        run_id: str,
+        opportunity_id: str,
+        request_url: str,
+        audit_summary: dict[str, Any],
+        error_message: str,
+        external_key: str | None = None,
+    ) -> None:
+        now = _now()
+        raw_json = _json(audit_summary)
+        safe_error = str(error_message or "item enrichment failed")[:2000]
+        with self.connect() as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    """
+                    INSERT INTO source_records (
+                        id, etl_run_id, opportunity_id, source, source_endpoint,
+                        request_url, external_key, raw_payload_json, raw_payload_hash,
+                        status, error_message, captured_at, created_at
+                    ) VALUES (?, ?, ?, 'pncp', 'opportunity_item_enrichment',
+                              ?, ?, ?, ?, 'failed', ?, ?, ?)
+                    """,
+                    (
+                        uuid.uuid4().hex,
+                        run_id,
+                        opportunity_id,
+                        request_url,
+                        external_key,
+                        raw_json,
+                        _hash_text(raw_json),
+                        safe_error,
+                        now,
+                        now,
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE etl_runs SET
+                        status = 'failed', finished_at = ?, total_fetched = 0,
+                        total_inserted = 0, total_updated = 0, total_skipped = 0,
+                        total_failed = 1, error_message = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, safe_error, now, run_id),
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
     @staticmethod
     def _insert_opportunity(
         connection: sqlite3.Connection,
@@ -989,6 +1272,13 @@ def _as_list(value: Any) -> list[str]:
     return [str(item).strip() for item in values if str(item).strip()]
 
 
+def _date_lower_bound(value: Any) -> str:
+    text = str(value or "").strip()
+    if len(text) >= 10 and text[4:5] == "-" and text[7:8] == "-":
+        return text[:10]
+    return text
+
+
 def _integer(value: Any) -> int | None:
     try:
         return int(value) if value is not None and value != "" else None
@@ -1001,6 +1291,12 @@ def _float(value: Any) -> float | None:
         return float(value) if value is not None and value != "" else None
     except (TypeError, ValueError):
         return None
+
+
+def _like_pattern(value: Any) -> str:
+    normalized = fold_search_text(value)
+    escaped = normalized.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _checkpoint_limit_covers(previous: Any, requested: int | None) -> bool:

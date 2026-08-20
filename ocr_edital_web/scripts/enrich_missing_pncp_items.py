@@ -1,4 +1,4 @@
-"""Fill missing PNCP items/documents for opportunities already in SQLite."""
+"""Fill missing PNCP items for opportunities already stored in SQLite."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from etl.classifier import OpportunityClassifier
 from etl.connectors import HttpJsonClient, PNCPConnector
 from etl.mappers import PNCPMapper
 from etl.repository import ETLRepository
@@ -33,7 +32,7 @@ def main() -> int:
     parser.add_argument("--request-delay", type=float, default=2.0)
     parser.add_argument("--between-delay", type=float, default=1.0)
     parser.add_argument("--item-max-pages", type=int, default=20)
-    parser.add_argument("--profile-json", default="{}")
+    parser.add_argument("--profile-json", default="{}", help=argparse.SUPPRESS)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -42,7 +41,6 @@ def main() -> int:
     if args.item_max_pages <= 0:
         raise SystemExit("--item-max-pages must be greater than zero")
 
-    profile = _json_object(args.profile_json)
     repository = ETLRepository(args.database)
     repository.initialize()
     connector = PNCPConnector(
@@ -53,11 +51,10 @@ def main() -> int:
         )
     )
     mapper = PNCPMapper()
-    classifier = OpportunityClassifier()
 
     run_id = repository.create_run(
         "pncp",
-        "detail_enrichment",
+        "item_enrichment_batch",
         {
             "date_from": args.date_from,
             "limit": args.limit,
@@ -84,10 +81,8 @@ def main() -> int:
                     repository=repository,
                     connector=connector,
                     mapper=mapper,
-                    classifier=classifier,
                     run_id=run_id,
                     row=row,
-                    profile=profile,
                     item_max_pages=args.item_max_pages,
                     dry_run=args.dry_run,
                 )
@@ -115,7 +110,7 @@ def main() -> int:
                 repository.save_failed_source_record(
                     run_id=run_id,
                     source="pncp",
-                    source_endpoint="detail_enrichment",
+                    source_endpoint="item_enrichment_batch",
                     request_url=str(row["detail_url"] or ""),
                     raw_payload=_row_to_listing(row),
                     error_message=str(exc),
@@ -158,7 +153,7 @@ def _load_missing(repository: ETLRepository, date_from: str, limit: int | None) 
           AND NOT EXISTS (
               SELECT 1 FROM opportunity_items i WHERE i.opportunity_id = o.id
           )
-        ORDER BY o.published_at ASC, o.updated_at ASC, o.id ASC
+        ORDER BY o.published_at DESC, o.updated_at ASC, o.id ASC
     """
     params: list[Any] = [date_from]
     if limit is not None:
@@ -173,82 +168,44 @@ def _enrich_one(
     repository: ETLRepository,
     connector: PNCPConnector,
     mapper: PNCPMapper,
-    classifier: OpportunityClassifier,
     run_id: str,
     row: dict[str, Any],
-    profile: dict[str, Any],
     item_max_pages: int,
     dry_run: bool,
 ) -> tuple[str, int, int, list[str]]:
     cnpj = str(row["source_cnpj"])
     year = int(row["year"])
     sequence = int(row["sequence"])
-    listing = _row_to_listing(row)
-    raw_composite: dict[str, Any] = {
-        "listing": listing,
-        "detail": None,
-        "items": [],
-        "documents": [],
-        "enrichment_errors": [],
-    }
-
     items: list[dict[str, Any]] = []
     item_request_url = str(row["detail_url"] or "")
+    page_count = 0
     for page in connector.iter_items(cnpj, year, sequence, item_max_pages):
         items.extend(page.records)
-        raw_composite["items"].append(page.raw_payload)
+        page_count += 1
         item_request_url = page.request_url
 
     mapped_items = mapper.map_items(items)
     if not mapped_items:
         raise RuntimeError("PNCP returned no items for this opportunity")
-    if not dry_run:
-        # Commit items first. Detail/document instability must not discard this progress.
-        repository.replace_opportunity_items(row["id"], mapped_items)
-
-    warnings: list[str] = []
-    detail = None
-    try:
-        detail_payload = connector.fetch_detail(cnpj, year, sequence)
-        if isinstance(detail_payload.payload, dict):
-            detail = detail_payload.payload
-        raw_composite["detail"] = detail_payload.payload
-        raw_composite["detail_request_url"] = detail_payload.request_url
-    except Exception as exc:
-        warning = f"detail: {exc}"
-        warnings.append(warning)
-        raw_composite["enrichment_errors"].append(warning)
-
-    documents: list[dict[str, Any]] = []
-    documents_fetched = False
-    try:
-        documents_payload = connector.fetch_documents(cnpj, year, sequence)
-        documents = _extract_records(documents_payload.payload)
-        documents_fetched = True
-        raw_composite["documents"] = documents_payload.payload
-        raw_composite["documents_request_url"] = documents_payload.request_url
-    except Exception as exc:
-        warning = f"documents: {exc}"
-        warnings.append(warning)
-        raw_composite["enrichment_errors"].append(warning)
-
-    opportunity = mapper.map(listing, detail=detail, items=items, documents=documents)
-    match = classifier.classify(opportunity, profile)
     if dry_run:
-        outcome = repository.preview_upsert(opportunity)
+        outcome = "updated"
     else:
-        outcome, _ = repository.persist_record(
+        persistence = repository.persist_opportunity_items_enrichment(
             run_id=run_id,
-            source_endpoint="detail_enrichment",
+            opportunity_id=row["id"],
+            items=mapped_items,
             request_url=item_request_url,
-            raw_payload=raw_composite,
-            opportunity=opportunity,
-            match=match,
-            replace_children=False,
+            audit_summary={
+                "pages_received": page_count,
+                "items_received": len(items),
+                "items_normalized": len(mapped_items),
+                "mode": "items_only_batch",
+            },
+            external_key=row["external_key"],
+            finish_run=False,
         )
-        if documents_fetched:
-            repository.replace_opportunity_documents(row["id"], opportunity.documents)
-    return outcome, len(mapped_items), len(opportunity.documents), warnings
+        outcome = "updated" if persistence["persisted"] else "skipped"
+    return outcome, len(mapped_items), 0, []
 
 
 def _row_to_listing(row: dict[str, Any]) -> dict[str, Any]:
@@ -278,32 +235,6 @@ def _row_to_listing(row: dict[str, Any]) -> dict[str, Any]:
         "dataEncerramentoProposta": row["proposal_end_at"],
         "linkSistemaOrigem": row["origin_url"] or row["source_url"],
     }
-
-
-def _extract_records(payload: Any) -> list[dict[str, Any]]:
-    if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
-    if not isinstance(payload, dict):
-        return []
-    for key in ("data", "items", "content", "results", "resultado"):
-        value = payload.get(key)
-        if isinstance(value, list):
-            return [item for item in value if isinstance(item, dict)]
-        if isinstance(value, dict):
-            nested = _extract_records(value)
-            if nested:
-                return nested
-    return []
-
-
-def _json_object(value: str) -> dict[str, Any]:
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"--profile-json must contain valid JSON: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise SystemExit("--profile-json must contain a JSON object")
-    return parsed
 
 
 if __name__ == "__main__":

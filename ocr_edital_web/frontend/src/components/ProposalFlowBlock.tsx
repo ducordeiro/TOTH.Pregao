@@ -218,6 +218,18 @@ export function ProposalFlowBlock({ onBack, active = true }: ProposalFlowBlockPr
     }
   };
 
+  const moveColumn = async (column: KanbanColumn, direction: "left" | "right") => {
+    try {
+      await moveKanbanColumn(column.id, direction);
+      await reload();
+    } catch (error) {
+      setMessage({
+        kind: "error",
+        text: error instanceof Error ? error.message : "Não foi possível mover a coluna.",
+      });
+    }
+  };
+
   const drop = async (event: React.DragEvent, column: KanbanColumn) => {
     event.preventDefault();
     const id = event.dataTransfer.getData("text/proposal-id");
@@ -277,14 +289,14 @@ export function ProposalFlowBlock({ onBack, active = true }: ProposalFlowBlockPr
                 <div className="column-controls">
                   <button
                     disabled={index === 0}
-                    onClick={() => void moveKanbanColumn(column.id, "left").then(reload)}
+                    onClick={() => void moveColumn(column, "left")}
                     aria-label="Mover coluna para esquerda"
                   >
                     <ArrowLeft size={14} />
                   </button>
                   <button
                     disabled={index === columns.length - 1}
-                    onClick={() => void moveKanbanColumn(column.id, "right").then(reload)}
+                    onClick={() => void moveColumn(column, "right")}
                     aria-label="Mover coluna para direita"
                   >
                     <ArrowRight size={14} />

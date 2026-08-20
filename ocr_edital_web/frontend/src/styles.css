@@ -464,6 +464,25 @@ main {
   font-size: 11px;
 }
 
+#search-workspace .search-form .period-missing-date-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: var(--cor-texto-secundario);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+#search-workspace .search-form .period-missing-date-option input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 0;
+  accent-color: var(--cor-destaque);
+}
+
 .date-range-picker {
   position: relative;
 }

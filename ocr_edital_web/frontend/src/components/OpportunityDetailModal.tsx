@@ -20,6 +20,7 @@ import type {
   OpportunityDetail,
   UiMessage,
 } from "../types";
+import { parseLocalDate } from "../utils";
 import { Modal } from "./Modal";
 import { StatusMessage } from "./StatusMessage";
 
@@ -38,7 +39,7 @@ function formatCurrency(value: number | string | null) {
 
 function formatDateTime(value: string) {
   if (!value) return "Não informado";
-  const date = new Date(value);
+  const date = parseLocalDate(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString("pt-BR", {
     day: "2-digit",
