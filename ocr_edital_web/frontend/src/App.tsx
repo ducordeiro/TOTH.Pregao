@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { listResponsibles, listTemplates } from "./api";
 import { CatalogBlock } from "./components/CatalogBlock";
+import { CatalogGeneratorBlock } from "./components/CatalogGeneratorBlock";
 import { BusinessBlock } from "./components/BusinessBlock";
 import { ProposalBlock } from "./components/ProposalBlock";
 import { ProjectStructureBlock } from "./components/ProjectStructureBlock";
@@ -84,6 +85,7 @@ export default function App() {
         catalog: "catalog-workspace",
         business: "business-workspace",
         structure: "structure-workspace",
+        catalogGenerator: "catalog-generator-workspace",
       }[block];
       document.getElementById(workspaceId)
         ?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -119,6 +121,11 @@ export default function App() {
       eyebrow: "Estrutura operacional",
       title: "Estrutura do projeto",
       description: "Organize etapas, responsáveis e entregáveis antes da entrega final.",
+    },
+    catalogGenerator: {
+      eyebrow: "Automação documental",
+      title: "Gerador de catálogo",
+      description: "Transforme os dados oficiais do edital em um catálogo revisável e rastreável.",
     },
   };
   const header = activeBlock === "business" && classificationOpen
@@ -200,6 +207,9 @@ export default function App() {
           </div>
           <div id="structure-workspace" hidden={activeBlock !== "structure"}>
             <ProjectStructureBlock />
+          </div>
+          <div id="catalog-generator-workspace" hidden={activeBlock !== "catalogGenerator"}>
+            <CatalogGeneratorBlock pncpLink={pncpLink} onPncpLinkChange={setPncpLink} />
           </div>
         </main>
       </div>

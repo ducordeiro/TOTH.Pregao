@@ -3,6 +3,7 @@ import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning, message="'cgi' is deprecated.*")
 
 import cgi
+import csv
 import copy
 import hashlib
 import html
@@ -23,6 +24,7 @@ import http.client
 import urllib.error
 import urllib.request
 import zipfile
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -38,6 +40,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt
+from openpyxl import load_workbook
 
 from catalog import (
     build_catalog_docx,
@@ -47,6 +50,7 @@ from catalog import (
     catalog_draft_from_item,
     write_catalog_json,
 )
+from catalog_generator import export_catalog, normalize_items, validation_summary
 
 import kanban as kanban_store
 from etl import ETLRepository, ETLSyncService, OpportunityClassifier, PNCPConnector, PNCPMapper, SyncRequest
@@ -114,6 +118,7 @@ PNCP_OPPORTUNITY_SYNC_CACHE = {}
 SEARCH_ITEM_CACHE = {}
 SEARCH_DOCUMENT_ITEM_CACHE = {}
 PNCP_SEARCH_JOBS = {}
+CATALOG_GENERATOR_JOBS = {}
 SEARCH_CACHE_TTL = 300
 SOURCE_CACHE = {}
 EXTRACTED_ITEMS_CACHE = {}
@@ -128,6 +133,7 @@ PROPOSAL_PREVIEW_TTL = 30 * 60
 CACHE_MAX_ENTRIES = 32
 CACHE_LOCK = threading.Lock()
 PNCP_SEARCH_JOB_LOCK = threading.RLock()
+CATALOG_GENERATOR_JOB_LOCK = threading.RLock()
 OCR_LOCK = threading.Lock()
 TEMPLATE_LOCK = threading.RLock()
 DATABASE_LOCK = threading.RLock()
@@ -3736,13 +3742,66 @@ def extract_from_docx(path):
     return normalize_rows(rows)
 
 
+def extract_from_xlsx(path):
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    rows = []
+    try:
+        for sheet in workbook.worksheets:
+            rows.extend([list(row) for row in sheet.iter_rows(values_only=True)])
+    finally:
+        workbook.close()
+    return normalize_rows(rows)
+
+
+def extract_from_csv(path):
+    raw = path.read_bytes()
+    text = ""
+    for encoding in ("utf-8-sig", "latin-1"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    sample = text[:8192]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=";,\t|")
+        rows = list(csv.reader(text.splitlines(), dialect))
+    except csv.Error:
+        rows = list(csv.reader(text.splitlines(), delimiter=";"))
+    return normalize_rows(rows)
+
+
+def extract_from_xls(path):
+    raw = path.read_bytes()
+    if raw.lstrip().startswith(b"<"):
+        root = ET.fromstring(raw)
+        rows = []
+        for row in root.iter():
+            if row.tag.rsplit("}", 1)[-1] != "Row":
+                continue
+            values = []
+            for cell in row:
+                if cell.tag.rsplit("}", 1)[-1] != "Cell":
+                    continue
+                values.append(" ".join(compact(text) for text in cell.itertext()))
+            rows.append(values)
+        return normalize_rows(rows)
+    raise ValueError("Planilha XLS binária requer conversão para XLSX antes da leitura.")
+
+
 def extract_items(path):
     suffix = path.suffix.lower()
     if suffix == ".pdf":
         return extract_from_pdf(path)
     if suffix == ".docx":
         return extract_from_docx(path)
-    raise ValueError("Formato não suportado. Envie PDF ou DOCX.")
+    if suffix == ".xlsx":
+        return extract_from_xlsx(path)
+    if suffix == ".csv":
+        return extract_from_csv(path)
+    if suffix == ".xls":
+        return extract_from_xls(path)
+    raise ValueError("Formato não suportado. Envie PDF, DOCX, XLS, XLSX ou CSV.")
 
 
 def extract_items_cached(path):
@@ -4107,8 +4166,19 @@ def list_pncp_items(cnpj, ano, sequencial):
         )
         row["item"] = compact(item.get("numeroItem"))
         row["quantidade"] = format_pncp_quantity(item.get("quantidade"))
-        row["unidade"] = STANDARD_UNIT
-        row["descricao"] = compact(item.get("descricao"))
+        row["unidade"] = compact(item.get("unidadeMedida") or item.get("unidade")) or STANDARD_UNIT
+        row["titulo"] = compact(
+            item.get("materialOuServicoNome")
+            or item.get("titulo")
+            or item.get("title")
+        )
+        row["descricao"] = compact(
+            item.get("descricao")
+            or item.get("descricaoItem")
+            or item.get("description")
+        )
+        row["valorUnitarioEstimado"] = item.get("valorUnitarioEstimado")
+        row["valorTotalEstimado"] = item.get("valorTotalEstimado") or item.get("valorTotal")
         if row["item"] and row["descricao"]:
             rows.append(row)
     return rows
@@ -4187,9 +4257,13 @@ def opportunity_file_record(item):
 
 
 def opportunity_item_record(item):
-    quantity = item.get("quantidade")
+    quantity = item.get("quantidade") or item.get("quantity")
     unit_value = item.get("valorUnitarioEstimado")
+    if unit_value is None:
+        unit_value = item.get("valor_unitario_estimado")
     total_value = item.get("valorTotal")
+    if total_value is None:
+        total_value = item.get("valor_total_estimado")
     if total_value is None and quantity is not None and unit_value is not None:
         try:
             total_value = float(quantity) * float(unit_value)
@@ -4207,6 +4281,7 @@ def opportunity_item_record(item):
         "unidade": compact(
             item.get("unidadeMedida")
             or item.get("unidadeFornecimento")
+            or item.get("unidade")
         ) or STANDARD_UNIT,
         "valor_unitario_estimado": unit_value,
         "valor_total_estimado": total_value,
@@ -4226,8 +4301,24 @@ def opportunity_item_record(item):
     }
 
 
+def source_for_opportunity_detail(link, api_items):
+    if not api_items:
+        return source_from_pncp_link(link)
+    cached = cache_get(SOURCE_CACHE, link, DOCUMENT_CACHE_TTL)
+    if cached is not None and Path(cached.get("source_path") or "").is_file():
+        return cached
+    return None
+
+
 def opportunity_detail_from_pncp_link(link, fallback=None):
     cnpj, ano, sequencial = parse_pncp_link(link)
+    local_detail = etl_repository().get_opportunity_by_pncp_identity(
+        cnpj,
+        ano,
+        sequencial,
+    )
+    if local_detail is not None:
+        return internal_opportunity_detail(local_detail["opportunity"]["id"])
     fallback = fallback if isinstance(fallback, dict) else {}
     metadata = {
         "numero_compra": compact(fallback.get("numero_compra")),
@@ -4248,16 +4339,22 @@ def opportunity_detail_from_pncp_link(link, fallback=None):
         "codigo_unidade": compact(fallback.get("codigo_unidade")),
         "link_sistema_origem": compact(fallback.get("link_sistema_origem")),
     }
+    official_link = pncp_app_link(cnpj, ano, sequencial)
     with ThreadPoolExecutor(max_workers=3) as executor:
         metadata_future = executor.submit(
             pncp_purchase_metadata, cnpj, ano, sequencial
         )
         items_future = executor.submit(
-            list_pncp_item_payload, cnpj, ano, sequencial
+            identify_items_from_pncp_link, official_link
         )
         files_future = executor.submit(list_pncp_files, cnpj, ano, sequencial)
         remote_metadata = metadata_future.result()
-        raw_items = items_future.result()
+        item_error = ""
+        try:
+            identification = items_future.result()
+        except Exception as exc:
+            identification = {"items": [], "source": "documento_oficial"}
+            item_error = str(exc) or "A consulta de itens do PNCP não respondeu."
         files = files_future.result()
     metadata.update({
         key: value
@@ -4268,16 +4365,16 @@ def opportunity_detail_from_pncp_link(link, fallback=None):
         raise RuntimeError("A contratação não foi localizada na API oficial do PNCP.")
     api_items = [
         opportunity_item_record(item)
-        for item in raw_items
+        for item in identification.get("items", [])
         if compact(item.get("numeroItem") or item.get("item"))
     ]
-    official_link = pncp_app_link(cnpj, ano, sequencial)
     file_items = []
     file_error = ""
     source_data = None
     try:
-        source_data = source_from_pncp_link(official_link)
-        file_items = extract_items_cached(source_data["source_path"])
+        source_data = source_for_opportunity_detail(official_link, api_items)
+        if source_data:
+            file_items = extract_items_cached(source_data["source_path"])
     except Exception as exc:
         file_error = str(exc) or "Documento oficial não pôde ser lido."
 
@@ -4287,6 +4384,7 @@ def opportunity_detail_from_pncp_link(link, fallback=None):
     }
     if file_items:
         items = []
+        included_keys = set()
         for file_item in file_items:
             key = (compact(file_item.get("lote")), compact(file_item.get("item")))
             api_item = api_by_key.get(key, {})
@@ -4303,6 +4401,12 @@ def opportunity_detail_from_pncp_link(link, fallback=None):
                 if value not in (None, "")
             }}
             items.append(merged)
+            included_keys.add(key)
+        items.extend(
+            item
+            for key, item in api_by_key.items()
+            if key not in included_keys
+        )
     else:
         items = api_items
 
@@ -4313,6 +4417,8 @@ def opportunity_detail_from_pncp_link(link, fallback=None):
     items_check = build_pncp_items_check(file_items, comparison_api_items)
     if file_error:
         items_check["file_error"] = file_error
+    if item_error:
+        items_check["api_error"] = item_error
     items_check["source"] = "documento_oficial" if file_items else "api_pncp"
     items_check["documento"] = (
         source_data.get("pncp", {}).get("documento_usado", "") if source_data else ""
@@ -4466,25 +4572,28 @@ def filename_from_disposition(disposition):
     return unquote(match.group(1)).strip()
 
 
-def download_pncp_file(file_info):
+def download_pncp_file(file_info, timeout=60):
     url = file_info.get("url") or file_info.get("uri")
     if not url:
         raise RuntimeError("Arquivo do PNCP sem URL de download.")
 
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=60) as response:
+    with urllib.request.urlopen(req, timeout=timeout) as response:
         data = response.read()
         headers = response.headers
 
     filename = filename_from_disposition(headers.get("Content-Disposition", ""))
     suffix = Path(filename).suffix.lower()
-    if data.startswith(b"PK\x03\x04") and suffix != ".docx":
-        suffix = ".zip"
+    office_suffixes = {".docx", ".xlsx", ".pptx"}
+    supported_suffixes = {".pdf", ".docx", ".xlsx", ".xls", ".csv", ".zip"}
+    if data.startswith(b"PK\x03\x04") and suffix not in office_suffixes:
+        title_suffix = Path(str(file_info.get("titulo", ""))).suffix.lower()
+        suffix = title_suffix if title_suffix in office_suffixes else ".zip"
     elif data.startswith(b"%PDF"):
         suffix = ".pdf"
-    elif suffix not in {".pdf", ".docx", ".zip"}:
+    elif suffix not in supported_suffixes:
         title_suffix = Path(str(file_info.get("titulo", ""))).suffix.lower()
-        suffix = title_suffix if title_suffix in {".pdf", ".docx", ".zip"} else ".pdf"
+        suffix = title_suffix if title_suffix in supported_suffixes else ".pdf"
 
     stem = safe_name(file_info.get("titulo") or filename or "arquivo_pncp")
     path = UPLOAD_DIR / f"pncp_{stem}_{uuid.uuid4().hex}{suffix}"
@@ -4540,7 +4649,7 @@ def extract_archive_documents(archive_path, destination, depth=0):
                 shutil.copyfileobj(source, output)
 
             suffix = target.suffix.lower()
-            if suffix in {".pdf", ".docx"} and not is_zip_archive(target):
+            if suffix in {".pdf", ".docx", ".xlsx", ".xls", ".csv"} and not is_zip_archive(target):
                 documents.append(target)
                 continue
             if suffix == ".zip" or is_zip_archive(target):
@@ -4551,7 +4660,7 @@ def extract_archive_documents(archive_path, destination, depth=0):
 
 
 def downloaded_document_candidates(path):
-    if path.suffix.lower() in {".pdf", ".docx"} and not is_zip_archive(path):
+    if path.suffix.lower() in {".pdf", ".docx", ".xlsx", ".xls", ".csv"} and not is_zip_archive(path):
         return [(path, False)]
     if path.suffix.lower() == ".zip" or is_zip_archive(path):
         destination = path.parent / f"{safe_name(path.name)}_extraido"
@@ -4637,7 +4746,7 @@ def source_from_pncp_link(link):
             score = candidate_document_score(candidate_path, file_info, embedded)
             candidate = (score, candidate_path, file_info, embedded)
             document_candidates.append(candidate)
-            if best is None or score < best[0]:
+            if candidate_path.suffix.lower() in {".pdf", ".docx"} and (best is None or score < best[0]):
                 best = candidate
     if best is None or best[0][0] > 1:
         detail = f" Detalhe: {'; '.join(download_errors)}" if download_errors else ""
@@ -4868,9 +4977,19 @@ def matches_complete_words(text, search_term):
 
 
 def matches_complete_search_term(row, search_term):
-    return matches_complete_words(
-        f"{row.get('title', '')} {row.get('description', '')}",
-        search_term,
+    buyer = row.get("orgaoEntidade") or {}
+    buyer_name = buyer.get("razaoSocial", "") if isinstance(buyer, dict) else ""
+    return any(
+        matches_complete_words(value, search_term)
+        for value in (
+            row.get("title", ""),
+            row.get("description", ""),
+            row.get("orgao_nome", "")
+            or row.get("orgao", "")
+            or row.get("buyer_name", "")
+            or row.get("orgaoEntidadeRazaoSocial", "")
+            or buyer_name,
+        )
     )
 
 
@@ -4954,12 +5073,22 @@ def get_search_row_document_items(row):
 
 def items_match_search_term(items, search_term):
     return any(
-        matches_complete_words(item.get("descricao", ""), search_term)
+        matches_complete_words(value, search_term)
         for item in items
+        for value in (
+            item.get("titulo", "")
+            or item.get("title", "")
+            or item.get("materialOuServicoNome", ""),
+            item.get("descricao", "")
+            or item.get("description", "")
+            or item.get("descricaoItem", ""),
+        )
     )
 
 
 def matches_search_term_after_item_identification(row, search_term, verify_document=True):
+    if matches_complete_search_term(row, search_term):
+        return True
     try:
         pncp_items = get_search_row_pncp_items(row)
     except Exception:
@@ -4974,9 +5103,7 @@ def matches_search_term_after_item_identification(row, search_term, verify_docum
         document_items = document_result.get("items") or []
         if document_items:
             return items_match_search_term(document_items, search_term)
-    if pncp_items:
-        return False
-    return matches_complete_search_term(row, search_term)
+    return False
 
 
 def filter_rows_by_complete_search_term(rows, search_term, verify_documents=True):
@@ -5043,6 +5170,23 @@ def filter_opportunity_rows_by_search_term(rows, search_term):
     return [row for row in rows if matches_complete_search_term(row, search_term)]
 
 
+def cached_search_row_items(row):
+    contract_key = search_row_contract_key(row)
+    if contract_key is None:
+        return []
+    cache_key = ":".join(contract_key)
+    pncp_items = cache_get(SEARCH_ITEM_CACHE, cache_key, DOCUMENT_CACHE_TTL)
+    document_result = cache_get(
+        SEARCH_DOCUMENT_ITEM_CACHE, cache_key, DOCUMENT_CACHE_TTL
+    )
+    document_items = (
+        document_result.get("items") or []
+        if isinstance(document_result, dict)
+        else []
+    )
+    return [*(pncp_items or []), *document_items]
+
+
 def reconcile_pncp_search_rows(rows, request_url, filters):
     repository = etl_repository()
     repository.initialize()
@@ -5053,9 +5197,10 @@ def reconcile_pncp_search_rows(rows, request_url, filters):
     for raw_row in rows:
         counters["fetched"] += 1
         try:
-            opportunity = mapper.map(raw_row)
+            cached_items = cached_search_row_items(raw_row) if filters.get("keywords") else []
+            opportunity = mapper.map(raw_row, items=cached_items or None)
             match = classifier.classify(opportunity, {})
-            outcome, _ = repository.persist_record(
+            outcome, opportunity_id = repository.persist_record(
                 run_id=run_id,
                 source_endpoint="api/search",
                 request_url=request_url,
@@ -5064,6 +5209,8 @@ def reconcile_pncp_search_rows(rows, request_url, filters):
                 match=match,
                 replace_children=False,
             )
+            if cached_items and outcome != "inserted":
+                repository.replace_opportunity_items(opportunity_id, opportunity.items)
             counters[outcome] += 1
         except Exception as exc:
             counters["failed"] += 1
@@ -5276,7 +5423,7 @@ def search_pncp_app_editais(params, data_inicial, data_final):
         filtered_rows = []
         seen = set()
         for search_term, candidates in candidates_by_term.items():
-            for row in filter_opportunity_rows_by_search_term(
+            for row in filter_rows_by_complete_search_term(
                 candidates.values(), search_term
             ):
                 row_key = (
@@ -9709,14 +9856,6 @@ def internal_opportunity_detail(opportunity_id):
     if detail is None:
         raise FileNotFoundError("Oportunidade nao localizada no radar interno.")
     enrichment_messages = []
-    if not detail["documents"]:
-        if ALLOW_DETAIL_DOCUMENT_ON_DEMAND:
-            try:
-                detail = enrich_detail_documents(opportunity_id, detail)
-            except Exception as exc:
-                enrichment_messages.append(f"Arquivos oficiais pendentes: {exc}")
-        else:
-            enrichment_messages.append("Arquivos oficiais ainda nao carregados no banco local.")
     if not detail["items"]:
         if ALLOW_DETAIL_ITEMS_ON_DEMAND:
             row = detail["opportunity"]
@@ -9735,6 +9874,10 @@ def internal_opportunity_detail(opportunity_id):
                 )
         else:
             enrichment_messages.append("Itens oficiais ainda nao carregados no banco local.")
+    if not detail["documents"]:
+        enrichment_messages.append(
+            "Arquivos oficiais ainda não carregados no banco local; isso não impede a consulta dos itens."
+        )
     if enrichment_messages:
         detail["enrichment_error"] = " ".join(enrichment_messages)
     row = detail["opportunity"]
@@ -9881,6 +10024,208 @@ def convert_internal_opportunity(opportunity_id, payload):
     return result
 
 
+CATALOG_GENERATOR_STAGES = (
+    ("validacao", "Validando link do PNCP"),
+    ("metadados", "Consultando metadados oficiais"),
+    ("itens", "Consultando e normalizando itens"),
+    ("documentos", "Enriquecendo pelos documentos relevantes"),
+    ("validacao_catalogo", "Validando evidências e campos"),
+    ("concluido", "Catálogo pronto para revisão"),
+)
+
+
+def update_catalog_generator_job(job_id, **changes):
+    with CATALOG_GENERATOR_JOB_LOCK:
+        job = CATALOG_GENERATOR_JOBS.get(job_id)
+        if job is not None:
+            job.update(changes)
+            job["updated_at"] = datetime.now().isoformat(timespec="seconds")
+
+
+def catalog_generator_job(job_id):
+    with CATALOG_GENERATOR_JOB_LOCK:
+        job = CATALOG_GENERATOR_JOBS.get(job_id)
+        if not job:
+            raise FileNotFoundError("Processamento de catálogo não localizado.")
+        return copy.deepcopy(job)
+
+
+def catalog_generator_document_candidates(cnpj, ano, sequencial, maximum=6):
+    candidates = []
+    errors = []
+    files = sorted(list_pncp_files(cnpj, ano, sequencial), key=pncp_file_score)
+    selected_files = files[:maximum]
+    if len(files) > len(selected_files):
+        errors.append(
+            f"{len(files) - len(selected_files)} anexo(s) de menor prioridade não foram baixados."
+        )
+
+    def fetch(file_info):
+        downloaded, _ = download_pncp_file(file_info, timeout=12)
+        return [
+            {"path": path, "file_info": file_info, "embedded": embedded}
+            for path, embedded in downloaded_document_candidates(downloaded)
+        ]
+
+    workers = min(4, len(selected_files))
+    if not workers:
+        return candidates, errors
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        pending = {executor.submit(fetch, file_info): file_info for file_info in selected_files}
+        for future in as_completed(pending):
+            file_info = pending[future]
+            try:
+                candidates.extend(future.result())
+            except Exception as exc:
+                errors.append(f"{compact(file_info.get('titulo')) or 'arquivo'}: {exc}")
+    return candidates, errors
+
+
+def run_catalog_generator_job(job_id, pncp_link):
+    warnings = []
+    documents = []
+    document_items = []
+    try:
+        update_catalog_generator_job(job_id, status="processing", stage="validacao", progress=5)
+        cnpj, ano, sequencial = parse_pncp_link(pncp_link)
+        official_link = pncp_app_link(cnpj, ano, sequencial)
+
+        update_catalog_generator_job(job_id, stage="metadados", progress=18)
+        metadata = pncp_purchase_metadata(cnpj, ano, sequencial)
+        metadata.update({"cnpj": cnpj, "ano": ano, "sequencial": sequencial, "link_pncp": official_link})
+
+        update_catalog_generator_job(job_id, stage="itens", progress=35)
+        try:
+            structured = identify_items_from_pncp_link(official_link)
+        except Exception as exc:
+            structured = {"items": [], "source": "documentos_oficiais"}
+            warnings.append(
+                "A consulta estruturada de itens ao PNCP não respondeu; "
+                f"o processamento continuou pelos documentos oficiais ({exc})."
+            )
+        raw_items = [dict(item) for item in structured.get("items", [])]
+
+        update_catalog_generator_job(job_id, stage="documentos", progress=58)
+        try:
+            candidates, download_errors = catalog_generator_document_candidates(
+                cnpj,
+                ano,
+                sequencial,
+                maximum=3 if raw_items else 6,
+            )
+            warnings.extend(download_errors)
+            for candidate in candidates:
+                path = Path(candidate["path"])
+                supported = path.suffix.lower() in {".pdf", ".docx", ".xlsx", ".xls", ".csv"}
+                tabular = path.suffix.lower() in {".xlsx", ".xls", ".csv"}
+                should_extract = supported and (not raw_items or tabular)
+                document_status = "referência" if supported else "não suportado"
+                if should_extract:
+                    try:
+                        extracted = extract_items_cached(path)
+                        document_status = "processado"
+                        for row in extracted:
+                            enriched = dict(row)
+                            enriched["_catalog_source_name"] = path.name
+                            document_items.append(enriched)
+                    except Exception as exc:
+                        document_status = "requer revisão"
+                        warnings.append(f"{path.name}: não foi possível extrair itens ({exc}).")
+                documents.append({
+                    "nome": path.name,
+                    "tipo": path.suffix.lower().lstrip(".").upper(),
+                    "status": document_status,
+                    "origem": compact(candidate.get("file_info", {}).get("titulo")),
+                })
+            if not candidates:
+                warnings.append("Nenhum documento oficial foi disponibilizado pelo PNCP.")
+        except Exception as exc:
+            warnings.append(f"Documentos anexos não puderam ser processados: {exc}")
+
+        known_numbers = {compact(item.get("item") or item.get("numero")) for item in raw_items}
+        for item in document_items:
+            number = compact(item.get("item") or item.get("numero"))
+            if not raw_items or (number and number not in known_numbers):
+                raw_items.append(item)
+                known_numbers.add(number)
+        items = normalize_items(raw_items, official_link, structured.get("source") or "Base estruturada/PNCP")
+        if not items:
+            warnings.append(
+                "Nenhum item pôde ser confirmado na base estruturada nem nos documentos disponíveis."
+            )
+        metadata["total_itens"] = len(items)
+        metadata["fonte_itens"] = structured.get("source", "")
+
+        update_catalog_generator_job(job_id, stage="validacao_catalogo", progress=86)
+        validation = validation_summary(items)
+        warnings.extend(validation["avisos"])
+        result = {
+            "metadata": metadata,
+            "documents": documents,
+            "items": items,
+            "validation": validation,
+            "warnings": warnings,
+            "manufacturer": {
+                "razao_social": "GOLDFLEX INDUSTRIA E COMERCIO DE MOVEIS E EQUIPAMENTOS LTDA",
+                "cnpj": "33.661.439/0001-14",
+            },
+        }
+        update_catalog_generator_job(
+            job_id,
+            status="ready",
+            stage="concluido",
+            progress=100,
+            result=result,
+        )
+    except Exception as exc:
+        LOGGER.exception("Catalog generator job %s failed", job_id)
+        update_catalog_generator_job(
+            job_id,
+            status="failed",
+            stage="erro",
+            error=str(exc) or "Não foi possível gerar o catálogo.",
+        )
+
+
+def create_catalog_generator_job(payload):
+    pncp_link = compact((payload or {}).get("pncp_link"))
+    parse_pncp_link(pncp_link)
+    job_id = uuid.uuid4().hex
+    now = datetime.now().isoformat(timespec="seconds")
+    job = {
+        "id": job_id,
+        "pncp_link": pncp_link,
+        "status": "queued",
+        "stage": "validacao",
+        "progress": 0,
+        "stages": [{"id": key, "label": label} for key, label in CATALOG_GENERATOR_STAGES],
+        "created_at": now,
+        "updated_at": now,
+        "result": None,
+        "error": "",
+    }
+    with CATALOG_GENERATOR_JOB_LOCK:
+        CATALOG_GENERATOR_JOBS[job_id] = job
+    threading.Thread(
+        target=run_catalog_generator_job,
+        args=(job_id, pncp_link),
+        daemon=True,
+        name=f"catalog-generator-{job_id[:8]}",
+    ).start()
+    return copy.deepcopy(job)
+
+
+def export_catalog_generator_job(job_id, payload):
+    job = catalog_generator_job(job_id)
+    if job["status"] != "ready" or not job.get("result"):
+        raise ValueError("Aguarde a conclusão do processamento antes de exportar.")
+    items = (payload or {}).get("items")
+    if not isinstance(items, list):
+        raise ValueError("Envie os itens revisados para exportação.")
+    exports = export_catalog(OUTPUT_DIR, job["result"]["metadata"], items, job_id)
+    return {"exports": exports, "validation": validation_summary(items)}
+
+
 class App(BaseHTTPRequestHandler):
     def end_headers(self):
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -9903,7 +10248,7 @@ class App(BaseHTTPRequestHandler):
         request_path = urlparse(self.path).path
         protected_get = request_path.startswith((
             "/api/", "/internal/", "/identify-items", "/pncp-search",
-            "/catalog/draft", "/proposal-preview", "/download/", "/template/",
+            "/catalog/draft", "/catalog-generator/", "/proposal-preview", "/download/", "/template/",
         ))
         if (
             self.headers.get("Sec-Fetch-Site", "").strip().lower() == "cross-site"
@@ -10115,6 +10460,13 @@ class App(BaseHTTPRequestHandler):
                     {"error": "Não foi possível estruturar o catálogo."},
                 )
             return
+        catalog_job_match = re.fullmatch(r"/catalog-generator/jobs/([a-f0-9]{32})", request_path)
+        if catalog_job_match:
+            try:
+                json_response(self, 200, catalog_generator_job(catalog_job_match.group(1)))
+            except FileNotFoundError as exc:
+                json_response(self, 404, {"error": str(exc)})
+            return
         preview_match = re.fullmatch(
             r"/proposal-preview/([a-f0-9]{32})\.pdf",
             urlparse(self.path).path,
@@ -10136,6 +10488,31 @@ class App(BaseHTTPRequestHandler):
         if not self.request_allowed(mutation=True):
             return
         request_path = urlparse(self.path).path
+        if request_path == "/catalog-generator/jobs":
+            try:
+                json_response(self, 202, create_catalog_generator_job(parse_json_body(self)))
+            except ValueError as exc:
+                json_response(self, 422, {"error": str(exc) or "Link PNCP inválido."})
+            return
+        catalog_export_match = re.fullmatch(
+            r"/catalog-generator/jobs/([a-f0-9]{32})/export",
+            request_path,
+        )
+        if catalog_export_match:
+            try:
+                json_response(
+                    self,
+                    200,
+                    export_catalog_generator_job(
+                        catalog_export_match.group(1),
+                        parse_json_body(self, MAX_JSON_REQUEST_SIZE),
+                    ),
+                )
+            except FileNotFoundError as exc:
+                json_response(self, 404, {"error": str(exc)})
+            except ValueError as exc:
+                json_response(self, 422, {"error": str(exc)})
+            return
         if request_path in {"/internal/etl/pncp-sync", "/api/internal/etl/pncp-sync"}:
             expected_token = os.environ.get("TOTH_ETL_ADMIN_TOKEN", "")
             if expected_token and self.headers.get("X-ETL-Token", "") != expected_token:

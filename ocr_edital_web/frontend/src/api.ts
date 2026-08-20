@@ -3,6 +3,9 @@ import type {
   CatalogData,
   CatalogDraftResponse,
   CatalogGenerateResponse,
+  CatalogGeneratorExportResponse,
+  CatalogGeneratorJob,
+  GeneratedCatalogItem,
   CommercialTerms,
   GenerateResponse,
   IdentifyResponse,
@@ -251,6 +254,32 @@ export async function generateCatalog(
   body.append("data", JSON.stringify({ data, assets: assetMetadata }));
   const response = await fetch("/catalog/generate", { method: "POST", body });
   return parseJson<CatalogGenerateResponse>(response);
+}
+
+export async function createCatalogGeneratorJob(pncpLink: string): Promise<CatalogGeneratorJob> {
+  const response = await fetch("/catalog-generator/jobs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pncp_link: pncpLink }),
+  });
+  return parseJson<CatalogGeneratorJob>(response);
+}
+
+export async function getCatalogGeneratorJob(jobId: string): Promise<CatalogGeneratorJob> {
+  const response = await fetch(`/catalog-generator/jobs/${encodeURIComponent(jobId)}`);
+  return parseJson<CatalogGeneratorJob>(response);
+}
+
+export async function exportGeneratedCatalog(
+  jobId: string,
+  items: GeneratedCatalogItem[],
+): Promise<CatalogGeneratorExportResponse> {
+  const response = await fetch(`/catalog-generator/jobs/${encodeURIComponent(jobId)}/export`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items }),
+  });
+  return parseJson<CatalogGeneratorExportResponse>(response);
 }
 
 export async function processProposal(body: FormData): Promise<ProcessResponse> {

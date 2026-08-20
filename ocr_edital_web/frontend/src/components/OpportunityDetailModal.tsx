@@ -340,6 +340,21 @@ export function OpportunityDetailModal({
                 />
               </label>
             </div>
+            {detail.aviso_enriquecimento ? (
+              <StatusMessage
+                compact
+                message={{ kind: "warning", text: detail.aviso_enriquecimento }}
+              />
+            ) : null}
+            {detail.verificacao_itens?.api_error ? (
+              <StatusMessage
+                compact
+                message={{
+                  kind: "warning",
+                  text: "A consulta estruturada de itens não respondeu. Os itens exibidos foram recuperados do documento oficial.",
+                }}
+              />
+            ) : null}
             {detail.verificacao_itens?.has_divergence && !detail.verificacao_itens.file_error ? (
               <StatusMessage
                 compact

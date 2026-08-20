@@ -1,7 +1,7 @@
-import { BookOpen, BriefcaseBusiness, ClipboardList, FileSearch, FileText } from "lucide-react";
+import { BookOpen, BriefcaseBusiness, ClipboardList, FileSearch, FileSpreadsheet, FileText } from "lucide-react";
 import tothLogo from "../assets/toth-logo.png";
 
-export type ActiveBlock = "search" | "proposal" | "catalog" | "business" | "structure";
+export type ActiveBlock = "search" | "proposal" | "catalog" | "business" | "structure" | "catalogGenerator";
 
 interface SidebarProps {
   active: ActiveBlock;
@@ -73,6 +73,18 @@ export function Sidebar({ active, onChange }: SidebarProps) {
           <span className="block-nav-copy">
             <strong>Bloco 5</strong>
             <small>Estrutura</small>
+          </span>
+        </button>
+        <button
+          className={`block-nav-item${active === "catalogGenerator" ? " is-active" : ""}`}
+          type="button"
+          onClick={() => onChange("catalogGenerator")}
+        >
+          <span className="block-nav-number">07</span>
+          <FileSpreadsheet size={18} aria-hidden="true" />
+          <span className="block-nav-copy">
+            <strong>Bloco 7</strong>
+            <small>Gerador de catálogo</small>
           </span>
         </button>
       </nav>

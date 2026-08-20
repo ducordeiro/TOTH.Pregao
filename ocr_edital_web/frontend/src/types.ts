@@ -197,6 +197,7 @@ export interface OpportunityDetail {
     only_in_file?: string[];
     added_from_pncp?: string[];
     file_error?: string;
+    api_error?: string;
     source: "documento_oficial" | "api_pncp";
     documento?: string;
   };
@@ -205,6 +206,7 @@ export interface OpportunityDetail {
     arquivos: string;
     itens: string;
   };
+  aviso_enriquecimento?: string;
 }
 
 export interface OpportunityAnswer {
@@ -336,6 +338,59 @@ export interface CatalogDraftResponse {
   pncp?: PncpInfo & {
     metadata?: Record<string, string>;
   };
+}
+
+export interface GeneratedCatalogSource {
+  documento: string;
+  pagina: number | null;
+  secao: string;
+  url: string;
+}
+
+export interface GeneratedCatalogItem {
+  id: string;
+  numero: string;
+  codigo: string;
+  produto: string;
+  descricao: string;
+  especificacao_tecnica: string;
+  unidade: string;
+  quantidade: string;
+  marca_referencia: string;
+  valor_estimado: string | number;
+  criterios_aceitacao: string;
+  observacoes: string;
+  categoria: string;
+  subcategoria: string;
+  status_evidencia: string;
+  campos_ausentes: string[];
+  conflitos: string[];
+  fontes: GeneratedCatalogSource[];
+}
+
+export interface CatalogGeneratorResult {
+  metadata: Record<string, string | number>;
+  documents: Array<{ nome: string; tipo: string; status: string; origem: string }>;
+  items: GeneratedCatalogItem[];
+  validation: { incompletos: number; conflitos: number; avisos: string[] };
+  warnings: string[];
+  manufacturer: { razao_social: string; cnpj: string };
+}
+
+export interface CatalogGeneratorJob {
+  id: string;
+  pncp_link: string;
+  status: "queued" | "processing" | "ready" | "failed";
+  stage: string;
+  progress: number;
+  stages: Array<{ id: string; label: string }>;
+  result: CatalogGeneratorResult | null;
+  error: string;
+}
+
+export interface CatalogGeneratorExportResponse {
+  exports: Record<string, CatalogExportFile>;
+  validation: { incompletos: number; conflitos: number; avisos: string[] };
 }
 
 export type MessageKind = "info" | "success" | "warning" | "error";

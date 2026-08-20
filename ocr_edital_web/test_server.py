@@ -16,6 +16,7 @@ from docx import Document
 from PIL import Image
 
 import catalog
+import catalog_generator
 import server
 
 
@@ -98,7 +99,7 @@ class ItemExtractionRegressionTests(unittest.TestCase):
 
             self.assertEqual(
                 [path.name for path, _embedded in documents],
-                ["Termo de Referencia.pdf"],
+                ["planilha.xlsx", "Termo de Referencia.pdf"],
             )
 
     def test_proposal_preview_is_temporary_and_reused_for_unchanged_data(self):
@@ -920,6 +921,55 @@ class CatalogGenerationTests(unittest.TestCase):
         self.assertIn("470 mm", data["secoes"]["dimensoes"])
         self.assertIn("NBR 13962", data["secoes"]["normas"])
 
+    def test_block7_normalizes_with_traceability_and_exports_all_formats(self):
+        raw = [make_item("1", "Cadeira giratória em tela", quantidade="12")]
+        items = catalog_generator.normalize_items(
+            raw,
+            "https://pncp.gov.br/app/editais/45780087000103/2026/43",
+        )
+        self.assertEqual(items[0]["categoria"], "Mobiliário")
+        self.assertEqual(items[0]["fontes"][0]["secao"], "Item 1")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            exports = catalog_generator.export_catalog(
+                Path(temp_dir),
+                {"objeto": "Aquisição de cadeiras"},
+                items,
+                "a" * 32,
+            )
+            self.assertEqual(set(exports), {"xlsx", "csv", "json", "pdf"})
+            self.assertTrue(all((Path(temp_dir) / entry["filename"]).stat().st_size for entry in exports.values()))
+
+    def test_block7_keeps_document_fallback_when_item_api_is_unavailable(self):
+        job_id = "b" * 32
+        server.CATALOG_GENERATOR_JOBS[job_id] = {
+            "id": job_id,
+            "status": "queued",
+            "stage": "validacao",
+            "progress": 0,
+        }
+        document_item = make_item("3", "Cadeira fixa empilhável", quantidade="20")
+        candidate = {
+            "path": Path("termo.pdf"),
+            "file_info": {"titulo": "Termo de Referência"},
+            "embedded": False,
+        }
+        with (
+            patch.object(server, "pncp_purchase_metadata", return_value={"objeto": "Cadeiras"}),
+            patch.object(server, "catalog_generator_document_candidates", return_value=([candidate], [])),
+            patch.object(server, "extract_items_cached", return_value=[document_item]),
+            patch.object(server, "identify_items_from_pncp_link", side_effect=RuntimeError("PNCP indisponível")),
+        ):
+            server.run_catalog_generator_job(
+                job_id,
+                "https://pncp.gov.br/app/editais/45780087000103/2026/43",
+            )
+
+        job = server.catalog_generator_job(job_id)
+        self.assertEqual(job["status"], "ready")
+        self.assertEqual(job["result"]["items"][0]["numero"], "3")
+        self.assertTrue(any("continuou pelos documentos" in warning for warning in job["result"]["warnings"]))
+
     def test_catalog_specification_accepts_qualifier_added_to_item_title(self):
         item = make_item("2", "Cadeira Caixa Alta Secretaria")
         source_text = (
@@ -1403,6 +1453,7 @@ class PncpSearchPaginationTests(unittest.TestCase):
                 "monitor",
             )
         )
+
         self.assertTrue(
             server.matches_complete_search_term(
                 {"title": "Edital", "description": "Aquisição de monitores"},
@@ -1430,6 +1481,26 @@ class PncpSearchPaginationTests(unittest.TestCase):
                     ),
                 },
                 "registro de ponto",
+            )
+        )
+
+    def test_search_term_can_match_buyer_name(self):
+        self.assertTrue(
+            server.matches_complete_search_term(
+                {
+                    "title": "Edital 42/2026",
+                    "description": "Aquisicao de materiais",
+                    "orgao_nome": "Prefeitura Municipal de Campinas",
+                },
+                "Campinas",
+            )
+        )
+
+    def test_search_term_can_match_official_item_title(self):
+        self.assertTrue(
+            server.items_match_search_term(
+                [{"titulo": "Equipamento hospitalar", "descricao": "Modelo padrao"}],
+                "hospitalar",
             )
         )
 
@@ -1515,7 +1586,7 @@ class PncpSearchPaginationTests(unittest.TestCase):
         items.assert_called_once_with("48813638000178", "2026", "97")
         server.SEARCH_ITEM_CACHE.clear()
 
-    def test_search_term_uses_items_before_general_opportunity_text(self):
+    def test_search_term_uses_all_opportunity_and_item_fields_with_or_semantics(self):
         row = {
             "orgao_cnpj": "12345678000199",
             "ano": "2026",
@@ -1531,7 +1602,47 @@ class PncpSearchPaginationTests(unittest.TestCase):
         with patch.object(server, "list_pncp_items", return_value=pncp_items):
             result = server.filter_rows_by_complete_search_term([row], "teclado")
 
-        self.assertEqual(result, [])
+        self.assertEqual(result, [row])
+        server.SEARCH_ITEM_CACHE.clear()
+
+    def test_full_online_search_checks_item_fields_returned_by_pncp(self):
+        row = {
+            "id": "item-title-match",
+            "orgao_cnpj": "12345678000199",
+            "ano": "2026",
+            "numero_sequencial": "44",
+            "orgao_nome": "Orgao de teste",
+            "title": "Edital 44/2026",
+            "description": "Aquisicao de equipamentos",
+            "data_fim_vigencia": "2026-08-20T10:00:00",
+        }
+
+        def fake_request(url, timeout=18):
+            if url.startswith(server.PNCP_SEARCH_URL):
+                return {"items": [row], "total": 1}
+            if "/compras/2026/44/itens" in url:
+                return [{
+                    "numeroItem": 1,
+                    "materialOuServicoNome": "Monitor profissional",
+                    "descricao": "Tela LED de 27 polegadas",
+                }]
+            raise AssertionError(f"URL inesperada: {url}")
+
+        server.PNCP_RESULT_CACHE.clear()
+        server.SEARCH_ITEM_CACHE.clear()
+        with patch.object(server, "request_json", side_effect=fake_request):
+            response = server.search_pncp_open_bids({
+                "dataInicial": "20260801",
+                "dataFinal": "20260830",
+                "uf": "SP",
+                "palavraChave": "monitor profissional",
+                "pagina": "1",
+                "tamanhoPagina": "10",
+            })
+
+        self.assertEqual(response["total"], 1)
+        self.assertEqual(response["results"][0]["sequencial"], "44")
+        server.PNCP_RESULT_CACHE.clear()
         server.SEARCH_ITEM_CACHE.clear()
 
     def test_material_filter_can_use_official_item_descriptions(self):
@@ -1676,6 +1787,46 @@ class PncpSearchPaginationTests(unittest.TestCase):
         self.assertFalse(persisted[0]["replace_children"])
         self.assertEqual(persisted[0]["opportunity"].sequence, 77)
         self.assertEqual(finished[0][1]["status"], "success")
+
+    def test_search_reconciliation_persists_items_used_by_keyword_filter(self):
+        persisted = []
+        repository = SimpleNamespace(
+            initialize=lambda: None,
+            create_run=lambda *_args: "run-items",
+            persist_record=lambda **kwargs: (
+                persisted.append(kwargs) or ("inserted", "opportunity-items")
+            ),
+            save_failed_source_record=lambda **_kwargs: None,
+            finish_run=lambda *_args, **_kwargs: None,
+        )
+        row = {
+            "id": "pncp-search-items",
+            "orgao_cnpj": "12345678000199",
+            "ano": "2026",
+            "numero_sequencial": "79",
+            "orgao_nome": "Orgao de teste",
+            "title": "Edital 79",
+            "description": "Aquisicao de equipamentos",
+        }
+        cache_key = "12345678000199:2026:79"
+        server.SEARCH_ITEM_CACHE.clear()
+        server.cache_set(
+            server.SEARCH_ITEM_CACHE,
+            cache_key,
+            [{"item": "1", "titulo": "Monitor", "descricao": "Tela LED"}],
+        )
+
+        with patch.object(server, "etl_repository", return_value=repository):
+            result = server.reconcile_pncp_search_rows(
+                [row],
+                "https://pncp.gov.br/api/search",
+                {"keywords": ["monitor"]},
+            )
+
+        self.assertEqual(result["inserted"], 1)
+        self.assertEqual(len(persisted[0]["opportunity"].items), 1)
+        self.assertEqual(persisted[0]["opportunity"].items[0].title, "Monitor")
+        server.SEARCH_ITEM_CACHE.clear()
 
     def test_full_online_search_reconciles_when_requested(self):
         row = {
@@ -2028,6 +2179,25 @@ class PncpSearchPaginationTests(unittest.TestCase):
 
 
 class OpportunityDetailTests(unittest.TestCase):
+    def test_detail_uses_local_record_without_waiting_for_remote_metadata(self):
+        local = {"opportunity": {"id": "c" * 32}, "items": [{}], "documents": []}
+        expected = {"itens": [{"numero": "1", "descricao": "Item local"}]}
+        repository = SimpleNamespace(
+            get_opportunity_by_pncp_identity=lambda *_args: local,
+        )
+        with (
+            patch.object(server, "etl_repository", return_value=repository),
+            patch.object(server, "internal_opportunity_detail", return_value=expected) as detail_mock,
+            patch.object(server, "pncp_purchase_metadata") as metadata_mock,
+        ):
+            result = server.opportunity_detail_from_pncp_link(
+                "https://pncp.gov.br/app/editais/00394700000108/2026/250"
+            )
+
+        self.assertEqual(result, expected)
+        detail_mock.assert_called_once_with("c" * 32)
+        metadata_mock.assert_not_called()
+
     def test_detail_combines_official_pncp_metadata_files_and_items(self):
         metadata = {
             "numero_compra": "164/2026",
@@ -2064,8 +2234,9 @@ class OpportunityDetailTests(unittest.TestCase):
         }]
 
         with (
+            patch.object(server, "etl_repository", return_value=SimpleNamespace(get_opportunity_by_pncp_identity=lambda *_args: None)),
             patch.object(server, "pncp_purchase_metadata", return_value=metadata),
-            patch.object(server, "list_pncp_item_payload", return_value=raw_items),
+            patch.object(server, "identify_items_from_pncp_link", return_value={"items": raw_items}),
             patch.object(server, "list_pncp_files", return_value=raw_files),
         ):
             result = server.opportunity_detail_from_pncp_link(
@@ -2080,13 +2251,21 @@ class OpportunityDetailTests(unittest.TestCase):
         self.assertEqual(result["arquivos"][0]["titulo"], "Termo de Referência")
 
     def test_detail_prioritizes_document_items_and_reports_divergence(self):
-        raw_items = [{
-            "numeroItem": 1,
-            "descricao": "Descrição resumida da API",
-            "quantidade": 1,
-            "unidadeMedida": "UNIDADE",
-            "valorUnitarioEstimado": 50,
-        }]
+        raw_items = [
+            {
+                "numeroItem": 1,
+                "descricao": "Descrição resumida da API",
+                "quantidade": 1,
+                "unidadeMedida": "UNIDADE",
+                "valorUnitarioEstimado": 50,
+            },
+            {
+                "numeroItem": 3,
+                "descricao": "Item existente somente na API",
+                "quantidade": 4,
+                "unidadeMedida": "UNIDADE",
+            },
+        ]
         file_items = [
             make_item("1", "Descrição completa do documento", quantidade="2"),
             make_item("2", "Item existente somente no documento", quantidade="3"),
@@ -2097,31 +2276,33 @@ class OpportunityDetailTests(unittest.TestCase):
         }
 
         with (
+            patch.object(server, "etl_repository", return_value=SimpleNamespace(get_opportunity_by_pncp_identity=lambda *_args: None)),
             patch.object(server, "pncp_purchase_metadata", return_value={}),
-            patch.object(server, "list_pncp_item_payload", return_value=raw_items),
+            patch.object(server, "identify_items_from_pncp_link", return_value={"items": raw_items}),
             patch.object(server, "list_pncp_files", return_value=[]),
-            patch.object(server, "source_from_pncp_link", return_value=source),
+            patch.object(server, "source_for_opportunity_detail", return_value=source),
             patch.object(server, "extract_items_cached", return_value=file_items),
         ):
             result = server.opportunity_detail_from_pncp_link(
                 "https://pncp.gov.br/app/editais/00394700000108/2026/252"
             )
 
-        self.assertEqual(len(result["itens"]), 2)
+        self.assertEqual(len(result["itens"]), 3)
         self.assertEqual(result["itens"][0]["descricao"], "Descrição completa do documento")
         self.assertEqual(result["itens"][0]["valor_unitario_estimado"], 50)
         self.assertEqual(result["verificacao_itens"]["file_count"], 2)
-        self.assertEqual(result["verificacao_itens"]["pncp_count"], 1)
+        self.assertEqual(result["verificacao_itens"]["pncp_count"], 2)
         self.assertTrue(result["verificacao_itens"]["has_divergence"])
         self.assertEqual(result["verificacao_itens"]["source"], "documento_oficial")
 
     def test_detail_falls_back_to_api_when_document_cannot_be_read(self):
         raw_items = [{"numeroItem": 1, "descricao": "Item da API", "quantidade": 1}]
         with (
+            patch.object(server, "etl_repository", return_value=SimpleNamespace(get_opportunity_by_pncp_identity=lambda *_args: None)),
             patch.object(server, "pncp_purchase_metadata", return_value={}),
-            patch.object(server, "list_pncp_item_payload", return_value=raw_items),
+            patch.object(server, "identify_items_from_pncp_link", return_value={"items": raw_items}),
             patch.object(server, "list_pncp_files", return_value=[]),
-            patch.object(server, "source_from_pncp_link", side_effect=RuntimeError("arquivo indisponível")),
+            patch.object(server, "source_for_opportunity_detail", side_effect=RuntimeError("arquivo indisponível")),
         ):
             result = server.opportunity_detail_from_pncp_link(
                 "https://pncp.gov.br/app/editais/00394700000108/2026/253"
