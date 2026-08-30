@@ -814,6 +814,13 @@ main {
   color: #17171d;
 }
 
+.proposal-retro .docx-align-button.is-active {
+  border-color: rgb(37 37 44 / 44%);
+  background: #fff;
+  color: #17171d;
+  box-shadow: inset 0 -2px 0 #ef7838;
+}
+
 .proposal-retro .docx-order-button:disabled,
 .proposal-retro .docx-drag-handle:disabled {
   cursor: default;
@@ -833,7 +840,7 @@ main {
 .proposal-retro .docx-mini-box-content {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 4px;
   min-width: 0;
   padding: 6px 7px;
@@ -843,8 +850,18 @@ main {
   font-size: 10px;
   font-weight: 700;
   line-height: 1.35;
-  text-align: center;
+  text-align: left;
   overflow-wrap: anywhere;
+}
+
+.proposal-retro .docx-mini-box-content.is-text-centered,
+.proposal-retro .docx-mini-box.is-generated-table .docx-mini-box-content {
+  justify-content: center;
+  text-align: center;
+}
+
+.proposal-retro .docx-mini-box:not(.is-generated-table) .docx-mini-box-content span {
+  width: 100%;
 }
 
 .proposal-retro .docx-mini-box-content span {

@@ -4,6 +4,7 @@ import type {
   CommercialTerms,
   DocumentNode,
   GeneratedTableBlock,
+  MiniBoxTextAlign,
   ProposalItem,
   Responsible,
 } from "../types";
@@ -16,6 +17,7 @@ interface ProposalLivePreviewProps {
   items: ProposalItem[];
   commercialTerms: CommercialTerms;
   responsible?: Responsible;
+  miniBoxAlignments: Record<string, MiniBoxTextAlign>;
 }
 
 function proposalTotal(items: ProposalItem[]): string {
@@ -69,6 +71,7 @@ export function ProposalLivePreview({
   items,
   commercialTerms,
   responsible,
+  miniBoxAlignments,
 }: ProposalLivePreviewProps) {
   const blocks = createReplicaDocumentBlocks(nodes, blockOrder, generatedTable);
   return (
@@ -86,7 +89,11 @@ export function ProposalLivePreview({
             const content = block.content.trim();
             if (!content) return null;
             return block.type === "MINI_BOX" ? (
-              <section className="proposal-replica-mini-box" key={`${block.id}-${index}`}>
+              <section
+                className="proposal-replica-mini-box"
+                key={`${block.id}-${index}`}
+                style={{ textAlign: miniBoxAlignments[block.id] || block.text_align }}
+              >
                 {content}
               </section>
             ) : (

@@ -15,10 +15,10 @@ import type { DocumentNode } from "./types";
 
 const nodes: DocumentNode[] = [
   { id: "fixed-a", type: "FIXED_TEXT", content: "Antes" },
-  { id: "box-a", type: "MINI_BOX", content: "A", order: 0 },
+  { id: "box-a", type: "MINI_BOX", content: "A", order: 0, text_align: "left" },
   { id: "fixed-b", type: "FIXED_TEXT", content: "Entre" },
-  { id: "box-b", type: "MINI_BOX", content: "B", order: 1 },
-  { id: "box-c", type: "MINI_BOX", content: "C", order: 2 },
+  { id: "box-b", type: "MINI_BOX", content: "B", order: 1, text_align: "left" },
+  { id: "box-c", type: "MINI_BOX", content: "C", order: 2, text_align: "center" },
 ];
 
 describe("DOCX mini-box ordering", () => {

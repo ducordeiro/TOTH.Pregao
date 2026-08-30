@@ -14,6 +14,10 @@ XML_NAMESPACE = "http://www.w3.org/XML/1998/namespace"
 NAMESPACES = {"w": WORD_NAMESPACE}
 TEXT_TAG = f"{{{WORD_NAMESPACE}}}t"
 XML_SPACE = f"{{{XML_NAMESPACE}}}space"
+WORD_VALUE = f"{{{WORD_NAMESPACE}}}val"
+PARAGRAPH_PROPERTIES_TAG = f"{{{WORD_NAMESPACE}}}pPr"
+JUSTIFICATION_TAG = f"{{{WORD_NAMESPACE}}}jc"
+SUPPORTED_TEXT_ALIGNMENTS = {"left", "center", "right", "justify"}
 CONTENT_PART_PATTERN = re.compile(
     r"^word/(?:document|header\d+|footer\d+|footnotes|endnotes|comments)\.xml$"
 )
@@ -30,6 +34,7 @@ class MiniBoxSlot:
     end: int
     content: str
     order: int
+    text_align: str
 
 
 @dataclass(frozen=True)
@@ -117,6 +122,31 @@ def _paragraph_text(paragraph: etree._Element) -> str:
     return "".join(element.text or "" for element in paragraph.iter(TEXT_TAG))
 
 
+def _paragraph_text_alignment(paragraph: etree._Element) -> str:
+    justification = paragraph.find("./w:pPr/w:jc", namespaces=NAMESPACES)
+    value = justification.get(WORD_VALUE, "") if justification is not None else ""
+    if value in {"center"}:
+        return "center"
+    if value in {"right", "end"}:
+        return "right"
+    if value in {"both", "distribute", "thaiDistribute"}:
+        return "justify"
+    return "left"
+
+
+def _set_paragraph_text_alignment(paragraph: etree._Element, alignment: str) -> None:
+    if alignment not in SUPPORTED_TEXT_ALIGNMENTS:
+        raise ValueError("O alinhamento solicitado para o mini-box é inválido.")
+    paragraph_properties = paragraph.find("./w:pPr", namespaces=NAMESPACES)
+    if paragraph_properties is None:
+        paragraph_properties = etree.Element(PARAGRAPH_PROPERTIES_TAG)
+        paragraph.insert(0, paragraph_properties)
+    justification = paragraph_properties.find("./w:jc", namespaces=NAMESPACES)
+    if justification is None:
+        justification = etree.SubElement(paragraph_properties, JUSTIFICATION_TAG)
+    justification.set(WORD_VALUE, "both" if alignment == "justify" else alignment)
+
+
 def _analyze_docx(path: Path) -> DocxAnalysis:
     path = Path(path)
     if not path.is_file():
@@ -146,6 +176,7 @@ def _analyze_docx(path: Path) -> DocxAnalysis:
                 paragraphs = root.xpath(".//w:p", namespaces=NAMESPACES)
                 for paragraph_index, paragraph in enumerate(paragraphs):
                     text = _paragraph_text(paragraph)
+                    text_align = _paragraph_text_alignment(paragraph)
                     spans, paragraph_warnings = _root_brace_spans(text)
                     warnings.extend(
                         f"{part_name}, parágrafo {paragraph_index + 1}: {warning}"
@@ -185,6 +216,7 @@ def _analyze_docx(path: Path) -> DocxAnalysis:
                                 "type": "MINI_BOX",
                                 "content": content,
                                 "order": order,
+                                "text_align": text_align,
                             }
                         )
                         slots.append(
@@ -197,6 +229,7 @@ def _analyze_docx(path: Path) -> DocxAnalysis:
                                 end=end,
                                 content=content,
                                 order=order,
+                                text_align=text_align,
                             )
                         )
                         order += 1
@@ -262,6 +295,29 @@ def _validated_order(analysis: DocxAnalysis, ordered_ids: object) -> list[str]:
 
 def validate_mini_box_order(path: Path, ordered_ids: object) -> list[str]:
     return _validated_order(_analyze_docx(Path(path)), ordered_ids)
+
+
+def _validated_alignments(analysis: DocxAnalysis, alignments: object) -> dict[str, str]:
+    if alignments is None:
+        return {}
+    if not isinstance(alignments, dict) or not all(
+        isinstance(node_id, str)
+        and node_id
+        and isinstance(alignment, str)
+        and alignment in SUPPORTED_TEXT_ALIGNMENTS
+        for node_id, alignment in alignments.items()
+    ):
+        raise ValueError("Os alinhamentos dos mini-boxes são inválidos.")
+    expected_ids = {slot.id for slot in analysis.slots}
+    if not set(alignments).issubset(expected_ids):
+        raise ValueError(
+            "A estrutura do modelo foi alterada. Reprocesse a proposta antes de gerar o arquivo."
+        )
+    return dict(alignments)
+
+
+def validate_mini_box_alignments(path: Path, alignments: object) -> dict[str, str]:
+    return _validated_alignments(_analyze_docx(Path(path)), alignments)
 
 
 def _validated_document_block_order(
@@ -378,6 +434,7 @@ def _rewrite_part(
     data: bytes,
     slots: list[MiniBoxSlot],
     replacement_contents: dict[str, str],
+    replacement_alignments: dict[str, str] | None = None,
 ) -> bytes:
     root = _parse_xml(data)
     paragraphs = root.xpath(".//w:p", namespaces=NAMESPACES)
@@ -389,6 +446,17 @@ def _rewrite_part(
         if paragraph_index >= len(paragraphs):
             raise ValueError("A estrutura interna do modelo foi alterada durante a geração.")
         paragraph = paragraphs[paragraph_index]
+        if replacement_alignments is not None:
+            selected_alignments = {
+                replacement_alignments.get(slot.id, slot.text_align)
+                for slot in paragraph_slots
+            }
+            if len(selected_alignments) > 1:
+                raise ValueError(
+                    "Mini-boxes no mesmo parágrafo precisam utilizar o mesmo alinhamento."
+                )
+            if selected_alignments:
+                _set_paragraph_text_alignment(paragraph, selected_alignments.pop())
         for slot in sorted(paragraph_slots, key=lambda item: item.start, reverse=True):
             _replace_text_range(
                 paragraph,
@@ -409,16 +477,25 @@ def rebuild_docx_with_mini_box_order(
     source_path: Path,
     target_path: Path,
     ordered_ids: object,
+    alignments: object = None,
 ) -> None:
     source_path = Path(source_path)
     target_path = Path(target_path)
     analysis = _analyze_docx(source_path)
     validated_order = _validated_order(analysis, ordered_ids)
+    validated_alignments = _validated_alignments(analysis, alignments)
     slots_by_id = {slot.id: slot for slot in analysis.slots}
     replacement_contents = {
         target_slot.id: slots_by_id[source_id].content
         for target_slot, source_id in zip(analysis.slots, validated_order)
     }
+    replacement_alignments = {
+        target_slot.id: validated_alignments.get(
+            source_id,
+            slots_by_id[source_id].text_align,
+        )
+        for target_slot, source_id in zip(analysis.slots, validated_order)
+    } if alignments is not None else None
     slots_by_part: dict[str, list[MiniBoxSlot]] = {}
     for slot in analysis.slots:
         slots_by_part.setdefault(slot.part, []).append(slot)
@@ -441,6 +518,7 @@ def rebuild_docx_with_mini_box_order(
                             data,
                             slots_by_part[entry.filename],
                             replacement_contents,
+                            replacement_alignments,
                         )
                     target_archive.writestr(entry, data)
         os.replace(temporary_path, target_path)

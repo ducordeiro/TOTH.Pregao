@@ -121,6 +121,7 @@ export interface ProcessResponse extends IdentifyResponse {
 }
 
 export type NodeType = "FIXED_TEXT" | "MINI_BOX";
+export type MiniBoxTextAlign = "left" | "center" | "right" | "justify";
 
 export interface BaseDocumentNode {
   id: string;
@@ -131,6 +132,7 @@ export interface BaseDocumentNode {
 export interface MiniBoxNode extends BaseDocumentNode {
   type: "MINI_BOX";
   order: number;
+  text_align: MiniBoxTextAlign;
 }
 
 export interface FixedTextNode extends BaseDocumentNode {

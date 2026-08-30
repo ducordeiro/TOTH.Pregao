@@ -20,6 +20,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  AlignCenter,
   ChevronLeft,
   ChevronRight,
   GripVertical,
@@ -40,6 +41,7 @@ import type {
   DocxStructureResponse,
   GeneratedTableBlock,
   MiniBoxNode,
+  MiniBoxTextAlign,
 } from "../types";
 
 const DOCUMENT_PAGE_ID = "docx-document-page";
@@ -49,9 +51,12 @@ interface DocxReorderBoardProps {
   structure: DocxStructureResponse;
   nodes: DocumentNode[];
   blockOrder: string[];
+  alignments: Record<string, MiniBoxTextAlign>;
   disabled?: boolean;
   onOrderChange: (order: string[]) => void;
   onOrderCommit: () => void;
+  onAlignmentChange: (id: string, alignment: MiniBoxTextAlign) => void;
+  onAlignmentsReset: (alignments: Record<string, MiniBoxTextAlign>) => void;
   renderPreview: (order: string[]) => ReactNode;
 }
 
@@ -63,7 +68,9 @@ interface SortableDocumentBlockProps {
   position: number;
   total: number;
   disabled: boolean;
+  alignment: MiniBoxTextAlign;
   onMove: (id: string, direction: -1 | 1) => void;
+  onToggleAlignment: (id: string) => void;
   onReturnToDock: () => void;
 }
 
@@ -75,13 +82,19 @@ function ordersMatch(left: string[], right: string[]): boolean {
 function DocumentBlockContent({
   content,
   generated,
+  alignment,
 }: {
   content: string;
   generated: boolean;
+  alignment: MiniBoxTextAlign;
 }) {
   const label = generated ? "Tabela gerada" : (content.trim() || "Bloco vazio");
   return (
-    <div className="docx-mini-box-content" title={label}>
+    <div
+      className={`docx-mini-box-content${alignment === "center" ? " is-text-centered" : ""}`}
+      title={label}
+      style={generated ? undefined : { textAlign: alignment }}
+    >
       {generated && <Table2 size={20} aria-hidden="true" />}
       <span>{`{${label}}`}</span>
     </div>
@@ -96,7 +109,9 @@ function SortableDocumentBlock({
   position,
   total,
   disabled,
+  alignment,
   onMove,
+  onToggleAlignment,
   onReturnToDock,
 }: SortableDocumentBlockProps) {
   const {
@@ -129,6 +144,19 @@ function SortableDocumentBlock({
           {String(position).padStart(2, "0")}
         </span>
         <div className="docx-mini-box-actions">
+          {!generated && (
+            <button
+              type="button"
+              className={`docx-order-button docx-align-button${alignment === "center" ? " is-active" : ""}`}
+              onClick={() => onToggleAlignment(id)}
+              disabled={disabled}
+              aria-label={alignment === "center" ? "Remover centralização do mini-box" : "Centralizar texto do mini-box"}
+              aria-pressed={alignment === "center"}
+              title={alignment === "center" ? "Alinhar texto à esquerda" : "Centralizar texto"}
+            >
+              <AlignCenter size={16} />
+            </button>
+          )}
           <button
             type="button"
             className="docx-order-button"
@@ -174,7 +202,7 @@ function SortableDocumentBlock({
           </button>
         </div>
       </div>
-      <DocumentBlockContent content={content} generated={generated} />
+      <DocumentBlockContent content={content} generated={generated} alignment={alignment} />
     </article>
   );
 }
@@ -245,7 +273,7 @@ function GeneratedTableDock({
               </button>
             </div>
           </div>
-          <DocumentBlockContent content={block.content} generated />
+          <DocumentBlockContent content={block.content} generated alignment="center" />
         </article>
       ) : (
         <div className="docx-generated-table-return" role="img" aria-label="Área de retorno da tabela">
@@ -279,9 +307,12 @@ export function DocxReorderBoard({
   structure,
   nodes,
   blockOrder,
+  alignments,
   disabled = false,
   onOrderChange,
   onOrderCommit,
+  onAlignmentChange,
+  onAlignmentsReset,
   renderPreview,
 }: DocxReorderBoardProps) {
   const [previewOrder, setPreviewOrder] = useState<string[] | null>(null);
@@ -315,7 +346,18 @@ export function DocxReorderBoard({
     () => createDocumentBlockOrder(structure.nodes, tableId),
     [structure.nodes, tableId],
   );
-  const hasChanges = !tableDocked || !ordersMatch(blockOrder, originalOrder);
+  const originalAlignments = useMemo(
+    () => Object.fromEntries(
+      miniBoxNodes(structure.nodes).map((node) => [node.id, node.text_align]),
+    ) as Record<string, MiniBoxTextAlign>,
+    [structure.nodes],
+  );
+  const hasAlignmentChanges = Object.entries(originalAlignments).some(
+    ([nodeId, alignment]) => alignments[nodeId] !== alignment,
+  );
+  const hasChanges = !tableDocked
+    || !ordersMatch(blockOrder, originalOrder)
+    || hasAlignmentChanges;
 
   useEffect(() => {
     setPreviewOrder(null);
@@ -431,6 +473,17 @@ export function DocxReorderBoard({
     commitOrder(nextOrder, `Bloco movido para a posição ${movedVisibleOrder.indexOf(nodeId) + 1}.`);
   };
 
+  const toggleTextAlignment = (nodeId: string) => {
+    const currentAlignment = alignments[nodeId] || originalAlignments[nodeId] || "left";
+    const nextAlignment = currentAlignment === "center" ? "left" : "center";
+    onAlignmentChange(nodeId, nextAlignment);
+    setAnnouncement(
+      nextAlignment === "center"
+        ? "Texto do mini-box centralizado."
+        : "Texto do mini-box alinhado à esquerda.",
+    );
+  };
+
   const insertTableAtEnd = () => {
     setTableDocked(false);
     commitOrder(
@@ -449,6 +502,7 @@ export function DocxReorderBoard({
 
   const restoreOriginalOrder = () => {
     setTableDocked(true);
+    onAlignmentsReset(originalAlignments);
     commitOrder(originalOrder, "Ordem original restaurada.");
   };
 
@@ -517,7 +571,11 @@ export function DocxReorderBoard({
                       position={index + 1}
                       total={pageOrder.length}
                       disabled={disabled}
+                      alignment={generated
+                        ? "center"
+                        : alignments[nodeId] || node?.text_align || "left"}
                       onMove={handleMove}
+                      onToggleAlignment={toggleTextAlignment}
                       onReturnToDock={returnTableToDock}
                     />
                   );

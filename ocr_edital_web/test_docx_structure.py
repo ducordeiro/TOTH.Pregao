@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from PIL import Image
 
 from docx_structure import (
@@ -13,6 +14,7 @@ from docx_structure import (
     rebuild_docx_with_mini_box_order,
     resolve_document_block_layout,
     validate_document_block_order,
+    validate_mini_box_alignments,
     validate_mini_box_order,
 )
 import server
@@ -107,6 +109,73 @@ class DocxStructureTests(unittest.TestCase):
         )
         self.assertEqual(rebuilt_image, original_image)
         self.assertEqual(rebuilt_relationships, original_relationships)
+
+    def test_rebuild_keeps_individual_alignment_with_the_moved_mini_box(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "alinhamentos.docx"
+            output = root / "alinhado.docx"
+            document = Document()
+            document.add_paragraph("{Alpha}")
+            document.add_paragraph("{Beta}")
+            document.save(source)
+            structure = inspect_docx_structure(source)
+            mini_boxes = [node for node in structure["nodes"] if node["type"] == "MINI_BOX"]
+            alpha_id, beta_id = [node["id"] for node in mini_boxes]
+
+            rebuild_docx_with_mini_box_order(
+                source,
+                output,
+                [beta_id, alpha_id],
+                {alpha_id: "center", beta_id: "left"},
+            )
+            rebuilt = Document(output)
+
+        self.assertEqual(rebuilt.paragraphs[0].text, "{Beta}")
+        self.assertEqual(rebuilt.paragraphs[0].alignment, WD_ALIGN_PARAGRAPH.LEFT)
+        self.assertEqual(rebuilt.paragraphs[1].text, "{Alpha}")
+        self.assertEqual(rebuilt.paragraphs[1].alignment, WD_ALIGN_PARAGRAPH.CENTER)
+
+    def test_alignment_contract_reports_defaults_and_rejects_invalid_values(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "alinhamentos.docx"
+            document = Document()
+            document.add_paragraph("{Esquerda}")
+            centered = document.add_paragraph("{Centro}")
+            centered.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            document.save(path)
+            structure = inspect_docx_structure(path)
+            mini_boxes = [node for node in structure["nodes"] if node["type"] == "MINI_BOX"]
+
+            self.assertEqual(
+                [node["text_align"] for node in mini_boxes],
+                ["left", "center"],
+            )
+            self.assertEqual(
+                validate_mini_box_alignments(path, {mini_boxes[0]["id"]: "center"}),
+                {mini_boxes[0]["id"]: "center"},
+            )
+            with self.assertRaisesRegex(ValueError, "alinhamentos"):
+                validate_mini_box_alignments(path, {mini_boxes[0]["id"]: "diagonal"})
+            with self.assertRaisesRegex(ValueError, "estrutura do modelo"):
+                validate_mini_box_alignments(path, {"stale-id": "center"})
+
+    def test_rebuild_rejects_different_alignments_in_the_same_paragraph(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = self.create_marker_template(Path(temp_dir))
+            output = Path(temp_dir) / "invalido.docx"
+            structure = inspect_docx_structure(source)
+            identifiers = [
+                node["id"] for node in structure["nodes"] if node["type"] == "MINI_BOX"
+            ]
+
+            with self.assertRaisesRegex(ValueError, "mesmo parágrafo"):
+                rebuild_docx_with_mini_box_order(
+                    source,
+                    output,
+                    identifiers,
+                    {identifiers[0]: "center", identifiers[1]: "left"},
+                )
 
     def test_validation_rejects_missing_duplicate_and_stale_identifiers(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -231,6 +300,10 @@ class ProposalDocxIntegrationTests(unittest.TestCase):
                 output,
                 mini_box_order=list(layout.mini_box_order),
                 document_block_order=document_order,
+                mini_box_alignments={
+                    identifiers[0]: "center",
+                    identifiers[1]: "left",
+                },
             )
             generated = Document(output)
             body_children = list(generated._element.body)
@@ -239,6 +312,8 @@ class ProposalDocxIntegrationTests(unittest.TestCase):
         self.assertEqual(first_blocks, ["p", "tbl", "p"])
         self.assertEqual(generated.paragraphs[0].text, "Antes {Segundo}")
         self.assertEqual(generated.paragraphs[1].text, "Depois {Primeiro}")
+        self.assertEqual(generated.paragraphs[0].alignment, WD_ALIGN_PARAGRAPH.LEFT)
+        self.assertEqual(generated.paragraphs[1].alignment, WD_ALIGN_PARAGRAPH.CENTER)
         self.assertEqual(generated.tables[0].rows[1].cells[3].text, "Item de teste")
 
     def test_table_cannot_split_two_markers_from_the_same_paragraph(self):
@@ -269,6 +344,7 @@ class ProposalDocxIntegrationTests(unittest.TestCase):
                 "responsible_id": "1",
                 "commercial_terms": {},
                 "mini_box_order": identifiers,
+                "mini_box_alignments": {identifiers[0]: "center"},
             }
             with (
                 patch.object(server, "resolve_template", return_value=template),
@@ -280,6 +356,7 @@ class ProposalDocxIntegrationTests(unittest.TestCase):
                 )
 
         self.assertEqual(original["mini_box_order"], identifiers)
+        self.assertEqual(original["mini_box_alignments"], {identifiers[0]: "center"})
         self.assertNotEqual(
             server.proposal_preview_fingerprint(original),
             server.proposal_preview_fingerprint(reordered),

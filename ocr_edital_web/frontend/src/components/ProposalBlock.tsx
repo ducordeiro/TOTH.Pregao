@@ -17,6 +17,7 @@ import type {
   DocumentNode,
   DocxStructureResponse,
   IdentifyResponse,
+  MiniBoxTextAlign,
   ProcessResponse,
   ProposalItem,
   Responsible,
@@ -109,6 +110,7 @@ export function ProposalBlock({
   const [documentStructure, setDocumentStructure] = useState<DocxStructureResponse | null>(null);
   const [documentNodes, setDocumentNodes] = useState<DocumentNode[]>([]);
   const [documentBlockIds, setDocumentBlockIds] = useState<string[]>([]);
+  const [miniBoxAlignments, setMiniBoxAlignments] = useState<Record<string, MiniBoxTextAlign>>({});
   const [structureLoading, setStructureLoading] = useState(false);
   const [structureError, setStructureError] = useState("");
 
@@ -128,6 +130,7 @@ export function ProposalBlock({
     setDocumentStructure(null);
     setDocumentNodes([]);
     setDocumentBlockIds([]);
+    setMiniBoxAlignments({});
     setStructureError("");
   };
 
@@ -178,6 +181,7 @@ export function ProposalBlock({
         setDocumentStructure(null);
         setDocumentNodes([]);
         setDocumentBlockIds([]);
+        setMiniBoxAlignments({});
         setStructureError("");
         const review = payload.description_review;
         const verification = payload.pncp_items_check;
@@ -280,6 +284,7 @@ export function ProposalBlock({
       setDocumentStructure(null);
       setDocumentNodes([]);
       setDocumentBlockIds([]);
+      setMiniBoxAlignments({});
       setStructureError("");
       setStructureLoading(true);
       try {
@@ -289,6 +294,11 @@ export function ProposalBlock({
         setDocumentBlockIds(
           createDocumentBlockOrder(structure.nodes, structure.generated_table_block.id),
         );
+        setMiniBoxAlignments(Object.fromEntries(
+          structure.nodes
+            .filter((node) => node.type === "MINI_BOX")
+            .map((node) => [node.id, node.text_align]),
+        ));
         setMessage({
           kind: "success",
           text: `Proposta processada com sucesso. ${selectedItems.length} item(ns) preparado(s). Modelo ${response.template_source === "upload" ? "avulso" : "cadastrado"} aplicado: ${response.template_name}.`,
@@ -369,8 +379,24 @@ export function ProposalBlock({
   const commitDocumentOrder = () => {
     setMessage({
       kind: "info",
-      text: "Ordem dos blocos atualizada e refletida na pré-visualização.",
+      text: "Composição atualizada e refletida na pré-visualização.",
     });
+  };
+
+  const updateMiniBoxAlignment = (id: string, alignment: MiniBoxTextAlign) => {
+    setMiniBoxAlignments((current) => ({ ...current, [id]: alignment }));
+    setDownload(null);
+    setMessage({
+      kind: "info",
+      text: alignment === "center"
+        ? "Texto do mini-box centralizado e refletido na pré-visualização."
+        : "Alinhamento do mini-box atualizado na pré-visualização.",
+    });
+  };
+
+  const resetMiniBoxAlignments = (alignments: Record<string, MiniBoxTextAlign>) => {
+    setMiniBoxAlignments(alignments);
+    setDownload(null);
   };
 
   const validateDocument = (): boolean => {
@@ -403,6 +429,7 @@ export function ProposalBlock({
         processed.response.commercial_terms,
         orderedMiniBoxIds,
         orderedDocumentBlockIds,
+        miniBoxAlignments,
       );
       setDownload({ url: response.download_url, filename: response.filename });
       setMessage({ kind: "success", text: "Documento Word gerado com sucesso." });
@@ -687,9 +714,12 @@ export function ProposalBlock({
             structure={documentStructure}
             nodes={documentNodes}
             blockOrder={documentBlockIds}
+            alignments={miniBoxAlignments}
             disabled={generating}
             onOrderChange={updateDocumentOrder}
             onOrderCommit={commitDocumentOrder}
+            onAlignmentChange={updateMiniBoxAlignment}
+            onAlignmentsReset={resetMiniBoxAlignments}
             renderPreview={(previewOrder) => (
               <ProposalLivePreview
                 nodes={documentNodes}
@@ -698,6 +728,7 @@ export function ProposalBlock({
                 items={processed.items}
                 commercialTerms={processed.response.commercial_terms}
                 responsible={selectedResponsible}
+                miniBoxAlignments={miniBoxAlignments}
               />
             )}
           />

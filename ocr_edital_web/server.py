@@ -57,6 +57,7 @@ from docx_structure import (
     rebuild_docx_with_mini_box_order,
     resolve_document_block_layout,
     validate_document_block_order,
+    validate_mini_box_alignments,
     validate_mini_box_order,
 )
 
@@ -4109,9 +4110,16 @@ def build_docx(
     commercial_terms=None,
     mini_box_order=None,
     document_block_order=None,
+    mini_box_alignments=None,
 ):
     table_paragraph_index = None
     if template_path and template_path.exists():
+        if mini_box_alignments and not mini_box_order:
+            mini_box_order = [
+                node["id"]
+                for node in inspect_docx_structure(template_path)["nodes"]
+                if node["type"] == "MINI_BOX"
+            ]
         if document_block_order is not None:
             layout = resolve_document_block_layout(template_path, document_block_order)
             resolved_mini_box_order = list(layout.mini_box_order)
@@ -4125,7 +4133,12 @@ def build_docx(
         with TEMPLATE_LOCK:
             shutil.copyfile(template_path, output_path)
         if mini_box_order:
-            rebuild_docx_with_mini_box_order(output_path, output_path, mini_box_order)
+            rebuild_docx_with_mini_box_order(
+                output_path,
+                output_path,
+                mini_box_order,
+                mini_box_alignments,
+            )
         doc = Document(str(output_path))
     else:
         doc = Document()
@@ -6534,8 +6547,10 @@ def proposal_generation_context(payload):
 
     requested_order = payload.get("mini_box_order")
     requested_document_order = payload.get("document_block_order")
+    requested_alignments = payload.get("mini_box_alignments")
     mini_box_order = None
     document_block_order = None
+    mini_box_alignments = {}
     if requested_document_order is not None:
         if not template_path:
             raise ValueError("O modelo Word selecionado não está disponível.")
@@ -6556,6 +6571,14 @@ def proposal_generation_context(payload):
         document_block_order = [*mini_box_order, GENERATED_TABLE_BLOCK_ID]
         validate_document_block_order(template_path, document_block_order)
 
+    if requested_alignments is not None:
+        if not template_path:
+            raise ValueError("O modelo Word selecionado não está disponível.")
+        mini_box_alignments = validate_mini_box_alignments(
+            template_path,
+            requested_alignments,
+        )
+
     return {
         "items": items,
         "template_path": template_path,
@@ -6565,6 +6588,7 @@ def proposal_generation_context(payload):
         "commercial_terms": payload.get("commercial_terms"),
         "mini_box_order": mini_box_order,
         "document_block_order": document_block_order,
+        "mini_box_alignments": mini_box_alignments,
     }
 
 
@@ -6585,6 +6609,7 @@ def proposal_preview_fingerprint(context):
         "commercial_terms": context.get("commercial_terms"),
         "mini_box_order": context.get("mini_box_order"),
         "document_block_order": context.get("document_block_order"),
+        "mini_box_alignments": context.get("mini_box_alignments"),
     }
     encoded = json.dumps(
         signature,
@@ -6807,6 +6832,7 @@ def create_proposal_preview(context):
                 commercial_terms=context["commercial_terms"],
                 mini_box_order=context.get("mini_box_order"),
                 document_block_order=context.get("document_block_order"),
+                mini_box_alignments=context.get("mini_box_alignments"),
             )
             try:
                 convert_docx_to_pdf(preview_docx, preview_pdf)
@@ -11090,6 +11116,7 @@ class App(BaseHTTPRequestHandler):
                     commercial_terms=context["commercial_terms"],
                     mini_box_order=context["mini_box_order"],
                     document_block_order=context["document_block_order"],
+                    mini_box_alignments=context["mini_box_alignments"],
                 )
                 try:
                     record_generated_document(context["responsible_id"], out_path)
