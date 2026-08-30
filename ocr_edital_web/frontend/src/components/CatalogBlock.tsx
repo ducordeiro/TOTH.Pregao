@@ -228,8 +228,10 @@ export function CatalogBlock({ pncpLink, onPncpLinkChange }: CatalogBlockProps) 
       marca_dagua: current.marca_dagua,
     }));
     setMessage({
-      kind: "success",
-      text: `Item ${response.draft.item.numero} estruturado a partir do arquivo oficial do edital.`,
+      kind: response.enrichment_warning ? "warning" : "success",
+      text: response.source === "base_estruturada"
+        ? `Item ${response.draft.item.numero} estruturado a partir da base local. O documento oficial não estava disponível para enriquecimento.`
+        : `Item ${response.draft.item.numero} estruturado a partir do arquivo oficial do edital.`,
     });
     setExports(null);
   };

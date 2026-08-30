@@ -81,7 +81,7 @@ def compact(value):
 
 def normalized_sentences(description):
     text = str(description or "").replace("\r", "\n")
-    parts = re.split(r"(?<=[.;:])\s+|\n+|,\s+", text)
+    parts = re.split(r"(?<=[.;])\s+|\n+|,\s+", text)
     return [compact(part) for part in parts if compact(part)]
 
 

@@ -184,8 +184,20 @@ class PNCPMapper:
         mapped: list[OpportunityItem] = []
         used_numbers: set[tuple[str, str]] = set()
         for position, payload in enumerate(payloads, 1):
-            number = _text(_first(payload, "numeroItem", "numero", "item", "item_number")) or str(position)
+            number = _text(
+                _first(
+                    payload,
+                    "numeroItem",
+                    "numeroItemPncp",
+                    "numeroItemCompra",
+                    "numero",
+                    "item",
+                    "item_number",
+                )
+            ) or str(position)
             group = _text(_first(payload, "numeroGrupo", "grupo", "lote", "numeroLote")) or ""
+            if group in {"0", "0.0"}:
+                group = ""
             original_number = number
             duplicate = 2
             while (group, number) in used_numbers:
@@ -203,6 +215,7 @@ class PNCPMapper:
                         "itemDescricao",
                         "descricaoCompleta",
                         "descricaoDetalhada",
+                        "descricaoResumida",
                     )
                 ),
                 _text(
@@ -214,6 +227,7 @@ class PNCPMapper:
                         "especificacaoTecnica",
                         "complementoDescricao",
                         "detalhamento",
+                        "descricaodetalhada",
                         "observacao",
                         "observacoes",
                     )
@@ -244,7 +258,15 @@ class PNCPMapper:
             mapped.append(
                 OpportunityItem(
                     source_item_id=_text(
-                        _first(payload, "id", "numeroItem", "codigoItem", "source_item_id")
+                        _first(
+                            payload,
+                            "id",
+                            "idCompraItem",
+                            "numeroItem",
+                            "numeroItemPncp",
+                            "codigoItem",
+                            "source_item_id",
+                        )
                     ),
                     item_number=number,
                     title=title,

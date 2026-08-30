@@ -51,11 +51,23 @@ from catalog import (
     write_catalog_json,
 )
 from catalog_generator import export_catalog, normalize_items, validation_summary
+from docx_structure import (
+    GENERATED_TABLE_BLOCK_ID,
+    inspect_docx_structure,
+    rebuild_docx_with_mini_box_order,
+    resolve_document_block_layout,
+    validate_document_block_order,
+    validate_mini_box_order,
+)
 
 import kanban as kanban_store
 from etl import ETLRepository, ETLSyncService, OpportunityClassifier, PNCPConnector, PNCPMapper, SyncRequest
 from etl.connectors import HttpJsonClient
-from etl.search_filters import classify_object_text
+from etl.search_filters import (
+    classify_object_text,
+    matches_complete_words as shared_matches_complete_words,
+    search_word_variants as shared_search_word_variants,
+)
 
 
 LOGGER = logging.getLogger("toth.pregao")
@@ -137,8 +149,10 @@ CATALOG_GENERATOR_JOB_LOCK = threading.RLock()
 OCR_LOCK = threading.Lock()
 TEMPLATE_LOCK = threading.RLock()
 DATABASE_LOCK = threading.RLock()
+DATABASE_INIT_LOCK = threading.RLock()
 PROPOSAL_PREVIEW_LOCK = threading.RLock()
 WORD_CONVERSION_LOCK = threading.Lock()
+INITIALIZED_DATABASES: dict[str, tuple[int, int]] = {}
 PROPOSAL_PREVIEW_CACHE = {}
 OCR_ENGINE = None
 OCR_DPI = 150
@@ -226,7 +240,30 @@ def database_connection():
         connection.close()
 
 
+def database_file_identity(path):
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    return stat.st_dev, stat.st_ino
+
+
 def init_database():
+    database_key = str(DATABASE_PATH.resolve())
+    with DATABASE_INIT_LOCK:
+        current_identity = database_file_identity(DATABASE_PATH)
+        if (
+            current_identity is not None
+            and INITIALIZED_DATABASES.get(database_key) == current_identity
+        ):
+            return
+        _initialize_database()
+        initialized_identity = database_file_identity(DATABASE_PATH)
+        if initialized_identity is not None:
+            INITIALIZED_DATABASES[database_key] = initialized_identity
+
+
+def _initialize_database():
     ensure_dirs()
     kanban_store.initialize(DATABASE_PATH)
     with DATABASE_LOCK, database_connection() as connection:
@@ -755,6 +792,7 @@ def safe_template_filename(filename):
 
 
 def save_template_candidate(field):
+    ensure_dirs()
     filename = safe_template_filename(field.filename)
     temp_path = TEMPLATE_DIR / f".{uuid.uuid4().hex}.uploading"
     size = 0
@@ -782,6 +820,18 @@ def save_template_candidate(field):
         if temp_path.exists():
             temp_path.unlink()
         raise
+
+
+def store_proposal_template_upload(field):
+    """Validate and retain an uploaded template used by a single proposal."""
+    temp_path, filename = save_template_candidate(field)
+    target = UPLOAD_DIR / f"modelo_{uuid.uuid4().hex}.docx"
+    try:
+        os.replace(temp_path, target)
+        return target, filename
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
 
 
 def store_new_template(field):
@@ -2246,7 +2296,56 @@ def identify_items_from_pncp_link(link):
     )
 
 
+def purchase_number_from_opportunity_title(title):
+    match = re.search(r"(?<!\d)(\d[\w.-]*\s*/\s*\d{4})(?!\d)", compact(title))
+    return re.sub(r"\s+", "", match.group(1)) if match else ""
+
+
+def local_purchase_metadata(cnpj, ano, sequencial):
+    try:
+        detail = etl_repository().get_opportunity_by_pncp_identity(
+            cnpj,
+            ano,
+            sequencial,
+        )
+    except Exception:
+        return {}
+    if not detail or not detail.get("opportunity"):
+        return {}
+
+    opportunity = dict(detail["opportunity"])
+    return {
+        "numero_compra": purchase_number_from_opportunity_title(
+            opportunity.get("title")
+        ),
+        "processo": compact(opportunity.get("process_number")),
+        "modalidade": compact(opportunity.get("modality")),
+        "objeto": compact(
+            opportunity.get("description") or opportunity.get("title")
+        ),
+        "orgao": compact(opportunity.get("buyer_name")),
+        "orgao_cnpj": compact(opportunity.get("buyer_cnpj")) or compact(cnpj),
+        "unidade": "",
+        "municipio": compact(opportunity.get("city")),
+        "uf": compact(opportunity.get("uf")),
+        "numero_controle_pncp": compact(
+            opportunity.get("pncp_control_number")
+        ),
+        "abertura": compact(opportunity.get("proposal_start_at")),
+        "encerramento": compact(opportunity.get("proposal_end_at")),
+        "situacao": compact(opportunity.get("status")),
+        "valor_total_estimado": opportunity.get("estimated_value"),
+        "modo_disputa": "",
+        "codigo_unidade": compact(opportunity.get("uasg")),
+        "link_sistema_origem": compact(opportunity.get("origin_url")),
+    }
+
+
 def pncp_purchase_metadata(cnpj, ano, sequencial):
+    local = local_purchase_metadata(cnpj, ano, sequencial)
+    if local:
+        return local
+
     url = (
         f"{PNCP_API_BASE}/consulta/v1/orgaos/{cnpj}/compras/"
         f"{ano}/{sequencial}"
@@ -3328,15 +3427,25 @@ def catalog_draft_from_pncp_link(link, selected_key):
     )
     if not selected:
         raise ValueError("Selecione um item válido do edital.")
-    source_data = source_from_pncp_link(link)
-    selected, selected_document = richest_catalog_item(
-        source_data,
-        selected_key,
-        selected,
-    )
     pncp = dict(identification.get("pncp") or {})
+    selected_document = compact(pncp.get("documento_usado"))
+    draft_source = "base_estruturada"
+    enrichment_warning = ""
+    try:
+        source_data = source_from_pncp_link(link)
+        selected, selected_document = richest_catalog_item(
+            source_data,
+            selected_key,
+            selected,
+        )
+        draft_source = "documento_oficial"
+    except Exception as exc:
+        enrichment_warning = str(exc) or "Documento oficial indisponível."
+
     if selected_document:
         pncp["documento_usado"] = selected_document
+    elif draft_source == "base_estruturada":
+        pncp["documento_tipo"] = "Base estruturada local"
     pncp["metadata"] = pncp_purchase_metadata(
         pncp.get("cnpj"),
         pncp.get("ano"),
@@ -3346,6 +3455,8 @@ def catalog_draft_from_pncp_link(link, selected_key):
         "draft": catalog_draft_from_item(selected, pncp),
         "items": items,
         "pncp": pncp,
+        "source": draft_source,
+        "enrichment_warning": enrichment_warning,
     }
     cache_set(CATALOG_DRAFT_CACHE, cache_key, result)
     return result
@@ -3983,10 +4094,38 @@ def fit_widths_to_section(widths, section):
     return total_width, fitted
 
 
-def build_docx(items, template_path, output_path, responsible=None, commercial_terms=None):
+def move_table_before_template_paragraph(doc, table, paragraph_index):
+    paragraphs = list(doc._element.body.iter(qn("w:p")))
+    if paragraph_index < 0 or paragraph_index >= len(paragraphs):
+        raise ValueError("A posição selecionada para a tabela não existe mais no modelo.")
+    paragraphs[paragraph_index].addprevious(table._tbl)
+
+
+def build_docx(
+    items,
+    template_path,
+    output_path,
+    responsible=None,
+    commercial_terms=None,
+    mini_box_order=None,
+    document_block_order=None,
+):
+    table_paragraph_index = None
     if template_path and template_path.exists():
+        if document_block_order is not None:
+            layout = resolve_document_block_layout(template_path, document_block_order)
+            resolved_mini_box_order = list(layout.mini_box_order)
+            if (
+                mini_box_order is not None
+                and list(mini_box_order) != resolved_mini_box_order
+            ):
+                raise ValueError("As ordens visual e estrutural do documento são divergentes.")
+            mini_box_order = resolved_mini_box_order
+            table_paragraph_index = layout.table_paragraph_index
         with TEMPLATE_LOCK:
             shutil.copyfile(template_path, output_path)
+        if mini_box_order:
+            rebuild_docx_with_mini_box_order(output_path, output_path, mini_box_order)
         doc = Document(str(output_path))
     else:
         doc = Document()
@@ -4022,6 +4161,9 @@ def build_docx(items, template_path, output_path, responsible=None, commercial_t
             cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
             align = WD_ALIGN_PARAGRAPH.LEFT if key == "descricao" else WD_ALIGN_PARAGRAPH.CENTER
             write_cell(cell, item.get(key, ""), bold=False, size=9, align=align)
+
+    if table_paragraph_index is not None:
+        move_table_before_template_paragraph(doc, table, table_paragraph_index)
 
     add_commercial_terms(doc, items, commercial_terms)
     add_responsible_block(doc, responsible)
@@ -4133,11 +4275,11 @@ def format_pncp_quantity(value):
 
 def list_pncp_item_payload(cnpj, ano, sequencial):
     base_url = f"{PNCP_API_BASE}/pncp/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens"
-    page_size = 100
+    page_size = 500
     payload = []
-    for page in range(1, 101):
+    for page in range(1, 21):
         url = f"{base_url}?{urlencode({'pagina': page, 'tamanhoPagina': page_size})}"
-        page_payload = request_json(url)
+        page_payload = request_json(url, timeout=45)
         if isinstance(page_payload, dict):
             page_items = page_payload.get("data") or page_payload.get("items") or page_payload.get("content") or []
         else:
@@ -4821,6 +4963,71 @@ def date_in_range(value, data_inicial="", data_final=""):
     return True
 
 
+SEARCH_DATE_FIELDS = {"publicacao", "abertura", "encerramento"}
+
+
+def parse_search_date_field(value):
+    field = compact(value).lower() or "encerramento"
+    aliases = {
+        "publication": "publicacao",
+        "published": "publicacao",
+        "opening": "abertura",
+        "start": "abertura",
+        "closing": "encerramento",
+        "end": "encerramento",
+    }
+    field = aliases.get(field, field)
+    if field not in SEARCH_DATE_FIELDS:
+        raise ValueError("Campo de data invalido.")
+    return field
+
+
+def search_row_date_value(row, date_field):
+    field_names = {
+        "publicacao": (
+            "data_publicacao_pncp",
+            "dataPublicacaoPncp",
+            "dataPublicacaoPNCP",
+            "dataPublicacao",
+        ),
+        "abertura": (
+            "data_inicio_vigencia",
+            "dataAberturaProposta",
+            "dataAberturaPropostaPncp",
+        ),
+        "encerramento": (
+            "data_fim_vigencia",
+            "dataEncerramentoProposta",
+            "dataEncerramentoPropostaPncp",
+        ),
+    }
+    return next(
+        (row.get(name) for name in field_names[date_field] if compact(row.get(name))),
+        "",
+    )
+
+
+def search_row_date_in_range(
+    row,
+    date_field,
+    data_inicial="",
+    data_final="",
+    *,
+    include_missing_closing=False,
+):
+    if not data_inicial and not data_final:
+        return True
+    selected_date = search_row_date_value(row, date_field)
+    if selected_date:
+        return date_in_range(selected_date, data_inicial, data_final)
+    if date_field == "encerramento" and include_missing_closing:
+        publication_date = search_row_date_value(row, "publicacao")
+        return bool(publication_date) and date_in_range(
+            publication_date, data_inicial, data_final
+        )
+    return False
+
+
 def date_range_days(data_inicial, data_final):
     if not data_inicial or not data_final:
         return 0
@@ -4848,6 +5055,7 @@ def map_search_item(row):
     cnpj = row.get("orgao_cnpj", "")
     ano = row.get("ano", "")
     sequencial = row.get("numero_sequencial", "")
+    cached_items = cached_search_row_items(row)
     return {
         "orgao": row.get("orgao_nome", ""),
         "cnpj": cnpj,
@@ -4865,9 +5073,66 @@ def map_search_item(row):
         "modoDisputa": row.get("modo_disputa_nome", ""),
         "situacao": row.get("situacao_nome", "") or row.get("situacao_compra_nome", ""),
         "linkOrigem": row.get("item_url", "") or row.get("link_sistema_origem", ""),
-        "abertura": row.get("data_inicio_vigencia", ""),
-        "encerramento": row.get("data_fim_vigencia", ""),
+        "publicacao": search_row_date_value(row, "publicacao"),
+        "abertura": search_row_date_value(row, "abertura"),
+        "encerramento": search_row_date_value(row, "encerramento"),
+        "itemCount": len(cached_items),
+        "itensIndexados": bool(cached_items),
+        "fonte": "pncp",
         "link": pncp_app_link(cnpj, ano, sequencial) if cnpj and ano and sequencial else "",
+    }
+
+
+def consulta_row_to_search_item(row):
+    buyer = row.get("orgaoEntidade") or {}
+    unit = row.get("unidadeOrgao") or {}
+    return {
+        "orgao_cnpj": compact(
+            row.get("orgaoEntidadeCnpj")
+            or row.get("numeroCnpj")
+            or (buyer.get("cnpj") if isinstance(buyer, dict) else "")
+        ),
+        "orgao_nome": compact(
+            row.get("orgaoEntidadeRazaoSocial")
+            or (buyer.get("razaoSocial") if isinstance(buyer, dict) else "")
+        ),
+        "ano": row.get("anoCompra") or row.get("anoCompraPncp") or "",
+        "numero_sequencial": (
+            row.get("sequencialCompra") or row.get("sequencialCompraPncp") or ""
+        ),
+        "numero_controle_pncp": compact(row.get("numeroControlePNCP")),
+        "title": compact(row.get("numeroCompra") or row.get("processo")),
+        "description": compact(row.get("objetoCompra")),
+        "modalidade_nome": compact(row.get("modalidadeNome")),
+        "uf": compact(
+            row.get("unidadeOrgaoUfSigla")
+            or (unit.get("ufSigla") if isinstance(unit, dict) else "")
+        ),
+        "municipio_nome": compact(
+            row.get("unidadeOrgaoMunicipioNome")
+            or (unit.get("municipioNome") if isinstance(unit, dict) else "")
+        ),
+        "unidade_nome": compact(
+            row.get("unidadeOrgaoNomeUnidade")
+            or (unit.get("nomeUnidade") if isinstance(unit, dict) else "")
+        ),
+        "unidade_codigo": compact(
+            row.get("unidadeOrgaoCodigoUnidade")
+            or (unit.get("codigoUnidade") if isinstance(unit, dict) else "")
+        ),
+        "valor_total_estimado": row.get("valorTotalEstimado"),
+        "situacao_nome": compact(row.get("situacaoCompraNome")),
+        "item_url": compact(row.get("linkSistemaOrigem")),
+        "data_publicacao_pncp": compact(
+            row.get("dataPublicacaoPncp") or row.get("dataPublicacaoPNCP")
+        ),
+        "data_inicio_vigencia": compact(
+            row.get("dataAberturaProposta") or row.get("dataAberturaPropostaPncp")
+        ),
+        "data_fim_vigencia": compact(
+            row.get("dataEncerramentoProposta")
+            or row.get("dataEncerramentoPropostaPncp")
+        ),
     }
 
 
@@ -4914,33 +5179,7 @@ MAX_SEARCH_TERM_GAP = 2
 
 
 def search_word_variants(word):
-    word = norm(word)
-    if not word:
-        return set()
-    variants = {word}
-    if len(word) > 3:
-        if word.endswith("oes"):
-            variants.add(f"{word[:-3]}ao")
-        if word.endswith("ais"):
-            variants.add(f"{word[:-3]}al")
-        if word.endswith("eis"):
-            variants.add(f"{word[:-3]}el")
-        if word.endswith("is"):
-            variants.add(f"{word[:-2]}il")
-        if word.endswith("es"):
-            variants.add(word[:-2])
-        if word.endswith("s"):
-            variants.add(word[:-1])
-        variants.add(f"{word}s")
-        if word[-1] in {"r", "z", "n"}:
-            variants.add(f"{word}es")
-        if word.endswith("al"):
-            variants.add(f"{word[:-2]}ais")
-        if word.endswith("el"):
-            variants.add(f"{word[:-2]}eis")
-        if word.endswith("ao"):
-            variants.add(f"{word[:-2]}oes")
-    return {variant for variant in variants if variant}
+    return shared_search_word_variants(word)
 
 
 def search_words_match(actual, expected):
@@ -4948,32 +5187,7 @@ def search_words_match(actual, expected):
 
 
 def matches_complete_words(text, search_term):
-    expected = norm(search_term).split()
-    if not expected:
-        return True
-    words = norm(text).split()
-    for start, word in enumerate(words):
-        if not search_words_match(word, expected[0]):
-            continue
-        position = start
-        matched = True
-        for expected_word in expected[1:]:
-            stop = min(len(words), position + MAX_SEARCH_TERM_GAP + 2)
-            next_position = next(
-                (
-                    index
-                    for index in range(position + 1, stop)
-                    if search_words_match(words[index], expected_word)
-                ),
-                None,
-            )
-            if next_position is None:
-                matched = False
-                break
-            position = next_position
-        if matched:
-            return True
-    return False
+    return shared_matches_complete_words(text, search_term)
 
 
 def matches_complete_search_term(row, search_term):
@@ -5032,6 +5246,26 @@ def search_row_contract_key(row):
     if not cnpj or not ano or not sequencial:
         return None
     return cnpj, ano, sequencial
+
+
+def search_row_unique_key(row):
+    contract_key = search_row_contract_key(row)
+    if contract_key is not None:
+        return ("pncp", *contract_key)
+    control_number = compact(
+        row.get("numero_controle_pncp") or row.get("numeroControlePNCP")
+    )
+    if control_number:
+        return ("controle", norm(control_number))
+    source_url = compact(row.get("item_url") or row.get("link_sistema_origem"))
+    if source_url:
+        return ("url", source_url)
+    return (
+        "payload",
+        hashlib.sha256(
+            json.dumps(row, ensure_ascii=True, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest(),
+    )
 
 
 def get_search_row_pncp_items(row):
@@ -5234,6 +5468,10 @@ def reconcile_pncp_search_rows(rows, request_url, filters):
 def search_pncp_app_editais(params, data_inicial, data_final):
     keywords = split_search_keywords(params.get("palavraChave"))
     search_terms = tuple(keywords) or ("",)
+    date_field = parse_search_date_field(params.get("campoData"))
+    include_missing_closing = str(
+        params.get("incluirSemDataEncerramento") or ""
+    ).strip().lower() in {"1", "true", "yes", "sim"}
     object_type = str(params.get("tipoObjeto") or "").strip().lower()
     if object_type not in {"", "material", "servico"}:
         raise ValueError("Tipo do objeto invalido.")
@@ -5265,6 +5503,8 @@ def search_pncp_app_editais(params, data_inicial, data_final):
         "ufs": selected_ufs,
         "dataInicial": data_inicial,
         "dataFinal": data_final,
+        "campoData": date_field,
+        "incluirSemDataEncerramento": include_missing_closing,
         "tipoObjeto": object_type,
         "numeroCompra": purchase_number,
         "uasg": uasg,
@@ -5404,20 +5644,19 @@ def search_pncp_app_editais(params, data_inicial, data_final):
             timed_out = timed_out or bool(payload.get("timeout"))
             page_cache_hit = page_cache_hit or bool(payload.get("cache_hit"))
             for row in payload.get("items", []):
-                if not date_in_range(row.get("data_fim_vigencia"), data_inicial, data_final):
+                if not search_row_date_in_range(
+                    row,
+                    date_field,
+                    data_inicial,
+                    data_final,
+                    include_missing_closing=include_missing_closing,
+                ):
                     continue
                 if not row_matches_purchase_filters(row, purchase_number, uasg):
                     continue
                 if not row_matches_opportunity_type(row, object_type):
                     continue
-                row_key = (
-                    row.get("id")
-                    or row.get("numero_controle_pncp")
-                    or row.get("item_url")
-                    or hashlib.sha256(
-                        json.dumps(row, ensure_ascii=True, sort_keys=True, default=str).encode("utf-8")
-                    ).hexdigest()
-                )
+                row_key = search_row_unique_key(row)
                 candidates_by_term[search_term].setdefault(row_key, row)
 
         filtered_rows = []
@@ -5426,19 +5665,7 @@ def search_pncp_app_editais(params, data_inicial, data_final):
             for row in filter_rows_by_complete_search_term(
                 candidates.values(), search_term
             ):
-                row_key = (
-                    row.get("id")
-                    or row.get("numero_controle_pncp")
-                    or row.get("item_url")
-                    or hashlib.sha256(
-                        json.dumps(
-                            row,
-                            ensure_ascii=True,
-                            sort_keys=True,
-                            default=str,
-                        ).encode("utf-8")
-                    ).hexdigest()
-                )
+                row_key = search_row_unique_key(row)
                 if row_key in seen:
                     continue
                 seen.add(row_key)
@@ -5471,6 +5698,7 @@ def search_pncp_app_editais(params, data_inicial, data_final):
                     {
                         "dataInicial": data_inicial,
                         "dataFinal": data_final,
+                        "campoData": date_field,
                         "ufs": selected_ufs,
                         "keywords": keywords,
                         "tipoObjeto": object_type,
@@ -5538,6 +5766,7 @@ def search_pncp_app_editais(params, data_inicial, data_final):
         "complete": consolidated["complete"],
         "dataInicial": data_inicial,
         "dataFinal": data_final,
+        "campoData": date_field,
         "tipoObjeto": object_type,
         "cache_hit": aggregate_cache_hit or consolidated["page_cache_hit"],
         "reconciliation": consolidated.get("reconciliation"),
@@ -5613,13 +5842,7 @@ def search_pncp_historical_bids(params, data_inicial, data_final):
                         source_total += len(page_rows)
                 for source_row in page_rows:
                     row = consulta_row_to_search_item(source_row)
-                    row_key = (
-                        row.get("numero_controle_pncp")
-                        or row.get("item_url")
-                        or hashlib.sha256(
-                            json.dumps(row, ensure_ascii=True, sort_keys=True, default=str).encode("utf-8")
-                        ).hexdigest()
-                    )
+                    row_key = search_row_unique_key(row)
                     if row_key in seen:
                         continue
                     if not row_matches_purchase_filters(row, purchase_number, uasg):
@@ -5704,6 +5927,7 @@ def combined_reconciliation_summary(*summaries):
 def sync_pncp_opportunity_endpoints(params, data_inicial, data_final):
     selected_ufs = parse_search_ufs(params.get("uf"))
     selected_modality = compact(params.get("codigoModalidadeContratacao"))
+    date_field = parse_search_date_field(params.get("campoData"))
     today = datetime.now().strftime("%Y%m%d")
     publication_start = data_inicial or today
     publication_end = min(data_final or today, today)
@@ -5711,6 +5935,7 @@ def sync_pncp_opportunity_endpoints(params, data_inicial, data_final):
         "dataInicial": publication_start,
         "dataFinal": data_final,
         "publicationEnd": publication_end,
+        "campoData": date_field,
         "ufs": selected_ufs,
         "modalidade": selected_modality,
     }, ensure_ascii=True, sort_keys=True)
@@ -5723,7 +5948,7 @@ def sync_pncp_opportunity_endpoints(params, data_inicial, data_final):
         ("proposta", {"dataFinal": data_final or today}),
     ]
     if publication_start <= publication_end:
-        modalities = [int(selected_modality)] if selected_modality else list(range(1, 20))
+        modalities = [int(selected_modality)] if selected_modality else list(PNCP_MODALITY_IDS)
         endpoint_specs.extend([
             ("publicacao", {
                 "dataInicial": publication_start,
@@ -5751,15 +5976,25 @@ def sync_pncp_opportunity_endpoints(params, data_inicial, data_final):
     sync_units = []
     for endpoint, base_filters in endpoint_specs:
         for uf in selected_ufs or ("",):
-            filters = dict(base_filters)
-            if uf:
-                filters["uf"] = uf
-            sync_units.append((endpoint, filters))
+            modality_codes = base_filters.get("modality_codes") or (None,)
+            for modality_code in modality_codes:
+                filters = dict(base_filters)
+                filters.pop("modality_codes", None)
+                if modality_code is not None:
+                    filters["codigoModalidadeContratacao"] = int(modality_code)
+                if uf:
+                    filters["uf"] = uf
+                sync_units.append((endpoint, filters))
 
     def sync_unit(endpoint, filters):
         service = ETLSyncService(
             etl_repository(),
-            PNCPConnector(client=HttpJsonClient(timeout=12, retries=0)),
+            PNCPConnector(client=HttpJsonClient(
+                timeout=30,
+                retries=2,
+                retry_backoff=1.0,
+                request_delay=0.15,
+            )),
             PNCPMapper(),
             OpportunityClassifier(),
         )
@@ -5774,7 +6009,7 @@ def sync_pncp_opportunity_endpoints(params, data_inicial, data_final):
             company_profile={},
         ))
 
-    with ThreadPoolExecutor(max_workers=min(4, len(sync_units))) as executor:
+    with ThreadPoolExecutor(max_workers=min(2, len(sync_units))) as executor:
         futures = {
             executor.submit(sync_unit, endpoint, filters): endpoint
             for endpoint, filters in sync_units
@@ -5845,6 +6080,8 @@ def pncp_search_job_key(params):
         for key in (
             "dataInicial",
             "dataFinal",
+            "campoData",
+            "incluirSemDataEncerramento",
             "uf",
             "palavraChave",
             "tipoObjeto",
@@ -5868,6 +6105,10 @@ def quick_pncp_search_preview(params):
         raise ValueError("Data inicial nao pode ser maior que a data final.")
     if date_range_days(data_inicial, data_final) > 30:
         raise ValueError("O periodo maximo e de 30 dias corridos.")
+    date_field = parse_search_date_field(params.get("campoData"))
+    include_missing_closing = str(
+        params.get("incluirSemDataEncerramento") or ""
+    ).strip().lower() in {"1", "true", "yes", "sim"}
     object_type = str(params.get("tipoObjeto") or "").strip().lower()
     if object_type not in {"", "material", "servico"}:
         raise ValueError("Tipo do objeto invalido.")
@@ -5929,7 +6170,13 @@ def quick_pncp_search_preview(params):
         cache_hit = cache_hit or bool(payload.get("cache_hit"))
         candidates = []
         for row in payload.get("items", []):
-            if not date_in_range(row.get("data_fim_vigencia"), data_inicial, data_final):
+            if not search_row_date_in_range(
+                row,
+                date_field,
+                data_inicial,
+                data_final,
+                include_missing_closing=include_missing_closing,
+            ):
                 continue
             if not row_matches_purchase_filters(row, purchase_number, uasg):
                 continue
@@ -5937,15 +6184,10 @@ def quick_pncp_search_preview(params):
                 continue
             candidates.append(row)
         for row in filter_opportunity_rows_by_search_term(candidates, search_term):
-            row_key = (
-                row.get("id")
-                or row.get("numero_controle_pncp")
-                or row.get("item_url")
-            )
-            if row_key and row_key in seen:
+            row_key = search_row_unique_key(row)
+            if row_key in seen:
                 continue
-            if row_key:
-                seen.add(row_key)
+            seen.add(row_key)
             rows.append(row)
     rows.sort(
         key=lambda row: str(
@@ -5977,6 +6219,7 @@ def quick_pncp_search_preview(params):
         "searching": True,
         "dataInicial": data_inicial,
         "dataFinal": data_final,
+        "campoData": date_field,
         "tipoObjeto": object_type,
         "cache_hit": cache_hit,
     }
@@ -6173,6 +6416,10 @@ def template_response(handler, template_key):
 
 
 def resolve_template(ref):
+    ref = compact(ref)
+    if not ref:
+        fallback = template_path_from_name(default_template_name())
+        return fallback if fallback and fallback.exists() else None
     if ref.startswith("managed:"):
         template = template_path_from_name(ref.removeprefix("managed:"))
         return template if template and template.exists() else None
@@ -6180,12 +6427,69 @@ def resolve_template(ref):
         filename = LEGACY_TEMPLATE_KEYS.get(ref.removeprefix("builtin:"), "")
         template = template_path_from_name(filename)
         return template if template and template.exists() else None
-    if ref:
-        candidate = UPLOAD_DIR / Path(ref).name
-        if candidate.exists() and candidate.parent.resolve() == UPLOAD_DIR.resolve():
-            return candidate
-    fallback = template_path_from_name(default_template_name())
-    return fallback if fallback and fallback.exists() else None
+    upload_name = ref.removeprefix("upload:") if ref.startswith("upload:") else ref
+    candidate = UPLOAD_DIR / Path(upload_name).name
+    if (
+        candidate.suffix.lower() == ".docx"
+        and candidate.is_file()
+        and candidate.resolve().parent == UPLOAD_DIR.resolve()
+    ):
+        return candidate
+    return None
+
+
+def proposal_template_selection(form):
+    template_choice_field = form["template_choice"] if "template_choice" in form else None
+    template_choice = compact(
+        template_choice_field.value if template_choice_field is not None else ""
+    )
+    uploaded_template = form["template_file"] if "template_file" in form else None
+    if (
+        uploaded_template is not None
+        and not isinstance(uploaded_template, list)
+        and getattr(uploaded_template, "filename", "")
+    ):
+        template_path, original_name = store_proposal_template_upload(uploaded_template)
+        selection = {
+            "path": template_path,
+            "ref": f"upload:{template_path.name}",
+            "name": original_name,
+            "source": "upload",
+        }
+    else:
+        selected_template = template_path_from_name(template_choice)
+        if not selected_template:
+            raise ValueError("Modelo Word inválido.")
+        if not selected_template.exists():
+            raise ValueError(f"O modelo {template_choice} não está disponível.")
+        record = template_record(selected_template)
+        selection = {
+            "path": selected_template,
+            "ref": f"managed:{template_choice}",
+            "name": record["display_name"],
+            "source": "managed",
+        }
+
+    LOGGER.info(
+        "Proposal template selected: source=%s ref=%s name=%s size=%s",
+        selection["source"],
+        selection["ref"],
+        selection["name"],
+        selection["path"].stat().st_size,
+    )
+    return selection
+
+
+def docx_structure_response(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("Os dados do modelo são inválidos.")
+    template_ref = compact(payload.get("template_ref"))
+    if not template_ref:
+        raise ValueError("Informe o modelo Word que será analisado.")
+    template_path = resolve_template(template_ref)
+    if not template_path:
+        raise ValueError("O modelo Word selecionado não está disponível.")
+    return inspect_docx_structure(template_path)
 
 
 def proposal_generation_context(payload):
@@ -6228,6 +6532,30 @@ def proposal_generation_context(payload):
             "Informe valores unitários válidos e não negativos para todos os itens."
         )
 
+    requested_order = payload.get("mini_box_order")
+    requested_document_order = payload.get("document_block_order")
+    mini_box_order = None
+    document_block_order = None
+    if requested_document_order is not None:
+        if not template_path:
+            raise ValueError("O modelo Word selecionado não está disponível.")
+        layout = resolve_document_block_layout(template_path, requested_document_order)
+        document_block_order = list(layout.order)
+        mini_box_order = list(layout.mini_box_order)
+        if requested_order is not None:
+            validated_mini_box_order = validate_mini_box_order(
+                template_path,
+                requested_order,
+            )
+            if validated_mini_box_order != mini_box_order:
+                raise ValueError("As ordens visual e estrutural do documento são divergentes.")
+    elif requested_order is not None:
+        if not template_path:
+            raise ValueError("O modelo Word selecionado não está disponível.")
+        mini_box_order = validate_mini_box_order(template_path, requested_order)
+        document_block_order = [*mini_box_order, GENERATED_TABLE_BLOCK_ID]
+        validate_document_block_order(template_path, document_block_order)
+
     return {
         "items": items,
         "template_path": template_path,
@@ -6235,6 +6563,8 @@ def proposal_generation_context(payload):
         "responsible_id": responsible_id,
         "responsible": responsible,
         "commercial_terms": payload.get("commercial_terms"),
+        "mini_box_order": mini_box_order,
+        "document_block_order": document_block_order,
     }
 
 
@@ -6253,6 +6583,8 @@ def proposal_preview_fingerprint(context):
         "template": template_signature,
         "responsible": context.get("responsible"),
         "commercial_terms": context.get("commercial_terms"),
+        "mini_box_order": context.get("mini_box_order"),
+        "document_block_order": context.get("document_block_order"),
     }
     encoded = json.dumps(
         signature,
@@ -6473,6 +6805,8 @@ def create_proposal_preview(context):
                 preview_docx,
                 responsible=context["responsible"],
                 commercial_terms=context["commercial_terms"],
+                mini_box_order=context.get("mini_box_order"),
+                document_block_order=context.get("document_block_order"),
             )
             try:
                 convert_docx_to_pdf(preview_docx, preview_pdf)
@@ -9730,6 +10064,9 @@ def sync_internal_pncp(payload):
 def internal_opportunities_response(query):
     page = max(int(query.get("pagina") or query.get("page") or 1), 1)
     page_size = min(max(int(query.get("tamanhoPagina") or query.get("page_size") or 10), 1), 100)
+    date_field = parse_search_date_field(query.get("campoData"))
+    date_from = _etl_query_date(query.get("dataInicial"))
+    date_to = _etl_query_date(query.get("dataFinal"), end_of_day=True)
     filters = {
         "limit": page_size,
         "offset": (page - 1) * page_size,
@@ -9740,13 +10077,25 @@ def internal_opportunities_response(query):
         "modality_code": query.get("codigoModalidadeContratacao"),
         "purchase_number": query.get("numeroCompra"),
         "uasg": query.get("uasg"),
-        "proposal_from": _etl_query_date(query.get("dataInicial")),
-        "proposal_to": _etl_query_date(query.get("dataFinal"), end_of_day=True),
-        "include_missing_proposal_dates": str(
-            query.get("incluirSemDataEncerramento") or ""
-        ).strip().lower() in {"1", "true", "yes", "sim"},
+        "date_field": {
+            "publicacao": "publication",
+            "abertura": "opening",
+            "encerramento": "closing",
+        }[date_field],
         "score_min": query.get("score_min"),
     }
+    if date_field == "publicacao":
+        filters["published_from"] = date_from
+        filters["published_to"] = date_to
+    elif date_field == "abertura":
+        filters["proposal_start_from"] = date_from
+        filters["proposal_start_to"] = date_to
+    else:
+        filters["proposal_from"] = date_from
+        filters["proposal_to"] = date_to
+        filters["include_missing_proposal_dates"] = str(
+            query.get("incluirSemDataEncerramento") or ""
+        ).strip().lower() in {"1", "true", "yes", "sim"}
     payload = etl_repository().list_opportunities(filters)
     results = []
     for row in payload["items"]:
@@ -9775,10 +10124,14 @@ def internal_opportunities_response(query):
             "valorTotalEstimado": row.get("estimated_value"),
             "modoDisputa": "",
             "situacao": compact(row.get("status")),
+            "fonte": compact(row.get("source")),
             "linkOrigem": safe_public_url(row.get("origin_url")),
+            "publicacao": compact(row.get("published_at")),
             "abertura": compact(row.get("proposal_start_at")),
             "encerramento": compact(row.get("proposal_end_at")),
             "dataEncerramentoInformada": bool(compact(row.get("proposal_end_at"))),
+            "itemCount": int(row.get("item_count") or 0),
+            "itensIndexados": bool(row.get("items_indexed")),
             "link": link,
         })
     total = int(payload["total"])
@@ -9795,6 +10148,7 @@ def internal_opportunities_response(query):
         "complete": True,
         "searching": False,
         "source": "sqlite-radar",
+        "campoData": date_field,
     }
 
 
@@ -9856,28 +10210,54 @@ def internal_opportunity_detail(opportunity_id):
     if detail is None:
         raise FileNotFoundError("Oportunidade nao localizada no radar interno.")
     enrichment_messages = []
+    row = detail["opportunity"]
+    cnpj = compact(row.get("source_cnpj") or row.get("buyer_cnpj"))
+    year = row.get("year")
+    sequence = row.get("sequence")
+    has_pncp_identity = bool(cnpj and year and sequence)
+    enrichment_tasks = []
+
     if not detail["items"]:
-        if ALLOW_DETAIL_ITEMS_ON_DEMAND:
-            row = detail["opportunity"]
-            cnpj = compact(row.get("source_cnpj") or row.get("buyer_cnpj"))
-            year = row.get("year")
-            sequence = row.get("sequence")
-            if cnpj and year and sequence:
-                try:
-                    enrich_opportunity_items(cnpj, year, sequence)
-                    detail = etl_repository().get_opportunity(opportunity_id) or detail
-                except Exception as exc:
-                    enrichment_messages.append(f"Itens oficiais pendentes: {exc}")
-            else:
-                enrichment_messages.append(
-                    "Itens ainda nao carregados: a oportunidade nao possui identidade PNCP completa."
-                )
+        if ALLOW_DETAIL_ITEMS_ON_DEMAND and has_pncp_identity:
+            enrichment_tasks.append(
+                ("Itens oficiais pendentes", enrich_opportunity_items, (cnpj, year, sequence))
+            )
+        elif ALLOW_DETAIL_ITEMS_ON_DEMAND:
+            enrichment_messages.append(
+                "Itens ainda nao carregados: a oportunidade nao possui identidade PNCP completa."
+            )
         else:
             enrichment_messages.append("Itens oficiais ainda nao carregados no banco local.")
+
     if not detail["documents"]:
-        enrichment_messages.append(
-            "Arquivos oficiais ainda não carregados no banco local; isso não impede a consulta dos itens."
-        )
+        if ALLOW_DETAIL_DOCUMENT_ON_DEMAND and has_pncp_identity:
+            enrichment_tasks.append(
+                (
+                    "Arquivos oficiais pendentes",
+                    enrich_detail_documents,
+                    (opportunity_id, detail),
+                )
+            )
+        elif ALLOW_DETAIL_DOCUMENT_ON_DEMAND:
+            enrichment_messages.append(
+                "Arquivos ainda nao carregados: a oportunidade nao possui identidade PNCP completa."
+            )
+        else:
+            enrichment_messages.append("Arquivos oficiais ainda nao carregados no banco local.")
+
+    if enrichment_tasks:
+        with ThreadPoolExecutor(max_workers=len(enrichment_tasks)) as executor:
+            pending = [
+                (label, executor.submit(function, *arguments))
+                for label, function, arguments in enrichment_tasks
+            ]
+            for label, future in pending:
+                try:
+                    future.result()
+                except Exception as exc:
+                    enrichment_messages.append(f"{label}: {exc}")
+        detail = etl_repository().get_opportunity(opportunity_id) or detail
+
     if enrichment_messages:
         detail["enrichment_error"] = " ".join(enrichment_messages)
     row = detail["opportunity"]
@@ -10669,6 +11049,23 @@ class App(BaseHTTPRequestHandler):
                 template_api_error(self, exc)
             return
 
+        if request_path == "/api/docx-structure":
+            try:
+                payload = parse_json_body(self, MAX_JSON_REQUEST_SIZE)
+                json_response(self, 200, docx_structure_response(payload))
+            except OverflowError as exc:
+                json_response(self, 413, {"error": str(exc)})
+            except ValueError as exc:
+                json_response(self, 422, {"error": str(exc)})
+            except Exception:
+                LOGGER.exception("DOCX structure inspection failed")
+                json_response(
+                    self,
+                    500,
+                    {"error": "Não foi possível analisar a estrutura do modelo Word."},
+                )
+            return
+
         if request_path not in {"/process", "/generate", "/proposal-preview"}:
             self.send_error(404)
             return
@@ -10691,6 +11088,8 @@ class App(BaseHTTPRequestHandler):
                     out_path,
                     responsible=context["responsible"],
                     commercial_terms=context["commercial_terms"],
+                    mini_box_order=context["mini_box_order"],
+                    document_block_order=context["document_block_order"],
                 )
                 try:
                     record_generated_document(context["responsible_id"], out_path)
@@ -10739,23 +11138,10 @@ class App(BaseHTTPRequestHandler):
                 return
             process_data = proposal_process_from_structured_items(pncp_link, wanted_items)
 
-            template_choice_field = form["template_choice"] if "template_choice" in form else None
-            template_choice = compact(template_choice_field.value if template_choice_field is not None else "")
-            template = form["template_file"] if "template_file" in form else None
-            if template is not None and template.filename:
-                template_path, _ = save_upload(template, "modelo")
-                template_ref = template_path.name
-            else:
-                selected_template = template_path_from_name(template_choice)
-                if not selected_template:
-                    json_response(self, 422, {"error": "Modelo Word inválido."})
-                    return
-                if not selected_template.exists():
-                    json_response(self, 422, {"error": f"O modelo {template_choice} não está disponível."})
-                    return
-                template_ref = f"managed:{template_choice}"
-
-            process_data["template_ref"] = template_ref
+            template_selection = proposal_template_selection(form)
+            process_data["template_ref"] = template_selection["ref"]
+            process_data["template_name"] = template_selection["name"]
+            process_data["template_source"] = template_selection["source"]
             json_response(self, 200, process_data)
         except json.JSONDecodeError:
             json_response(self, 422, {"error": "Os dados enviados não são um JSON válido."})

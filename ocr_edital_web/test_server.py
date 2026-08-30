@@ -3,7 +3,6 @@ import unittest
 import time
 import tempfile
 import zipfile
-import zipfile
 from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
@@ -80,6 +79,89 @@ class RequestBoundaryTests(unittest.TestCase):
             })
 
         self.assertTrue(captured["include_missing_proposal_dates"])
+
+    def test_internal_search_maps_selected_date_field(self):
+        captured = []
+
+        class Repository:
+            def list_opportunities(self, filters):
+                captured.append(filters)
+                return {"items": [], "total": 0, "limit": 10, "offset": 0}
+
+        with patch.object(server, "etl_repository", return_value=Repository()):
+            server.internal_opportunities_response({
+                "dataInicial": "20260801",
+                "dataFinal": "20260830",
+                "campoData": "publicacao",
+            })
+            server.internal_opportunities_response({
+                "dataInicial": "20260801",
+                "dataFinal": "20260830",
+                "campoData": "abertura",
+            })
+
+        self.assertEqual(captured[0]["date_field"], "publication")
+        self.assertIn("published_from", captured[0])
+        self.assertNotIn("proposal_from", captured[0])
+        self.assertEqual(captured[1]["date_field"], "opening")
+        self.assertIn("proposal_start_from", captured[1])
+        self.assertNotIn("proposal_from", captured[1])
+
+    def test_internal_search_rejects_unknown_date_field(self):
+        with self.assertRaisesRegex(ValueError, "Campo de data"):
+            server.internal_opportunities_response({"campoData": "assinatura"})
+
+
+class DatabaseInitializationTests(unittest.TestCase):
+    def test_same_database_file_is_initialized_only_once(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "pncp.sqlite3"
+            database_key = str(database_path.resolve())
+            calls = []
+
+            def initialize_once():
+                calls.append(database_path)
+                database_path.touch()
+
+            server.INITIALIZED_DATABASES.pop(database_key, None)
+            try:
+                with (
+                    patch.object(server, "DATABASE_PATH", database_path),
+                    patch.object(server, "_initialize_database", side_effect=initialize_once),
+                ):
+                    server.init_database()
+                    server.init_database()
+            finally:
+                server.INITIALIZED_DATABASES.pop(database_key, None)
+
+        self.assertEqual(calls, [database_path])
+
+    def test_replaced_database_file_is_initialized_again(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database_path = root / "pncp.sqlite3"
+            replacement_path = root / "replacement.sqlite3"
+            database_key = str(database_path.resolve())
+            calls = []
+
+            def initialize_database():
+                calls.append(database_path)
+                database_path.touch()
+
+            server.INITIALIZED_DATABASES.pop(database_key, None)
+            try:
+                with (
+                    patch.object(server, "DATABASE_PATH", database_path),
+                    patch.object(server, "_initialize_database", side_effect=initialize_database),
+                ):
+                    server.init_database()
+                    replacement_path.write_bytes(b"replacement")
+                    replacement_path.replace(database_path)
+                    server.init_database()
+            finally:
+                server.INITIALIZED_DATABASES.pop(database_key, None)
+
+        self.assertEqual(calls, [database_path, database_path])
 
 
 class ItemExtractionRegressionTests(unittest.TestCase):
@@ -796,6 +878,68 @@ class TemplateManagementTests(unittest.TestCase):
 
         self.assertEqual(list(self.template_dir.iterdir()), [])
 
+    def test_explicit_missing_template_never_falls_back_to_default(self):
+        default = server.store_new_template(
+            self.upload_field("Padrao.docx", "MODELO PADRAO")
+        )
+        upload_dir = self.template_dir / "uploads"
+        upload_dir.mkdir()
+
+        with (
+            patch.object(server, "UPLOAD_DIR", upload_dir),
+            patch.object(server, "DEFAULT_TEMPLATE", self.template_dir / default["id"]),
+        ):
+            self.assertEqual(
+                server.resolve_template(""),
+                self.template_dir / default["id"],
+            )
+            self.assertIsNone(server.resolve_template("managed:Ausente.docx"))
+            self.assertIsNone(server.resolve_template("upload:modelo_ausente.docx"))
+            self.assertIsNone(server.resolve_template("modelo_ausente.docx"))
+
+    def test_uploaded_proposal_template_is_validated_selected_and_preserved(self):
+        managed = server.store_new_template(
+            self.upload_field("Cadastrado.docx", "MODELO CADASTRADO")
+        )
+        upload_dir = self.template_dir / "uploads"
+        upload_dir.mkdir()
+        form = {
+            "template_choice": SimpleNamespace(value=managed["id"]),
+            "template_file": self.upload_field("Avulso.docx", "MARCADOR AVULSO"),
+        }
+
+        with patch.object(server, "UPLOAD_DIR", upload_dir):
+            selection = server.proposal_template_selection(form)
+            resolved = server.resolve_template(selection["ref"])
+            output = self.template_dir / "resultado.docx"
+            server.build_docx(
+                [make_item("1", "Cadeira giratoria completa.")],
+                resolved,
+                output,
+            )
+
+        self.assertEqual(selection["source"], "upload")
+        self.assertEqual(selection["name"], "Avulso.docx")
+        self.assertTrue(selection["ref"].startswith("upload:modelo_"))
+        self.assertEqual(resolved, selection["path"])
+        self.assertEqual(Document(output).paragraphs[0].text, "MARCADOR AVULSO")
+
+    def test_invalid_proposal_template_upload_is_rejected(self):
+        upload_dir = self.template_dir / "uploads"
+        upload_dir.mkdir()
+        form = {
+            "template_file": SimpleNamespace(
+                filename="Corrompido.docx",
+                file=BytesIO(b"arquivo invalido"),
+            )
+        }
+
+        with patch.object(server, "UPLOAD_DIR", upload_dir):
+            with self.assertRaisesRegex(ValueError, "não é um documento Word"):
+                server.proposal_template_selection(form)
+
+        self.assertEqual(list(upload_dir.iterdir()), [])
+
 
 class ResponsibleManagementTests(unittest.TestCase):
     def setUp(self):
@@ -920,6 +1064,85 @@ class CatalogGenerationTests(unittest.TestCase):
         self.assertIn("encosto", data["secoes"]["encosto"].lower())
         self.assertIn("470 mm", data["secoes"]["dimensoes"])
         self.assertIn("NBR 13962", data["secoes"]["normas"])
+
+    def test_catalog_sections_keep_values_after_technical_labels(self):
+        sections = catalog.section_text_from_description(
+            "Dimensões assento: 450 x 490, dimensões encosto: 450 x 560, "
+            "material estrutura: resina termoplástica injetada."
+        )
+
+        self.assertIn("450 x 490", sections["assento"])
+        self.assertIn("450 x 560", sections["encosto"])
+        self.assertIn("resina termoplástica", sections["estrutura"])
+        self.assertIn("450 x 490", sections["dimensoes"])
+
+    def test_catalog_draft_uses_structured_item_when_official_file_is_unavailable(self):
+        link = "https://pncp.gov.br/app/editais/45780087000103/2026/98765"
+        identification = {
+            "items": [make_item("1", "Cadeira ergonômica com apoio lombar", quantidade="8")],
+            "pncp": {
+                "cnpj": "45780087000103",
+                "ano": 2026,
+                "sequencial": 98765,
+                "link": link,
+                "documento_tipo": "Base estruturada",
+            },
+        }
+        server.CATALOG_DRAFT_CACHE.clear()
+        with (
+            patch.object(server, "identify_items_from_pncp_link", return_value=identification),
+            patch.object(
+                server,
+                "source_from_pncp_link",
+                side_effect=RuntimeError("Nenhum arquivo encontrado no PNCP"),
+            ),
+            patch.object(
+                server,
+                "pncp_purchase_metadata",
+                return_value={"numero_compra": "44/2026", "orgao": "Órgão teste"},
+            ),
+        ):
+            result = server.catalog_draft_from_pncp_link(link, "1")
+        server.CATALOG_DRAFT_CACHE.clear()
+
+        self.assertEqual(result["source"], "base_estruturada")
+        self.assertIn("Nenhum arquivo", result["enrichment_warning"])
+        self.assertEqual(result["draft"]["item"]["numero"], "1")
+        self.assertEqual(result["draft"]["item"]["quantidade"], "8")
+        self.assertEqual(result["draft"]["origem"]["tipo"], "Base estruturada local")
+
+    def test_purchase_metadata_prefers_normalized_local_opportunity(self):
+        repository = SimpleNamespace(
+            get_opportunity_by_pncp_identity=lambda *_args: {
+                "opportunity": {
+                    "title": "Edital Pregão Eletrônico nº 204/2026",
+                    "description": "Aquisição de cadeiras",
+                    "process_number": "100/2026",
+                    "modality": "Pregão eletrônico",
+                    "buyer_name": "Órgão local",
+                    "buyer_cnpj": "45780087000103",
+                    "city": "Várzea Paulista",
+                    "uf": "SP",
+                    "uasg": "123456",
+                    "status": "Aberta",
+                    "pncp_control_number": "controle-local",
+                    "proposal_start_at": "2026-08-20T09:00:00",
+                    "proposal_end_at": "2026-08-25T09:00:00",
+                    "estimated_value": 1250,
+                    "origin_url": "https://origem.test/compra",
+                }
+            },
+        )
+        with (
+            patch.object(server, "etl_repository", return_value=repository),
+            patch.object(server, "request_json") as remote_request,
+        ):
+            metadata = server.pncp_purchase_metadata("45780087000103", 2026, 98765)
+
+        remote_request.assert_not_called()
+        self.assertEqual(metadata["numero_compra"], "204/2026")
+        self.assertEqual(metadata["objeto"], "Aquisição de cadeiras")
+        self.assertEqual(metadata["codigo_unidade"], "123456")
 
     def test_block7_normalizes_with_traceability_and_exports_all_formats(self):
         raw = [make_item("1", "Cadeira giratória em tela", quantidade="12")]
@@ -1504,6 +1727,16 @@ class PncpSearchPaginationTests(unittest.TestCase):
             )
         )
 
+    def test_pncp_item_listing_uses_large_pages_and_extended_timeout(self):
+        with patch.object(server, "request_json", return_value=[]) as request:
+            payload = server.list_pncp_item_payload("12345678000199", 2026, 7)
+
+        self.assertEqual(payload, [])
+        request.assert_called_once()
+        url = request.call_args.args[0]
+        self.assertIn("tamanhoPagina=500", url)
+        self.assertEqual(request.call_args.kwargs["timeout"], 45)
+
     def test_search_term_can_match_official_item_description(self):
         row = {
             "orgao_cnpj": "46422408000152",
@@ -1750,6 +1983,88 @@ class PncpSearchPaginationTests(unittest.TestCase):
             server.pncp_search_job_key({**base, "uasg": "123456"}),
             server.pncp_search_job_key({**base, "uasg": "654321"}),
         )
+        self.assertNotEqual(
+            server.pncp_search_job_key({**base, "campoData": "publicacao"}),
+            server.pncp_search_job_key({**base, "campoData": "encerramento"}),
+        )
+
+    def test_online_search_filters_the_selected_date_field(self):
+        publication_match = {
+            "id": "publication-match",
+            "orgao_cnpj": "12345678000199",
+            "ano": "2026",
+            "numero_sequencial": "1",
+            "title": "Edital publicado em agosto",
+            "description": "Aquisicao de mobiliario",
+            "data_publicacao_pncp": "2026-08-10T09:00:00",
+            "data_inicio_vigencia": "2026-09-01T09:00:00",
+            "data_fim_vigencia": "2026-09-10T18:00:00",
+        }
+        closing_match = {
+            "id": "closing-match",
+            "orgao_cnpj": "12345678000199",
+            "ano": "2026",
+            "numero_sequencial": "2",
+            "title": "Edital encerrado em agosto",
+            "description": "Aquisicao de mobiliario",
+            "data_publicacao_pncp": "2026-07-10T09:00:00",
+            "data_inicio_vigencia": "2026-07-15T09:00:00",
+            "data_fim_vigencia": "2026-08-10T18:00:00",
+        }
+
+        server.PNCP_RESULT_CACHE.clear()
+        with patch.object(
+            server,
+            "request_json",
+            return_value={"items": [publication_match, closing_match], "total": 2},
+        ):
+            by_publication = server.search_pncp_open_bids({
+                "dataInicial": "20260801",
+                "dataFinal": "20260830",
+                "campoData": "publicacao",
+                "uf": "SP",
+            })
+            by_closing = server.search_pncp_open_bids({
+                "dataInicial": "20260801",
+                "dataFinal": "20260830",
+                "campoData": "encerramento",
+                "uf": "SP",
+            })
+
+        self.assertEqual([row["sequencial"] for row in by_publication["results"]], ["1"])
+        self.assertEqual([row["sequencial"] for row in by_closing["results"]], ["2"])
+        self.assertEqual(by_publication["campoData"], "publicacao")
+        server.PNCP_RESULT_CACHE.clear()
+
+    def test_online_search_deduplicates_cards_for_the_same_contract(self):
+        base = {
+            "orgao_cnpj": "12345678000199",
+            "ano": "2026",
+            "numero_sequencial": "55",
+            "title": "Edital 55",
+            "description": "Aquisicao de cadeiras",
+            "data_fim_vigencia": "2026-08-20T18:00:00",
+        }
+        duplicate_rows = [
+            {**base, "id": "document-a", "item_url": "https://portal.test/a"},
+            {**base, "id": "document-b", "item_url": "https://portal.test/b"},
+        ]
+
+        server.PNCP_RESULT_CACHE.clear()
+        with patch.object(
+            server,
+            "request_json",
+            return_value={"items": duplicate_rows, "total": 2},
+        ):
+            response = server.search_pncp_open_bids({
+                "dataInicial": "20260801",
+                "dataFinal": "20260830",
+                "uf": "SP",
+            })
+
+        self.assertEqual(response["total"], 1)
+        self.assertEqual(len(response["results"]), 1)
+        server.PNCP_RESULT_CACHE.clear()
 
     def test_search_reconciliation_preserves_existing_items_and_documents(self):
         persisted = []
@@ -1931,6 +2246,53 @@ class PncpSearchPaginationTests(unittest.TestCase):
         self.assertEqual(result["inserted"], 3)
         server.PNCP_OPPORTUNITY_SYNC_CACHE.clear()
 
+    def test_all_official_modalities_continue_when_one_unit_fails(self):
+        requests = []
+
+        class FakeService:
+            def sync(self, request):
+                requests.append(request)
+                modality = request.filters.get("codigoModalidadeContratacao")
+                if request.endpoint == "publicacao" and modality == 2:
+                    raise RuntimeError("falha temporaria")
+                return {
+                    "run_id": f"run-{request.endpoint}-{modality or 'all'}",
+                    "status": "success",
+                    "fetched": 1,
+                    "inserted": 1,
+                    "updated": 0,
+                    "skipped": 0,
+                    "failed": 0,
+                }
+
+        server.PNCP_OPPORTUNITY_SYNC_CACHE.clear()
+        with patch.object(server, "ETLSyncService", return_value=FakeService()):
+            result = server.sync_pncp_opportunity_endpoints(
+                {},
+                "20260827",
+                "20260827",
+            )
+
+        publication_modalities = {
+            request.filters.get("codigoModalidadeContratacao")
+            for request in requests
+            if request.endpoint == "publicacao"
+        }
+        update_modalities = {
+            request.filters.get("codigoModalidadeContratacao")
+            for request in requests
+            if request.endpoint == "atualizacao"
+        }
+        endpoints = {item["name"]: item for item in result["endpoints"]}
+
+        self.assertEqual(publication_modalities, set(server.PNCP_MODALITY_IDS))
+        self.assertEqual(update_modalities, set(server.PNCP_MODALITY_IDS))
+        self.assertEqual(endpoints["publicacao"]["fetched"], len(server.PNCP_MODALITY_IDS) - 1)
+        self.assertEqual(endpoints["publicacao"]["failed"], 1)
+        self.assertEqual(endpoints["publicacao"]["status"], "partial")
+        self.assertEqual(endpoints["atualizacao"]["fetched"], len(server.PNCP_MODALITY_IDS))
+        server.PNCP_OPPORTUNITY_SYNC_CACHE.clear()
+
     def test_modality_and_object_type_are_applied_to_official_search(self):
         rows = [
             {
@@ -2055,6 +2417,17 @@ class PncpSearchPaginationTests(unittest.TestCase):
                     "dataInicial": "20260725",
                     "dataFinal": "20260823",
                     "tipoObjeto": "obra",
+                })
+
+        request.assert_not_called()
+
+    def test_invalid_date_field_is_rejected_before_requesting_pncp(self):
+        with patch.object(server, "request_json") as request:
+            with self.assertRaisesRegex(ValueError, "Campo de data"):
+                server.search_pncp_open_bids({
+                    "dataInicial": "20260725",
+                    "dataFinal": "20260823",
+                    "campoData": "assinatura",
                 })
 
         request.assert_not_called()

@@ -13,7 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from .models import MatchResult, NormalizedOpportunity, OpportunityDocument, OpportunityItem
-from .search_filters import classify_object_text, fold_search_text
+from .search_filters import (
+    build_fts_query,
+    classify_object_text,
+    fold_search_text,
+    is_single_word_search_term,
+    search_term_matches,
+)
 
 
 RADAR_STATUSES = {"new", "triage", "ignored", "selected", "converted_to_proposal"}
@@ -31,6 +37,9 @@ class ETLRepository:
         connection.row_factory = sqlite3.Row
         connection.create_function("fold_search_text", 1, fold_search_text, deterministic=True)
         connection.create_function("classify_object_text", 1, classify_object_text, deterministic=True)
+        connection.create_function(
+            "search_term_matches", 2, search_term_matches, deterministic=True
+        )
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 30000")
         try:
@@ -362,16 +371,23 @@ class ETLRepository:
         if filters.get("published_to"):
             where.append("o.published_at <= ?")
             params.append(filters["published_to"])
+        if filters.get("proposal_start_from"):
+            where.append("o.proposal_start_at >= ?")
+            params.append(_date_lower_bound(filters["proposal_start_from"]))
+        if filters.get("proposal_start_to"):
+            where.append("o.proposal_start_at <= ?")
+            params.append(filters["proposal_start_to"])
         if filters.get("proposal_open"):
             where.append("(o.proposal_end_at IS NULL OR o.proposal_end_at >= ?)")
             params.append(_now())
+        keywords = _as_list(filters.get("keywords"))
         include_missing_proposal_dates = bool(filters.get("include_missing_proposal_dates"))
         date_union_bounds: tuple[str, Any] | None = None
         proposal_from = filters.get("proposal_from")
         proposal_to = filters.get("proposal_to")
         if proposal_from and proposal_to and include_missing_proposal_dates:
             lower_bound = _date_lower_bound(proposal_from)
-            if score_min is None and not filters.get("sort_by_score"):
+            if score_min is None and not filters.get("sort_by_score") and not keywords:
                 date_union_bounds = (lower_bound, proposal_to)
             else:
                 where.append(
@@ -404,22 +420,52 @@ class ETLRepository:
             else:
                 where.append("o.proposal_end_at <= ?")
                 params.append(proposal_to)
-        keywords = _as_list(filters.get("keywords"))
+        fts_query = ""
         if keywords:
-            alternatives = []
-            for keyword in keywords:
-                query = _like_pattern(keyword)
-                alternatives.append(
-                    "(fold_search_text(o.title) LIKE ? ESCAPE '\\' "
-                    "OR fold_search_text(o.description) LIKE ? ESCAPE '\\' "
-                    "OR fold_search_text(o.buyer_name) LIKE ? ESCAPE '\\' "
-                    "OR EXISTS (SELECT 1 FROM opportunity_items oi "
-                    "WHERE oi.opportunity_id = o.id "
-                    "AND (fold_search_text(oi.title) LIKE ? ESCAPE '\\' "
-                    "OR fold_search_text(oi.description) LIKE ? ESCAPE '\\')))"
-                )
-                params.extend([query, query, query, query, query])
-            where.append(f"({' OR '.join(alternatives)})")
+            fts_query = build_fts_query(keywords)
+            if fts_query:
+                where.append("opportunity_search MATCH ?")
+                params.append(fts_query)
+            if not all(is_single_word_search_term(keyword) for keyword in keywords):
+                opportunity_search_text = " || ' ' || ".join((
+                    "COALESCE(o.title, '')",
+                    "COALESCE(o.description, '')",
+                    "COALESCE(o.buyer_name, '')",
+                    "COALESCE(o.city, '')",
+                    "COALESCE(o.modality, '')",
+                    "COALESCE(o.process_number, '')",
+                    "COALESCE(o.pncp_control_number, '')",
+                    "COALESCE(o.uasg, '')",
+                    "COALESCE(o.status, '')",
+                ))
+                item_search_text = " || ' ' || ".join((
+                    "COALESCE(oi.source_item_id, '')",
+                    "COALESCE(oi.lot_number, '')",
+                    "COALESCE(oi.item_number, '')",
+                    "COALESCE(oi.title, '')",
+                    "COALESCE(oi.description, '')",
+                    "COALESCE(oi.technical_object, '')",
+                    "COALESCE(oi.unit, '')",
+                    "COALESCE(oi.status, '')",
+                ))
+                document_search_text = " || ' ' || ".join((
+                    "COALESCE(od.document_type, '')",
+                    "COALESCE(od.title, '')",
+                    "COALESCE(od.filename, '')",
+                ))
+                alternatives = []
+                for keyword in keywords:
+                    alternatives.append(
+                        f"(search_term_matches({opportunity_search_text}, ?) = 1 "
+                        "OR EXISTS (SELECT 1 FROM opportunity_items oi "
+                        "WHERE oi.opportunity_id = o.id "
+                        f"AND search_term_matches({item_search_text}, ?) = 1) "
+                        "OR EXISTS (SELECT 1 FROM opportunity_documents od "
+                        "WHERE od.opportunity_id = o.id "
+                        f"AND search_term_matches({document_search_text}, ?) = 1))"
+                    )
+                    params.extend([keyword, keyword, keyword])
+                where.append(f"({' OR '.join(alternatives)})")
         object_type = str(filters.get("object_type") or "").lower()
         if object_type in {"material", "servico"}:
             object_text = "COALESCE(o.title, '') || ' ' || COALESCE(o.description, '')"
@@ -443,7 +489,51 @@ class ETLRepository:
         offset = max(_integer(filters.get("offset")) or 0, 0)
         clause = f"WHERE {' AND '.join(where)}" if where else ""
         use_score_order = score_min is not None or bool(filters.get("sort_by_score"))
-        source_sql = "opportunities o"
+        date_field = str(filters.get("date_field") or "closing").strip().lower()
+        date_column, date_direction = {
+            "publication": ("published_at", "DESC"),
+            "opening": ("proposal_start_at", "ASC"),
+            "closing": ("proposal_end_at", "ASC"),
+        }.get(date_field, ("proposal_end_at", "ASC"))
+        date_order = (
+            f"CASE WHEN o.{date_column} IS NULL OR o.{date_column} = '' THEN 1 ELSE 0 END, "
+            f"o.{date_column} {date_direction}, o.published_at DESC"
+        )
+        bounded_date_index = None
+        bounded_date_filters = {
+            "publication": (
+                "idx_opportunities_published_at",
+                filters.get("published_from") or filters.get("published_to"),
+            ),
+            "opening": (
+                "idx_opportunities_proposal_start",
+                filters.get("proposal_start_from") or filters.get("proposal_start_to"),
+            ),
+            "closing": (
+                "idx_opportunities_proposal_end",
+                proposal_from or proposal_to,
+            ),
+        }
+        candidate_index, has_date_bound = bounded_date_filters.get(
+            date_field, (None, None)
+        )
+        if (
+            candidate_index
+            and has_date_bound
+            and not use_score_order
+            and not fts_query
+            and date_union_bounds is None
+        ):
+            bounded_date_index = candidate_index
+        bounded_date_order = f"o.{date_column} {date_direction}"
+        if date_column != "published_at":
+            bounded_date_order += ", o.published_at DESC"
+        source_sql = (
+            "opportunity_search CROSS JOIN opportunities o "
+            "ON o.id = opportunity_search.opportunity_id"
+            if fts_query
+            else "opportunities o"
+        )
         source_params = list(params)
         if date_union_bounds is not None:
             lower_bound, upper_bound = date_union_bounds
@@ -451,13 +541,15 @@ class ETLRepository:
             common_prefix = f"{common_conditions} AND " if common_conditions else ""
             source_sql = f"""
                 (
-                    SELECT o.id, o.proposal_end_at, o.published_at FROM opportunities o
+                    SELECT o.id, o.proposal_start_at, o.proposal_end_at, o.published_at
+                    FROM opportunities o
                     INDEXED BY idx_opportunities_proposal_end
                     WHERE {common_prefix}
                       o.proposal_end_at IS NOT NULL AND o.proposal_end_at <> ''
                       AND o.proposal_end_at >= ? AND o.proposal_end_at <= ?
                     UNION ALL
-                    SELECT o.id, o.proposal_end_at, o.published_at FROM opportunities o
+                    SELECT o.id, o.proposal_start_at, o.proposal_end_at, o.published_at
+                    FROM opportunities o
                     INDEXED BY idx_opportunities_missing_end_published
                     WHERE {common_prefix}
                       (o.proposal_end_at IS NULL OR o.proposal_end_at = '')
@@ -470,6 +562,7 @@ class ETLRepository:
             )
             clause = ""
         match_map: dict[str, sqlite3.Row] = {}
+        item_count_map: dict[str, int] = {}
         window_total: int | None = None
         with self.connect() as connection:
             if use_score_order:
@@ -477,30 +570,53 @@ class ETLRepository:
                     f"""
                     SELECT o.*, COALESCE(m.score, 0) AS score, m.reasons_json,
                            COUNT(*) OVER() AS filtered_total
-                    FROM opportunities o
+                    FROM {source_sql}
                     LEFT JOIN opportunity_matches m
                       ON m.opportunity_id = o.id AND m.company_profile_id = ?
                     {clause}
                     ORDER BY COALESCE(m.score, 0) DESC,
-                             CASE WHEN o.proposal_end_at IS NULL THEN 1 ELSE 0 END,
-                             o.proposal_end_at ASC, o.published_at DESC
+                             {date_order}
                     LIMIT ? OFFSET ?
                     """,
                     [profile_id] + params + [limit, offset],
                 ).fetchall()
             else:
-                page_rows = connection.execute(
-                    f"""
-                    SELECT o.*, COUNT(*) OVER() AS filtered_total
-                    FROM {source_sql}
-                    {clause}
-                    ORDER BY CASE WHEN o.proposal_end_at IS NULL THEN 1 ELSE 0 END,
-                             o.proposal_end_at ASC, o.published_at DESC
-                    LIMIT ? OFFSET ?
-                    """,
-                    source_params + [limit, offset],
-                ).fetchall()
-                window_total = int(page_rows[0]["filtered_total"]) if page_rows else None
+                if bounded_date_index is not None:
+                    # Keep page and total on one snapshot while steering SQLite to the
+                    # date index that already satisfies the requested ordering.
+                    connection.execute("BEGIN")
+                    page_rows = connection.execute(
+                        f"""
+                        SELECT o.*
+                        FROM opportunities o INDEXED BY {bounded_date_index}
+                        {clause}
+                        ORDER BY {bounded_date_order}
+                        LIMIT ? OFFSET ?
+                        """,
+                        source_params + [limit, offset],
+                    ).fetchall()
+                    window_total = int(connection.execute(
+                        f"""
+                        SELECT COUNT(*)
+                        FROM opportunities o INDEXED BY {bounded_date_index}
+                        {clause}
+                        """,
+                        source_params,
+                    ).fetchone()[0])
+                else:
+                    page_rows = connection.execute(
+                        f"""
+                        SELECT o.*, COUNT(*) OVER() AS filtered_total
+                        FROM {source_sql}
+                        {clause}
+                        ORDER BY {date_order}
+                        LIMIT ? OFFSET ?
+                        """,
+                        source_params + [limit, offset],
+                    ).fetchall()
+                    window_total = (
+                        int(page_rows[0]["filtered_total"]) if page_rows else None
+                    )
                 if date_union_bounds is not None:
                     page_ids = [row["id"] for row in page_rows]
                     full_rows = connection.execute(
@@ -526,6 +642,21 @@ class ETLRepository:
                         [profile_id] + opportunity_ids,
                     ).fetchall()
                     match_map = {row["opportunity_id"]: row for row in matches}
+            opportunity_ids = [row["id"] for row in rows]
+            if opportunity_ids:
+                item_counts = connection.execute(
+                    f"""
+                    SELECT opportunity_id, COUNT(*) AS item_count
+                    FROM opportunity_items
+                    WHERE opportunity_id IN ({','.join('?' for _ in opportunity_ids)})
+                    GROUP BY opportunity_id
+                    """,
+                    opportunity_ids,
+                ).fetchall()
+                item_count_map = {
+                    row["opportunity_id"]: int(row["item_count"])
+                    for row in item_counts
+                }
             total = (
                 window_total
                 if window_total is not None
@@ -557,6 +688,8 @@ class ETLRepository:
             else:
                 item["score"] = item.get("score", 0)
                 item["reasons"] = _decode_json(item.pop("reasons_json", None), [])
+            item["item_count"] = item_count_map.get(item["id"], 0)
+            item["items_indexed"] = item["item_count"] > 0
         return {"items": items, "total": total, "limit": limit, "offset": offset}
 
     def get_opportunity(self, opportunity_id: str) -> dict[str, Any] | None:
@@ -902,6 +1035,91 @@ class ETLRepository:
             )
         return len(items)
 
+    def merge_opportunity_items(
+        self,
+        items_by_opportunity: dict[str, list[OpportunityItem]],
+    ) -> dict[str, int]:
+        """Upsert item batches without discarding items received on earlier pages."""
+        clean_batches = {
+            opportunity_id: items
+            for opportunity_id, items in items_by_opportunity.items()
+            if opportunity_id and items
+        }
+        if not clean_batches:
+            return {"opportunities": 0, "items": 0}
+
+        now = _now()
+        item_count = 0
+        with self.connect() as connection, connection:
+            for opportunity_id, items in clean_batches.items():
+                for item in items:
+                    connection.execute(
+                        """
+                        INSERT INTO opportunity_items (
+                            id, opportunity_id, source_item_id, lot_number, item_number,
+                            title, description, technical_object, quantity, unit,
+                            estimated_unit_value, estimated_total_value, currency, status,
+                            granularity, confidence, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(opportunity_id, lot_number, item_number) DO UPDATE SET
+                            source_item_id = COALESCE(excluded.source_item_id, opportunity_items.source_item_id),
+                            title = excluded.title,
+                            description = COALESCE(excluded.description, opportunity_items.description),
+                            technical_object = COALESCE(
+                                excluded.technical_object,
+                                opportunity_items.technical_object
+                            ),
+                            quantity = COALESCE(excluded.quantity, opportunity_items.quantity),
+                            unit = COALESCE(excluded.unit, opportunity_items.unit),
+                            estimated_unit_value = COALESCE(
+                                excluded.estimated_unit_value,
+                                opportunity_items.estimated_unit_value
+                            ),
+                            estimated_total_value = COALESCE(
+                                excluded.estimated_total_value,
+                                opportunity_items.estimated_total_value
+                            ),
+                            currency = excluded.currency,
+                            status = COALESCE(excluded.status, opportunity_items.status),
+                            granularity = excluded.granularity,
+                            confidence = MAX(opportunity_items.confidence, excluded.confidence),
+                            updated_at = excluded.updated_at
+                        """,
+                        (
+                            uuid.uuid4().hex,
+                            opportunity_id,
+                            item.source_item_id,
+                            item.lot_number,
+                            item.item_number,
+                            item.title,
+                            item.description,
+                            item.technical_object,
+                            item.quantity,
+                            item.unit,
+                            item.estimated_unit_value,
+                            item.estimated_total_value,
+                            item.currency,
+                            item.status,
+                            item.granularity,
+                            item.confidence,
+                            now,
+                            now,
+                        ),
+                    )
+                    item_count += 1
+                connection.execute(
+                    "UPDATE opportunities SET updated_at = ? WHERE id = ?",
+                    (now, opportunity_id),
+                )
+        return {"opportunities": len(clean_batches), "items": item_count}
+
+    def opportunity_has_items(self, opportunity_id: str) -> bool:
+        with self.connect() as connection:
+            return connection.execute(
+                "SELECT 1 FROM opportunity_items WHERE opportunity_id = ? LIMIT 1",
+                (opportunity_id,),
+            ).fetchone() is not None
+
     def persist_opportunity_items_enrichment(
         self,
         *,
@@ -1117,6 +1335,11 @@ class ETLRepository:
                     now,
                 ),
             )
+        # The opportunity trigger refreshes the FTS index once after the whole batch.
+        connection.execute(
+            "UPDATE opportunities SET updated_at = updated_at WHERE id = ?",
+            (opportunity_id,),
+        )
 
     @staticmethod
     def _insert_items(

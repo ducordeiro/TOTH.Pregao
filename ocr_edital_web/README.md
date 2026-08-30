@@ -84,3 +84,45 @@ Rotas internas principais:
 
 Defina `TOTH_ETL_ADMIN_TOKEN` para exigir o cabecalho `X-ETL-Token` na
 sincronizacao manual exposta pelo servidor.
+
+### Completar itens para a busca por produto
+
+O coletor em lote do Compras.gov deve ser executado primeiro. Ele recebe ate
+500 itens por pagina, consolida estados duplicados e pode ser retomado pelo
+arquivo de status:
+
+```powershell
+cd .\ocr_edital_web
+python .\scripts\bulk_enrich_comprasgov_items.py `
+  --database .\data\pncp.sqlite3 `
+  --date-from 2026-06-01 `
+  --date-to 2026-08-25 `
+  --stored-source all
+```
+
+Depois, o coletor individual completa oportunidades que nao aparecem no lote
+do Compras.gov. Ele consulta somente registros ainda sem itens e prioriza
+oportunidades abertas e futuras:
+
+```powershell
+python .\scripts\enrich_missing_pncp_items.py `
+  --database .\data\pncp.sqlite3 `
+  --date-from 2026-06-01 `
+  --scope publication `
+  --source all
+```
+
+O andamento fica em `data/comprasgov_items_bulk.status.json` e
+`data/items_enrichment_priority.status.json`. Os arquivos registram pagina,
+contadores, falhas, velocidade e estimativa de conclusao.
+
+Para priorizar um dia de encerramento especifico sem interromper a fila geral:
+
+```powershell
+python .\scripts\enrich_missing_pncp_items.py `
+  --database .\data\pncp.sqlite3 `
+  --scope closing `
+  --date-from 2026-08-24 `
+  --date-to 2026-08-24 `
+  --item-page-size 500
+```

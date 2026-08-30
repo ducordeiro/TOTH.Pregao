@@ -39,9 +39,13 @@ export interface Bid {
   modoDisputa?: string;
   situacao?: string;
   linkOrigem?: string;
+  fonte?: string;
+  publicacao?: string;
   abertura: string;
   encerramento: string;
   dataEncerramentoInformada?: boolean;
+  itemCount?: number;
+  itensIndexados?: boolean;
   link: string;
 }
 
@@ -110,8 +114,43 @@ export interface CommercialTerms {
 export interface ProcessResponse extends IdentifyResponse {
   count: number;
   template_ref: string;
+  template_name: string;
+  template_source: "managed" | "upload";
   source_name: string;
   commercial_terms: CommercialTerms;
+}
+
+export type NodeType = "FIXED_TEXT" | "MINI_BOX";
+
+export interface BaseDocumentNode {
+  id: string;
+  type: NodeType;
+  content: string;
+}
+
+export interface MiniBoxNode extends BaseDocumentNode {
+  type: "MINI_BOX";
+  order: number;
+}
+
+export interface FixedTextNode extends BaseDocumentNode {
+  type: "FIXED_TEXT";
+}
+
+export type DocumentNode = MiniBoxNode | FixedTextNode;
+
+export interface GeneratedTableBlock {
+  id: string;
+  type: "GENERATED_TABLE";
+  content: string;
+}
+
+export interface DocxStructureResponse {
+  document_signature: string;
+  nodes: DocumentNode[];
+  mini_box_count: number;
+  generated_table_block: GeneratedTableBlock;
+  warnings: string[];
 }
 
 export interface SearchResponse {
@@ -131,6 +170,7 @@ export interface SearchResponse {
   cache_hit?: boolean;
   rate_limited?: boolean;
   timed_out?: boolean;
+  campoData?: "publicacao" | "abertura" | "encerramento";
   reconciliation?: {
     run_id?: string;
     status: "success" | "partial" | "failed";
@@ -219,13 +259,6 @@ export interface OpportunityAnswer {
 export interface GenerateResponse {
   download_url: string;
   filename: string;
-}
-
-export interface ProposalPreviewResponse {
-  preview_url: string;
-  expires_at: string;
-  cached: boolean;
-  renderer?: "word" | "compatible";
 }
 
 export interface CatalogData {
@@ -335,6 +368,8 @@ export interface CatalogGenerateResponse {
 export interface CatalogDraftResponse {
   draft: CatalogData;
   items: ProposalItem[];
+  source?: "documento_oficial" | "base_estruturada";
+  enrichment_warning?: string;
   pncp?: PncpInfo & {
     metadata?: Record<string, string>;
   };

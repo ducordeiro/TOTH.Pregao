@@ -7,6 +7,7 @@ import type {
   CatalogGeneratorJob,
   GeneratedCatalogItem,
   CommercialTerms,
+  DocxStructureResponse,
   GenerateResponse,
   IdentifyResponse,
   ProposalItem,
@@ -14,7 +15,6 @@ import type {
   Responsible,
   SearchResponse,
   Template,
-  ProposalPreviewResponse,
   Business,
   KanbanBoard,
   KanbanProposalInput,
@@ -287,12 +287,23 @@ export async function processProposal(body: FormData): Promise<ProcessResponse> 
   return parseJson<ProcessResponse>(response);
 }
 
+export async function getDocxStructure(templateRef: string): Promise<DocxStructureResponse> {
+  const response = await fetch("/api/docx-structure", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ template_ref: templateRef }),
+  });
+  return parseJson<DocxStructureResponse>(response);
+}
+
 export async function generateProposal(
   items: ProposalItem[],
   templateRef: string,
   sourceName: string,
   responsibleId: string,
   commercialTerms: CommercialTerms,
+  miniBoxOrder?: string[],
+  documentBlockOrder?: string[],
 ): Promise<GenerateResponse> {
   const response = await fetch("/generate", {
     method: "POST",
@@ -303,30 +314,11 @@ export async function generateProposal(
       source_name: sourceName,
       responsible_id: responsibleId,
       commercial_terms: commercialTerms,
+      ...(miniBoxOrder ? { mini_box_order: miniBoxOrder } : {}),
+      ...(documentBlockOrder ? { document_block_order: documentBlockOrder } : {}),
     }),
   });
   return parseJson<GenerateResponse>(response);
-}
-
-export async function previewProposal(
-  items: ProposalItem[],
-  templateRef: string,
-  sourceName: string,
-  responsibleId: string,
-  commercialTerms: CommercialTerms,
-): Promise<ProposalPreviewResponse> {
-  const response = await fetch("/proposal-preview", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      items,
-      template_ref: templateRef,
-      source_name: sourceName,
-      responsible_id: responsibleId,
-      commercial_terms: commercialTerms,
-    }),
-  });
-  return parseJson<ProposalPreviewResponse>(response);
 }
 
 export async function listBusinesses(includeArchived = false): Promise<Business[]> {

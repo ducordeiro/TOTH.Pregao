@@ -77,7 +77,7 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange }: CatalogGen
             placeholder="https://pncp.gov.br/app/editais/..."
             required
           />
-          <button className="primary-button" type="submit" disabled={job?.status === "processing" || job?.status === "queued"}>
+          <button className="button button-primary" type="submit" disabled={job?.status === "processing" || job?.status === "queued"}>
             <Play size={17} aria-hidden="true" /> Processar edital
           </button>
         </div>
@@ -140,7 +140,7 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange }: CatalogGen
           <section className="catalog-generator-review">
             <div className="catalog-generator-review-header">
               <div><h2>Revisão dos itens</h2><p>Edite somente o que foi confirmado na documentação da licitação.</p></div>
-              <button className="primary-button" type="button" onClick={() => void runExport()} disabled={exporting || items.length === 0}>
+              <button className="button button-primary" type="button" onClick={() => void runExport()} disabled={exporting || items.length === 0}>
                 {exporting ? <LoaderCircle className="spin" size={17} /> : <Download size={17} />} Gerar arquivos
               </button>
             </div>

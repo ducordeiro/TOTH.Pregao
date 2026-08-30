@@ -20,9 +20,31 @@ function defaultDates() {
 }
 
 const PAGE_SIZE = 10;
+const ONLINE_SEARCH_MAX_POLLS = 300;
+const ONLINE_SEARCH_POLL_MS = 1_000;
+
+type SearchDateField = "publicacao" | "abertura" | "encerramento";
+
+const DATE_FIELD_OPTIONS: Array<{ value: SearchDateField; label: string; column: string }> = [
+  { value: "publicacao", label: "Publicação", column: "Publicação" },
+  { value: "abertura", label: "Abertura", column: "Abertura / disputa" },
+  { value: "encerramento", label: "Encerramento", column: "Encerramento" },
+];
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "erro desconhecido";
+}
+
+function bidIdentity(bid: Bid) {
+  return bid.id || bid.link || `${bid.cnpj}:${bid.ano}:${bid.sequencial}`;
+}
+
+function mergeBidPages(localResults: Bid[], onlineResults: Bid[]) {
+  const merged = new Map<string, Bid>();
+  for (const bid of [...onlineResults, ...localResults]) {
+    merged.set(bidIdentity(bid), bid);
+  }
+  return [...merged.values()].slice(0, PAGE_SIZE);
 }
 
 const BRAZILIAN_UFS = [
@@ -61,6 +83,7 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
   const defaults = useMemo(defaultDates, []);
   const [startDate, setStartDate] = useState(defaults.start);
   const [endDate, setEndDate] = useState(defaults.end);
+  const [dateField, setDateField] = useState<SearchDateField>("encerramento");
   const [includeMissingEndDate, setIncludeMissingEndDate] = useState(true);
   const [ufs, setUfs] = useState<string[]>([]);
   const [ufMenuOpen, setUfMenuOpen] = useState(false);
@@ -92,6 +115,7 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
     searchRequestRef.current += 1;
     setStartDate("");
     setEndDate("");
+    setDateField("encerramento");
     setIncludeMissingEndDate(true);
     setUfs([]);
     setUfMenuOpen(false);
@@ -147,7 +171,9 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
       const params = new URLSearchParams({
         dataInicial: toPncpDate(startDate),
         dataFinal: toPncpDate(endDate),
-        incluirSemDataEncerramento: includeMissingEndDate ? "1" : "0",
+        campoData: dateField,
+        incluirSemDataEncerramento:
+          dateField === "encerramento" && includeMissingEndDate ? "1" : "0",
         uf: ufs.join(","),
         palavraChave: effectiveKeywords.join(";"),
         tipoObjeto: objectType,
@@ -171,12 +197,14 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
       };
 
       let initialTotal = 0;
+      let initialResults: Bid[] = [];
       let localAvailable = false;
       let localFailure: unknown = null;
       try {
         const localPayload = await searchBids(params);
         if (requestId !== searchRequestRef.current) return;
         applyLocalPayload(localPayload);
+        initialResults = localPayload.results || [];
         initialTotal = localPayload.total || 0;
         localAvailable = true;
         setBusy(false);
@@ -210,19 +238,39 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
       reconciliationParams.set("reconciliar", "1");
       try {
         let onlinePayload = await searchOnlineBids(reconciliationParams);
-        for (let poll = 0; onlinePayload.searching && poll < 180; poll += 1) {
+        for (
+          let poll = 0;
+          onlinePayload.searching && poll < ONLINE_SEARCH_MAX_POLLS;
+          poll += 1
+        ) {
           if (requestId !== searchRequestRef.current) return;
+          if (onlinePayload.results?.length) {
+            const previewResults = mergeBidPages(initialResults, onlinePayload.results);
+            setResults(previewResults);
+            setPage(1);
+            setTotal(Math.max(initialTotal, onlinePayload.total || previewResults.length));
+            setTotalPages(1);
+            setMessage({
+              kind: "info",
+              text: `Exibindo ${previewResults.length} resultado(s) local(is) e online enquanto a conferência completa do PNCP continua...`,
+            });
+          }
           setSearchingAll(true);
-          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+          await new Promise((resolve) => window.setTimeout(resolve, ONLINE_SEARCH_POLL_MS));
           if (requestId !== searchRequestRef.current) return;
           onlinePayload = await searchOnlineBids(reconciliationParams);
         }
         if (requestId !== searchRequestRef.current) return;
         if (onlinePayload.searching) {
+          if (localAvailable) {
+            const refreshedPayload = await searchBids(params);
+            if (requestId !== searchRequestRef.current) return;
+            applyLocalPayload(refreshedPayload);
+          }
           setSearchingAll(false);
           setMessage({
             kind: "warning",
-            text: "A base interna continua disponível, mas a verificação completa do PNCP excedeu três minutos.",
+            text: "A base interna continua disponível, mas a verificação completa do PNCP excedeu cinco minutos. O processamento online continua em segundo plano.",
           });
           return;
         }
@@ -271,6 +319,22 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
     void runSearch(1);
   };
 
+  const selectedDateOption = DATE_FIELD_OPTIONS.find((option) => option.value === dateField)
+    ?? DATE_FIELD_OPTIONS[2];
+  const indexedOnPage = results.filter((bid) => bid.itensIndexados).length;
+
+  const resultDate = (bid: Bid) => {
+    if (dateField === "publicacao") return bid.publicacao;
+    if (dateField === "abertura") return bid.abertura;
+    return bid.encerramento;
+  };
+
+  const sourceLabel = (bid: Bid) => {
+    if (bid.fonte === "comprasgov") return "Compras.gov";
+    if (bid.fonte === "pncp") return "PNCP";
+    return bid.fonte || "PNCP";
+  };
+
   return (
     <section className="workspace-section" aria-labelledby="search-heading">
       <div className="section-heading">
@@ -283,7 +347,21 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
 
       <form className="search-form" onSubmit={submit}>
         <div className="period-field">
-          <span className="field-label">Encerramento das propostas</span>
+          <span className="field-label">Data pesquisada</span>
+          <div className="date-field-segmented" role="group" aria-label="Campo de data da pesquisa">
+            {DATE_FIELD_OPTIONS.map((option) => (
+              <button
+                className={dateField === option.value ? "is-active" : ""}
+                type="button"
+                key={option.value}
+                aria-pressed={dateField === option.value}
+                onClick={() => setDateField(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <span className="field-label">Período de {selectedDateOption.label.toLocaleLowerCase("pt-BR")}</span>
           <DateRangePicker
             startDate={startDate}
             endDate={endDate}
@@ -293,14 +371,16 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
             }}
           />
           <small>Selecione um período de até 30 dias.</small>
-          <label className="period-missing-date-option">
-            <input
-              type="checkbox"
-              checked={includeMissingEndDate}
-              onChange={(event) => setIncludeMissingEndDate(event.target.checked)}
-            />
-            Incluir publicadas no período sem data de encerramento
-          </label>
+          {dateField === "encerramento" ? (
+            <label className="period-missing-date-option">
+              <input
+                type="checkbox"
+                checked={includeMissingEndDate}
+                onChange={(event) => setIncludeMissingEndDate(event.target.checked)}
+              />
+              Incluir publicadas no período sem data de encerramento
+            </label>
+          ) : null}
         </div>
         <div className="uf-field" ref={ufFieldRef}>
           <span className="field-label">UF</span>
@@ -421,6 +501,12 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
 
       <StatusMessage message={message} />
 
+      {results.length ? (
+        <div className="search-coverage-summary" aria-live="polite">
+          <strong>{indexedOnPage}</strong> de <strong>{results.length}</strong> oportunidade(s) nesta página com itens indexados.
+        </div>
+      ) : null}
+
       <div className="data-table-wrap search-results">
         {results.length ? (
           <table className="data-table">
@@ -430,7 +516,8 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
                 <th>Local</th>
                 <th>Número</th>
                 <th>Objeto</th>
-                <th>Encerramento</th>
+                <th>Itens</th>
+                <th>{selectedDateOption.column}</th>
                 <th aria-label="Ações" />
               </tr>
             </thead>
@@ -438,7 +525,7 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
               {results.map((bid) => (
                 <tr
                   className="search-result-row"
-                  key={`${bid.cnpj}-${bid.ano}-${bid.sequencial}`}
+                  key={bid.id || `${bid.cnpj}-${bid.ano}-${bid.sequencial}`}
                   tabIndex={0}
                   role="button"
                   aria-label={`Abrir oportunidade ${bid.numeroCompra}`}
@@ -452,10 +539,20 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
                 >
                   <td>{bid.orgao}</td>
                   <td>{[bid.municipio, bid.uf].filter(Boolean).join(" / ")}</td>
-                  <td>{bid.numeroCompra}</td>
+                  <td>
+                    {bid.numeroCompra}
+                    <span className="search-result-source">{sourceLabel(bid)}</span>
+                  </td>
                   <td className="description-cell">{bid.objeto}</td>
-                  <td>{bid.encerramento
-                    ? parseLocalDate(bid.encerramento).toLocaleDateString("pt-BR")
+                  <td>
+                    <span className={`item-index-status ${bid.itensIndexados ? "is-indexed" : "is-pending"}`}>
+                      {bid.itensIndexados
+                        ? `${bid.itemCount || 0} indexado(s)`
+                        : "Sem itens indexados"}
+                    </span>
+                  </td>
+                  <td>{resultDate(bid)
+                    ? parseLocalDate(resultDate(bid) || "").toLocaleDateString("pt-BR")
                     : "Não informada"}</td>
                   <td>
                     <button

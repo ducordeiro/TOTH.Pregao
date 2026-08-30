@@ -1,0 +1,537 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  TouchSensor,
+  closestCenter,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import type { DragEndEvent, DragOverEvent, DragStartEvent } from "@dnd-kit/core";
+import {
+  SortableContext,
+  rectSortingStrategy,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
+  ChevronLeft,
+  ChevronRight,
+  GripVertical,
+  Plus,
+  RotateCcw,
+  Table2,
+  Undo2,
+} from "lucide-react";
+import {
+  createDocumentBlockOrder,
+  insertDocumentBlockBefore,
+  miniBoxNodes,
+  moveDocumentBlock,
+  reorderDocumentBlocks,
+} from "../docxOrder";
+import type {
+  DocumentNode,
+  DocxStructureResponse,
+  GeneratedTableBlock,
+  MiniBoxNode,
+} from "../types";
+
+const DOCUMENT_PAGE_ID = "docx-document-page";
+const GENERATED_TABLE_DOCK_ID = "docx-generated-table-dock";
+
+interface DocxReorderBoardProps {
+  structure: DocxStructureResponse;
+  nodes: DocumentNode[];
+  blockOrder: string[];
+  disabled?: boolean;
+  onOrderChange: (order: string[]) => void;
+  onOrderCommit: () => void;
+  renderPreview: (order: string[]) => ReactNode;
+}
+
+interface SortableDocumentBlockProps {
+  id: string;
+  content: string;
+  generated: boolean;
+  tone: number;
+  position: number;
+  total: number;
+  disabled: boolean;
+  onMove: (id: string, direction: -1 | 1) => void;
+  onReturnToDock: () => void;
+}
+
+function ordersMatch(left: string[], right: string[]): boolean {
+  return left.length === right.length
+    && left.every((nodeId, index) => nodeId === right[index]);
+}
+
+function DocumentBlockContent({
+  content,
+  generated,
+}: {
+  content: string;
+  generated: boolean;
+}) {
+  const label = generated ? "Tabela gerada" : (content.trim() || "Bloco vazio");
+  return (
+    <div className="docx-mini-box-content" title={label}>
+      {generated && <Table2 size={20} aria-hidden="true" />}
+      <span>{`{${label}}`}</span>
+    </div>
+  );
+}
+
+function SortableDocumentBlock({
+  id,
+  content,
+  generated,
+  tone,
+  position,
+  total,
+  disabled,
+  onMove,
+  onReturnToDock,
+}: SortableDocumentBlockProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id, disabled });
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <article
+      ref={setNodeRef}
+      className={[
+        "docx-mini-box",
+        generated ? "is-generated-table" : `tone-${tone}`,
+        isDragging ? "is-dragging" : "",
+      ].filter(Boolean).join(" ")}
+      style={style}
+      role="listitem"
+      aria-label={`${generated ? "Tabela gerada" : "Mini-box"}, posição ${position} de ${total}`}
+    >
+      <div className="docx-mini-box-toolbar">
+        <span className="docx-mini-box-index" aria-hidden="true">
+          {String(position).padStart(2, "0")}
+        </span>
+        <div className="docx-mini-box-actions">
+          <button
+            type="button"
+            className="docx-order-button"
+            onClick={() => onMove(id, -1)}
+            disabled={disabled || position === 1}
+            aria-label={`Mover ${generated ? "tabela" : "mini-box"} para a posição anterior`}
+            title="Posição anterior"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <button
+            type="button"
+            className="docx-order-button"
+            onClick={() => onMove(id, 1)}
+            disabled={disabled || position === total}
+            aria-label={`Mover ${generated ? "tabela" : "mini-box"} para a próxima posição`}
+            title="Próxima posição"
+          >
+            <ChevronRight size={16} />
+          </button>
+          {generated && (
+            <button
+              type="button"
+              className="docx-order-button"
+              onClick={onReturnToDock}
+              disabled={disabled}
+              aria-label="Retornar tabela à área lateral"
+              title="Retornar à área lateral"
+            >
+              <Undo2 size={16} />
+            </button>
+          )}
+          <button
+            type="button"
+            className="docx-drag-handle"
+            disabled={disabled}
+            aria-label={`Arrastar ${generated ? "tabela gerada" : `mini-box ${position}`}`}
+            title="Arrastar bloco"
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical size={17} />
+          </button>
+        </div>
+      </div>
+      <DocumentBlockContent content={content} generated={generated} />
+    </article>
+  );
+}
+
+function GeneratedTableDock({
+  block,
+  docked,
+  disabled,
+  active,
+  onInsert,
+}: {
+  block: GeneratedTableBlock;
+  docked: boolean;
+  disabled: boolean;
+  active: boolean;
+  onInsert: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef: setDraggableRef,
+    transform,
+    isDragging,
+  } = useDraggable({ id: block.id, disabled: disabled || !docked });
+  const { isOver, setNodeRef: setDroppableRef } = useDroppable({
+    id: GENERATED_TABLE_DOCK_ID,
+    disabled: disabled || docked,
+  });
+  const style: CSSProperties = {
+    transform: CSS.Translate.toString(transform),
+  };
+
+  return (
+    <aside
+      ref={setDroppableRef}
+      className={`docx-generated-table-dock${isOver ? " is-over" : ""}${active ? " is-active" : ""}`}
+      aria-label="Área lateral da tabela gerada"
+    >
+      {docked ? (
+        <article
+          ref={setDraggableRef}
+          className={`docx-mini-box is-generated-table is-docked${isDragging ? " is-dragging" : ""}`}
+          style={style}
+        >
+          <div className="docx-mini-box-toolbar">
+            <Table2 size={18} aria-hidden="true" />
+            <div className="docx-mini-box-actions">
+              <button
+                type="button"
+                className="docx-order-button"
+                onClick={onInsert}
+                disabled={disabled}
+                aria-label="Inserir tabela no final do documento"
+                title="Inserir no documento"
+              >
+                <Plus size={16} />
+              </button>
+              <button
+                type="button"
+                className="docx-drag-handle"
+                disabled={disabled}
+                aria-label="Arrastar tabela gerada para o documento"
+                title="Arrastar tabela"
+                {...attributes}
+                {...listeners}
+              >
+                <GripVertical size={17} />
+              </button>
+            </div>
+          </div>
+          <DocumentBlockContent content={block.content} generated />
+        </article>
+      ) : (
+        <div className="docx-generated-table-return" role="img" aria-label="Área de retorno da tabela">
+          <Table2 size={24} aria-hidden="true" />
+        </div>
+      )}
+    </aside>
+  );
+}
+
+function DocumentPage({
+  active,
+  children,
+}: {
+  active: boolean;
+  children: ReactNode;
+}) {
+  const { isOver, setNodeRef } = useDroppable({ id: DOCUMENT_PAGE_ID });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`docx-document-page${isOver ? " is-over" : ""}${active ? " is-active" : ""}`}
+      role="list"
+    >
+      {children}
+    </div>
+  );
+}
+
+export function DocxReorderBoard({
+  structure,
+  nodes,
+  blockOrder,
+  disabled = false,
+  onOrderChange,
+  onOrderCommit,
+  renderPreview,
+}: DocxReorderBoardProps) {
+  const [previewOrder, setPreviewOrder] = useState<string[] | null>(null);
+  const previewOrderRef = useRef<string[] | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [tableDocked, setTableDocked] = useState(true);
+  const [announcement, setAnnouncement] = useState("");
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 160, tolerance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const tableBlock = structure.generated_table_block;
+  const tableId = tableBlock.id;
+  const displayedOrder = previewOrder || blockOrder;
+  const pageOrder = tableDocked
+    ? displayedOrder.filter((nodeId) => nodeId !== tableId)
+    : displayedOrder;
+  const miniBoxes = useMemo(() => miniBoxNodes(nodes), [nodes]);
+  const miniBoxesById = useMemo(
+    () => new Map(miniBoxes.map((node) => [node.id, node])),
+    [miniBoxes],
+  );
+  const tonesById = useMemo(
+    () => new Map(
+      miniBoxNodes(structure.nodes).map((node, index) => [node.id, (index % 4) + 1]),
+    ),
+    [structure.nodes],
+  );
+  const originalOrder = useMemo(
+    () => createDocumentBlockOrder(structure.nodes, tableId),
+    [structure.nodes, tableId],
+  );
+  const hasChanges = !tableDocked || !ordersMatch(blockOrder, originalOrder);
+
+  useEffect(() => {
+    setPreviewOrder(null);
+    previewOrderRef.current = null;
+    setActiveId(null);
+    setTableDocked(true);
+    setAnnouncement("");
+  }, [structure.document_signature]);
+
+  const commitOrder = (nextOrder: string[], message: string) => {
+    onOrderChange(nextOrder);
+    setAnnouncement(message);
+    onOrderCommit();
+  };
+
+  const announcePosition = (candidateOrder: string[], nodeId: string) => {
+    const visibleOrder = tableDocked
+      ? candidateOrder.filter((candidateId) => candidateId !== tableId)
+      : candidateOrder;
+    const position = visibleOrder.indexOf(nodeId) + 1;
+    if (position > 0) {
+      setAnnouncement(`Bloco movido para a posição ${position}.`);
+    }
+  };
+
+  const handleDragStart = (event: DragStartEvent) => {
+    const id = String(event.active.id);
+    setActiveId(id);
+    setPreviewOrder(blockOrder);
+    previewOrderRef.current = blockOrder;
+    if (id === tableId && tableDocked) {
+      setAnnouncement("Tabela gerada selecionada.");
+    } else {
+      announcePosition(blockOrder, id);
+    }
+  };
+
+  const handleDragOver = (event: DragOverEvent) => {
+    const draggingId = String(event.active.id);
+    const overId = event.over ? String(event.over.id) : "";
+    if (
+      !overId
+      || draggingId === overId
+      || (draggingId === tableId && tableDocked)
+      || !blockOrder.includes(overId)
+    ) {
+      return;
+    }
+    const candidate = reorderDocumentBlocks(blockOrder, draggingId, overId);
+    setPreviewOrder(candidate);
+    previewOrderRef.current = candidate;
+    announcePosition(candidate, draggingId);
+  };
+
+  const clearDragState = () => {
+    setActiveId(null);
+    setPreviewOrder(null);
+    previewOrderRef.current = null;
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const draggingId = String(event.active.id);
+    const overId = event.over ? String(event.over.id) : "";
+
+    if (draggingId === tableId && tableDocked) {
+      if (overId && overId !== GENERATED_TABLE_DOCK_ID) {
+        const beforeId = blockOrder.includes(overId) ? overId : undefined;
+        const nextOrder = insertDocumentBlockBefore(blockOrder, tableId, beforeId);
+        setTableDocked(false);
+        commitOrder(nextOrder, "Tabela inserida no documento.");
+      }
+      clearDragState();
+      return;
+    }
+
+    if (draggingId === tableId && overId === GENERATED_TABLE_DOCK_ID) {
+      const nextOrder = insertDocumentBlockBefore(blockOrder, tableId);
+      setTableDocked(true);
+      commitOrder(nextOrder, "Tabela retornada à área lateral.");
+      clearDragState();
+      return;
+    }
+
+    const previewedOrder = previewOrderRef.current;
+    let nextOrder = previewedOrder || blockOrder;
+    if (!previewedOrder && overId && blockOrder.includes(overId)) {
+      nextOrder = reorderDocumentBlocks(nextOrder, draggingId, overId);
+    } else if (overId === DOCUMENT_PAGE_ID) {
+      nextOrder = tableDocked
+        ? insertDocumentBlockBefore(nextOrder, draggingId, tableId)
+        : insertDocumentBlockBefore(nextOrder, draggingId);
+    }
+    if (!ordersMatch(nextOrder, blockOrder)) {
+      commitOrder(nextOrder, `Bloco movido para a posição ${nextOrder.indexOf(draggingId) + 1}.`);
+    }
+    clearDragState();
+  };
+
+  const handleDragCancel = () => {
+    clearDragState();
+    setAnnouncement("Reordenação cancelada.");
+  };
+
+  const handleMove = (nodeId: string, direction: -1 | 1) => {
+    const visibleOrder = tableDocked
+      ? blockOrder.filter((candidateId) => candidateId !== tableId)
+      : blockOrder;
+    const movedVisibleOrder = moveDocumentBlock(visibleOrder, nodeId, direction);
+    if (movedVisibleOrder === visibleOrder) return;
+    const nextOrder = tableDocked
+      ? [...movedVisibleOrder, tableId]
+      : movedVisibleOrder;
+    commitOrder(nextOrder, `Bloco movido para a posição ${movedVisibleOrder.indexOf(nodeId) + 1}.`);
+  };
+
+  const insertTableAtEnd = () => {
+    setTableDocked(false);
+    commitOrder(
+      insertDocumentBlockBefore(blockOrder, tableId),
+      "Tabela inserida no final do documento.",
+    );
+  };
+
+  const returnTableToDock = () => {
+    setTableDocked(true);
+    commitOrder(
+      insertDocumentBlockBefore(blockOrder, tableId),
+      "Tabela retornada à área lateral.",
+    );
+  };
+
+  const restoreOriginalOrder = () => {
+    setTableDocked(true);
+    commitOrder(originalOrder, "Ordem original restaurada.");
+  };
+
+  return (
+    <section className="docx-reorder-workspace" aria-labelledby="docx-reorder-heading">
+      <div className="docx-reorder-heading">
+        <div>
+          <h4 id="docx-reorder-heading">Composição visual do documento</h4>
+          <span>{structure.mini_box_count} mini-box(es) + tabela da proposta</span>
+        </div>
+        {hasChanges && (
+          <button
+            type="button"
+            className="button button-secondary docx-reset-order"
+            onClick={restoreOriginalOrder}
+            disabled={disabled}
+          >
+            <RotateCcw size={16} />
+            Restaurar ordem
+          </button>
+        )}
+      </div>
+
+      {structure.warnings.length > 0 && (
+        <div className="docx-structure-warnings" role="status">
+          {structure.warnings.map((warning) => (
+            <p key={warning}>{warning}</p>
+          ))}
+        </div>
+      )}
+
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
+      >
+        <div className="docx-document-stage" aria-busy={Boolean(activeId)}>
+          <div className="docx-stage-column docx-blocks-column">
+            <span className="docx-stage-label">Blocos gerados</span>
+            <GeneratedTableDock
+              block={tableBlock}
+              docked={tableDocked}
+              disabled={disabled}
+              active={activeId === tableId}
+              onInsert={insertTableAtEnd}
+            />
+          </div>
+          <div className="docx-stage-column docx-organization-column">
+            <span className="docx-stage-label">Organização</span>
+            <SortableContext items={pageOrder} strategy={rectSortingStrategy}>
+              <DocumentPage active={Boolean(activeId)}>
+                {pageOrder.map((nodeId, index) => {
+                  const generated = nodeId === tableId;
+                  const node: MiniBoxNode | undefined = miniBoxesById.get(nodeId);
+                  if (!generated && !node) return null;
+                  return (
+                    <SortableDocumentBlock
+                      key={nodeId}
+                      id={nodeId}
+                      content={generated ? tableBlock.content : node?.content || ""}
+                      generated={generated}
+                      tone={tonesById.get(nodeId) || 1}
+                      position={index + 1}
+                      total={pageOrder.length}
+                      disabled={disabled}
+                      onMove={handleMove}
+                      onReturnToDock={returnTableToDock}
+                    />
+                  );
+                })}
+              </DocumentPage>
+            </SortableContext>
+          </div>
+          <div className="docx-stage-column docx-preview-column">
+            <span className="docx-stage-label">Pré-visualização</span>
+            {renderPreview(displayedOrder)}
+          </div>
+        </div>
+      </DndContext>
+      <p className="sr-only" aria-live="polite">{announcement}</p>
+    </section>
+  );
+}

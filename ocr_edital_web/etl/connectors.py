@@ -60,6 +60,8 @@ class HttpJsonClient:
                 if self.request_delay:
                     self.sleeper(self.request_delay)
                 with self.opener(request, timeout=self.timeout) as response:
+                    if getattr(response, "status", None) == 204:
+                        return FetchedPayload(payload={"data": []}, request_url=request_url)
                     charset = response.headers.get_content_charset() or "utf-8"
                     response_text = response.read().decode(charset)
                     try:

@@ -1,28 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Download,
-  Eye,
   ExternalLink,
   FileOutput,
   Pencil,
-  RefreshCw,
   Upload,
+  X,
 } from "lucide-react";
 import {
   generateProposal,
+  getDocxStructure,
   identifyItems,
-  previewProposal,
   processProposal,
 } from "../api";
 import type {
+  DocumentNode,
+  DocxStructureResponse,
   IdentifyResponse,
   ProcessResponse,
-  ProposalPreviewResponse,
   ProposalItem,
   Responsible,
   Template,
   UiMessage,
 } from "../types";
+import {
+  applyMiniBoxOrder,
+  createDocumentBlockOrder,
+  miniBoxOrderFromDocumentOrder,
+} from "../docxOrder";
 import {
   calculateItemTotal,
   isValidPncpUrl,
@@ -33,6 +38,8 @@ import {
   validateTemplateFile,
 } from "../utils";
 import { StatusMessage } from "./StatusMessage";
+import { DocxReorderBoard } from "./DocxReorderBoard";
+import { ProposalLivePreview } from "./ProposalLivePreview";
 
 interface ProposalBlockProps {
   pncpLink: string;
@@ -97,13 +104,47 @@ export function ProposalBlock({
   const [processed, setProcessed] = useState<ProcessedProposal | null>(null);
   const [message, setMessage] = useState<UiMessage | null>(null);
   const [processing, setProcessing] = useState(false);
-  const [previewing, setPreviewing] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [filePreview, setFilePreview] = useState<ProposalPreviewResponse | null>(null);
   const [download, setDownload] = useState<{ url: string; filename: string } | null>(null);
+  const [documentStructure, setDocumentStructure] = useState<DocxStructureResponse | null>(null);
+  const [documentNodes, setDocumentNodes] = useState<DocumentNode[]>([]);
+  const [documentBlockIds, setDocumentBlockIds] = useState<string[]>([]);
+  const [structureLoading, setStructureLoading] = useState(false);
+  const [structureError, setStructureError] = useState("");
 
   const selectedTemplate = templates.find((template) => template.id === selectedTemplateId);
+  const selectedResponsible = responsibles.find(
+    (responsible) => responsible.id === selectedResponsibleId,
+  );
+  const selectedTemplateVersion = selectedTemplate
+    ? `${selectedTemplate.id}:${selectedTemplate.size}:${selectedTemplate.updated_at}`
+    : "";
+  const selectedTemplateVersionRef = useRef(selectedTemplateVersion);
   const showLot = Boolean(identified?.items.some((item) => String(item.lote || "").trim()));
+
+  const resetProcessedTemplateState = () => {
+    setProcessed(null);
+    setDownload(null);
+    setDocumentStructure(null);
+    setDocumentNodes([]);
+    setDocumentBlockIds([]);
+    setStructureError("");
+  };
+
+  useEffect(() => {
+    const previousVersion = selectedTemplateVersionRef.current;
+    if (previousVersion === selectedTemplateVersion) return;
+    selectedTemplateVersionRef.current = selectedTemplateVersion;
+    setCustomTemplate(null);
+    if (customTemplateRef.current) customTemplateRef.current.value = "";
+    resetProcessedTemplateState();
+    if (previousVersion) {
+      setMessage({
+        kind: "info",
+        text: "Template cadastrado alterado. Processe novamente para aplicar o modelo selecionado.",
+      });
+    }
+  }, [selectedTemplateVersion]);
 
   useEffect(() => {
     const link = pncpLink.trim();
@@ -133,8 +174,11 @@ export function ProposalBlock({
           ),
         );
         setProcessed(null);
-        setFilePreview(null);
         setDownload(null);
+        setDocumentStructure(null);
+        setDocumentNodes([]);
+        setDocumentBlockIds([]);
+        setStructureError("");
         const review = payload.description_review;
         const verification = payload.pncp_items_check;
         setIdentifyMessage({
@@ -215,10 +259,10 @@ export function ProposalBlock({
       const body = new FormData();
       body.append("pncp_link", normalizePncpUrl(pncpLink) || pncpLink.trim());
       body.append("responsible_id", selectedResponsibleId);
-      body.append("template_choice", selectedTemplateId);
       body.append("wanted_items", selectedKeysAsText(selectedKeys));
       body.append("preset_brand", brand.trim());
       if (customTemplate) body.append("template_file", customTemplate);
+      else body.append("template_choice", selectedTemplateId);
 
       const response = await processProposal(body);
       const values = unitValues;
@@ -232,12 +276,35 @@ export function ProposalBlock({
         throw new Error("Os itens selecionados não foram encontrados no documento processado.");
       }
       setProcessed({ response, items: selectedItems });
-      setFilePreview(null);
       setDownload(null);
-      setMessage({
-        kind: "success",
-        text: `Proposta processada com sucesso. ${selectedItems.length} item(ns) preparado(s).`,
-      });
+      setDocumentStructure(null);
+      setDocumentNodes([]);
+      setDocumentBlockIds([]);
+      setStructureError("");
+      setStructureLoading(true);
+      try {
+        const structure = await getDocxStructure(response.template_ref);
+        setDocumentStructure(structure);
+        setDocumentNodes(structure.nodes.map((node) => ({ ...node })));
+        setDocumentBlockIds(
+          createDocumentBlockOrder(structure.nodes, structure.generated_table_block.id),
+        );
+        setMessage({
+          kind: "success",
+          text: `Proposta processada com sucesso. ${selectedItems.length} item(ns) preparado(s). Modelo ${response.template_source === "upload" ? "avulso" : "cadastrado"} aplicado: ${response.template_name}.`,
+        });
+      } catch (structureFailure) {
+        const errorText = structureFailure instanceof Error
+          ? structureFailure.message
+          : "Não foi possível analisar os blocos do modelo Word.";
+        setStructureError(errorText);
+        setMessage({
+          kind: "warning",
+          text: `A proposta foi processada, mas a estrutura do modelo não pôde ser carregada. ${errorText}`,
+        });
+      } finally {
+        setStructureLoading(false);
+      }
     } catch (error) {
       setMessage({
         kind: "error",
@@ -265,7 +332,6 @@ export function ProposalBlock({
       });
       return { ...current, items };
     });
-    setFilePreview(null);
     setDownload(null);
   };
 
@@ -276,6 +342,36 @@ export function ProposalBlock({
       valor_unitario: normalizeMoney(item.valor_unitario) || item.valor_unitario,
       valor_total: calculateItemTotal(item.quantidade, item.valor_unitario),
     }));
+
+  const orderedMiniBoxIds = documentStructure
+    ? miniBoxOrderFromDocumentOrder(
+        documentBlockIds,
+        documentStructure.generated_table_block.id,
+      )
+    : undefined;
+
+  const orderedDocumentBlockIds = documentStructure
+    ? documentBlockIds
+    : undefined;
+
+  const updateDocumentOrder = (order: string[]) => {
+    setDocumentBlockIds(order);
+    if (documentStructure) {
+      const miniBoxes = miniBoxOrderFromDocumentOrder(
+        order,
+        documentStructure.generated_table_block.id,
+      );
+      setDocumentNodes((current) => applyMiniBoxOrder(current, miniBoxes));
+    }
+    setDownload(null);
+  };
+
+  const commitDocumentOrder = () => {
+    setMessage({
+      kind: "info",
+      text: "Ordem dos blocos atualizada e refletida na pré-visualização.",
+    });
+  };
 
   const validateDocument = (): boolean => {
     if (!processed) return false;
@@ -294,43 +390,8 @@ export function ProposalBlock({
     return true;
   };
 
-  const previewFile = async () => {
-    if (!processed || previewing || !validateDocument()) return;
-    setPreviewing(true);
-    setMessage({ kind: "info", text: "Gerando pré-visualização fiel do arquivo..." });
-    try {
-      const response = await previewProposal(
-        preparedItems(),
-        processed.response.template_ref,
-        processed.response.source_name,
-        selectedResponsibleId,
-        processed.response.commercial_terms,
-      );
-      setFilePreview(response);
-      setDownload(null);
-      setMessage({
-        kind: "success",
-        text: response.renderer === "compatible"
-          ? "Pré-visualização gerada em modo compatível. O arquivo Word final preserva o template selecionado."
-          : response.cached
-            ? "Pré-visualização atualizada."
-            : "Pré-visualização gerada com sucesso.",
-      });
-    } catch (error) {
-      setFilePreview(null);
-      setMessage({
-        kind: "error",
-        text: error instanceof Error
-          ? error.message
-          : "Não foi possível gerar a pré-visualização do arquivo.",
-      });
-    } finally {
-      setPreviewing(false);
-    }
-  };
-
   const generate = async () => {
-    if (!processed || !filePreview || generating || !validateDocument()) return;
+    if (!processed || generating || !validateDocument()) return;
     setGenerating(true);
     setMessage({ kind: "info", text: "Gerando documento Word..." });
     try {
@@ -340,6 +401,8 @@ export function ProposalBlock({
         processed.response.source_name,
         selectedResponsibleId,
         processed.response.commercial_terms,
+        orderedMiniBoxIds,
+        orderedDocumentBlockIds,
       );
       setDownload({ url: response.download_url, filename: response.filename });
       setMessage({ kind: "success", text: "Documento Word gerado com sucesso." });
@@ -395,7 +458,6 @@ export function ProposalBlock({
                 value={selectedResponsibleId}
                 onChange={(event) => {
                   onSelectedResponsibleChange(event.target.value);
-                  setFilePreview(null);
                   setDownload(null);
                 }}
               >
@@ -424,8 +486,6 @@ export function ProposalBlock({
                 value={selectedTemplateId}
                 onChange={(event) => {
                   onSelectedTemplateChange(event.target.value);
-                  setFilePreview(null);
-                  setDownload(null);
                 }}
               >
                 {!templates.length && <option value="">Nenhum template cadastrado</option>}
@@ -461,16 +521,37 @@ export function ProposalBlock({
               ) : (
                 <span className="muted-text">Nenhum template cadastrado.</span>
               )}
-              <div className="custom-template">
+              <div className={`custom-template${customTemplate ? " is-active" : ""}`}>
                 <span>{customTemplate?.name || "Template avulso"}</span>
-                <button
-                  className="button button-secondary"
-                  type="button"
-                  onClick={() => customTemplateRef.current?.click()}
-                >
-                  <Upload size={16} />
-                  Anexar .docx
-                </button>
+                <div className="custom-template-actions">
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() => customTemplateRef.current?.click()}
+                  >
+                    <Upload size={16} />
+                    Anexar .docx
+                  </button>
+                  {customTemplate && (
+                    <button
+                      className="button button-secondary custom-template-clear"
+                      type="button"
+                      title="Remover template avulso"
+                      aria-label="Remover template avulso"
+                      onClick={() => {
+                        setCustomTemplate(null);
+                        if (customTemplateRef.current) customTemplateRef.current.value = "";
+                        resetProcessedTemplateState();
+                        setMessage({
+                          kind: "info",
+                          text: "Template avulso removido. O template cadastrado está ativo.",
+                        });
+                      }}
+                    >
+                      <X size={16} />
+                    </button>
+                  )}
+                </div>
                 <input
                   ref={customTemplateRef}
                   type="file"
@@ -486,8 +567,7 @@ export function ProposalBlock({
                       return;
                     }
                     setCustomTemplate(file);
-                    setFilePreview(null);
-                    setDownload(null);
+                    resetProcessedTemplateState();
                     setMessage({ kind: "success", text: "Template avulso selecionado para esta proposta." });
                   }}
                 />
@@ -571,29 +651,14 @@ export function ProposalBlock({
         <div className="result-heading">
           <div>
             <h3 id="result-heading">Resultado da proposta</h3>
-            <p>Pré-visualização, validações e documento gerado.</p>
+            <p>Composição e documento final.</p>
           </div>
           <div className="result-actions">
             {processed && (
               <button
                 className="button button-primary"
                 type="button"
-                disabled={previewing || generating}
-                onClick={previewFile}
-              >
-                {filePreview ? <RefreshCw size={17} /> : <Eye size={17} />}
-                {previewing
-                  ? "Preparando prévia..."
-                  : filePreview
-                    ? "Atualizar prévia"
-                    : "Pré-visualizar arquivo"}
-              </button>
-            )}
-            {filePreview && (
-              <button
-                className="button button-secondary"
-                type="button"
-                disabled={generating || previewing}
+                disabled={generating || structureLoading}
                 onClick={generate}
               >
                 <FileOutput size={17} />
@@ -609,25 +674,33 @@ export function ProposalBlock({
           </div>
         </div>
         {message && <StatusMessage message={message} />}
-        {filePreview && (
-          <section className="proposal-file-preview" aria-labelledby="proposal-file-preview-heading">
-            <div className="proposal-file-preview-heading">
-              <h4 id="proposal-file-preview-heading">Pré-visualização do arquivo</h4>
-              <a
-                className="button button-secondary"
-                href={filePreview.preview_url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                <ExternalLink size={16} />
-                Abrir
-              </a>
-            </div>
-            <iframe
-              src={filePreview.preview_url}
-              title="Pré-visualização do documento da proposta"
-            />
-          </section>
+        {processed && structureLoading && (
+          <div className="docx-structure-loading" role="status">
+            Analisando a estrutura do modelo Word...
+          </div>
+        )}
+        {processed && structureError && !structureLoading && (
+          <StatusMessage message={{ kind: "warning", text: structureError }} compact />
+        )}
+        {processed && documentStructure && !structureLoading && (
+          <DocxReorderBoard
+            structure={documentStructure}
+            nodes={documentNodes}
+            blockOrder={documentBlockIds}
+            disabled={generating}
+            onOrderChange={updateDocumentOrder}
+            onOrderCommit={commitDocumentOrder}
+            renderPreview={(previewOrder) => (
+              <ProposalLivePreview
+                nodes={documentNodes}
+                blockOrder={previewOrder}
+                generatedTable={documentStructure.generated_table_block}
+                items={processed.items}
+                commercialTerms={processed.response.commercial_terms}
+                responsible={selectedResponsible}
+              />
+            )}
+          />
         )}
         {processed && (
           <div className="data-table-wrap result-table-wrap">

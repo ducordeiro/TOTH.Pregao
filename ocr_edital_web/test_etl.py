@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import tempfile
 import threading
@@ -10,7 +11,7 @@ from etl import ComprasGovMapper, ETLRepository, ETLSyncService, PNCPMapper, Syn
 from etl.connectors import ConnectorError, HttpJsonClient
 from etl.models import FetchedPayload, MatchResult, NormalizedOpportunity, OpportunityItem, PageResult
 from etl.jobs import run_backfill, run_comprasgov_backfill
-from scripts import enrich_missing_pncp_items
+from scripts import bulk_enrich_comprasgov_items, enrich_missing_pncp_items
 
 
 class FakePNCPConnector:
@@ -93,8 +94,9 @@ class FakeHttpResponse:
 
     headers = Headers()
 
-    def __init__(self, body):
+    def __init__(self, body, status=200):
         self.body = body
+        self.status = status
 
     def __enter__(self):
         return self
@@ -195,6 +197,25 @@ class EtlSmokeTests(unittest.TestCase):
         self.assertEqual(opportunity.status, "Divulgada no PNCP")
         self.assertEqual(opportunity.proposal_end_at, "2026-07-30T18:00:00")
 
+    def test_comprasgov_mapper_supports_bulk_item_field_names(self):
+        items = ComprasGovMapper().map_items([{
+            "idCompraItem": "9000100007",
+            "numeroItemPncp": 7,
+            "numeroGrupo": 0,
+            "descricaoResumida": "Cadeira escolar",
+            "descricaodetalhada": "Estrutura metalica e assento estofado",
+            "materialOuServicoNome": "Material",
+            "quantidade": 20,
+            "unidadeMedida": "UNIDADE",
+        }])
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].source_item_id, "9000100007")
+        self.assertEqual(items[0].item_number, "7")
+        self.assertEqual(items[0].lot_number, "")
+        self.assertIn("Cadeira escolar", items[0].description)
+        self.assertIn("Estrutura metalica", items[0].description)
+
     def setUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.database_path = Path(self.temporary_directory.name) / "etl.sqlite3"
@@ -285,6 +306,40 @@ class EtlSmokeTests(unittest.TestCase):
         self.assertEqual(without_accent["total"], 1)
         self.assertEqual(with_accent["total"], 1)
 
+    def test_keyword_filter_does_not_match_inside_another_word(self):
+        self.connector.description = "Aquisição de roçadeira profissional"
+        self.service.sync(SyncRequest(
+            endpoint="proposta",
+            filters={"dataFinal": "20260806", "codigoModalidadeContratacao": 6},
+            fetch_details=False,
+            max_pages=1,
+            max_records=10,
+        ))
+
+        chairs = self.repository.list_opportunities({"keywords": ["cadeira"]})
+        brush_cutters = self.repository.list_opportunities({"keywords": ["roçadeira"]})
+
+        self.assertEqual(chairs["total"], 0)
+        self.assertEqual(brush_cutters["total"], 1)
+
+    def test_keyword_filter_matches_singular_plural_and_phrase_gaps(self):
+        self.connector.description = "Registro eletrônico integrado de monitores"
+        self.sync()
+
+        singular = self.repository.list_opportunities({"keywords": ["monitor"]})
+        phrase = self.repository.list_opportunities({"keywords": ["registro de monitor"]})
+
+        self.assertEqual(singular["total"], 1)
+        self.assertEqual(phrase["total"], 1)
+
+    def test_keyword_filter_searches_item_technical_data_and_document_metadata(self):
+        self.sync()
+        technical = self.repository.list_opportunities({"keywords": ["menor preço"]})
+        document = self.repository.list_opportunities({"keywords": ["edital"]})
+
+        self.assertEqual(technical["total"], 1)
+        self.assertEqual(document["total"], 1)
+
     def test_object_type_uses_opportunity_text_without_requiring_items(self):
         self.connector.description = "Aquisição de mobiliário escolar"
         self.service.sync(SyncRequest(
@@ -359,6 +414,118 @@ class EtlSmokeTests(unittest.TestCase):
         self.assertEqual(hidden["total"], 0)
         self.assertEqual(included["total"], 1)
         self.assertEqual(outside_publication_window["total"], 0)
+
+    def test_publication_and_opening_date_filters_are_independent(self):
+        self.sync()
+
+        publication = self.repository.list_opportunities({
+            "published_from": "2026-08-05T00:00:00",
+            "published_to": "2026-08-05T23:59:59",
+            "date_field": "publication",
+        })
+        opening = self.repository.list_opportunities({
+            "proposal_start_from": "2026-08-05T00:00:00",
+            "proposal_start_to": "2026-08-05T23:59:59",
+            "date_field": "opening",
+        })
+        outside_opening = self.repository.list_opportunities({
+            "proposal_start_from": "2026-08-06T00:00:00",
+            "proposal_start_to": "2026-08-06T23:59:59",
+            "date_field": "opening",
+        })
+
+        self.assertEqual(publication["total"], 1)
+        self.assertEqual(opening["total"], 1)
+        self.assertEqual(outside_opening["total"], 0)
+
+    def test_bounded_date_listing_preserves_total_order_and_pagination(self):
+        self.sync()
+        with self.repository.connect() as connection, connection:
+            original = connection.execute("SELECT * FROM opportunities").fetchone()
+            columns = list(original.keys())
+            for suffix, published_at, starts_at, ends_at in (
+                (2, "2026-08-04T09:00:00", "2026-08-07T10:00:00", "2026-08-09T10:00:00"),
+                (3, "2026-08-06T09:00:00", "2026-08-03T10:00:00", "2026-08-04T10:00:00"),
+            ):
+                values = dict(original)
+                values.update({
+                    "id": f"{suffix:032x}",
+                    "external_key": f"pncp:12345678000199:2026:{suffix}",
+                    "pncp_control_number": f"12345678000199-1-{suffix:06d}/2026",
+                    "sequence": suffix,
+                    "published_at": published_at,
+                    "proposal_start_at": starts_at,
+                    "proposal_end_at": ends_at,
+                    "record_hash": f"hash-{suffix}",
+                })
+                connection.execute(
+                    f"INSERT INTO opportunities ({','.join(columns)}) "
+                    f"VALUES ({','.join('?' for _ in columns)})",
+                    [values[column] for column in columns],
+                )
+
+        common = {"limit": 2, "offset": 0}
+        publication = self.repository.list_opportunities({
+            **common,
+            "published_from": "2026-08-01T00:00:00",
+            "published_to": "2026-08-10T23:59:59",
+            "date_field": "publication",
+        })
+        opening = self.repository.list_opportunities({
+            **common,
+            "proposal_start_from": "2026-08-01T00:00:00",
+            "proposal_start_to": "2026-08-10T23:59:59",
+            "date_field": "opening",
+        })
+        closing = self.repository.list_opportunities({
+            **common,
+            "proposal_from": "2026-08-01T00:00:00",
+            "proposal_to": "2026-08-10T23:59:59",
+            "date_field": "closing",
+        })
+        publication_page_two = self.repository.list_opportunities({
+            **common,
+            "offset": 2,
+            "published_from": "2026-08-01T00:00:00",
+            "published_to": "2026-08-10T23:59:59",
+            "date_field": "publication",
+        })
+
+        self.assertEqual(publication["total"], 3)
+        self.assertEqual(opening["total"], 3)
+        self.assertEqual(closing["total"], 3)
+        self.assertEqual(
+            [row["published_at"] for row in publication["items"]],
+            ["2026-08-06T09:00:00", "2026-08-05T09:00:00"],
+        )
+        self.assertEqual(
+            [row["proposal_start_at"] for row in opening["items"]],
+            ["2026-08-03T10:00:00", "2026-08-05T10:00:00"],
+        )
+        self.assertEqual(
+            [row["proposal_end_at"] for row in closing["items"]],
+            ["2026-08-04T10:00:00", "2026-08-06T10:00:00"],
+        )
+        self.assertEqual(publication_page_two["total"], 3)
+        self.assertEqual(len(publication_page_two["items"]), 1)
+        self.assertFalse(
+            {row["id"] for row in publication["items"]}
+            & {row["id"] for row in publication_page_two["items"]}
+        )
+
+    def test_listing_reports_item_index_coverage(self):
+        self.sync()
+
+        indexed = self.repository.list_opportunities()
+        self.assertEqual(indexed["items"][0]["item_count"], 2)
+        self.assertTrue(indexed["items"][0]["items_indexed"])
+
+        with self.repository.connect() as connection, connection:
+            connection.execute("DELETE FROM opportunity_items")
+
+        pending = self.repository.list_opportunities()
+        self.assertEqual(pending["items"][0]["item_count"], 0)
+        self.assertFalse(pending["items"][0]["items_indexed"])
 
     def test_listing_only_update_preserves_existing_items_and_documents(self):
         self.sync()
@@ -539,6 +706,16 @@ class EtlSmokeTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ConnectorError, "HTTP 429"):
             client.get("https://pncp.test/consulta")
+
+    def test_no_content_response_is_treated_as_an_empty_page(self):
+        client = HttpJsonClient(
+            retries=0,
+            opener=lambda *_args, **_kwargs: FakeHttpResponse(b"", status=204),
+        )
+
+        fetched = client.get("https://pncp.test/consulta")
+
+        self.assertEqual(fetched.payload, {"data": []})
 
     def test_generic_html_response_is_reported_as_temporary_http_429(self):
         client = HttpJsonClient(
@@ -1227,10 +1404,105 @@ class Bloco2ItemFlowTests(unittest.TestCase):
 
 
 class BatchItemEnrichmentTests(unittest.TestCase):
+    def test_missing_item_batch_prioritizes_open_then_future_opportunities(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = ETLRepository(Path(temp_dir) / "etl.sqlite3")
+            repository.initialize()
+            rows = [
+                ("open", "open-key", 1, "2026-08-01T09:00:00", "2026-08-30T18:00:00"),
+                ("future", "future-key", 2, "2026-09-01T09:00:00", "2026-09-10T18:00:00"),
+                ("unknown", "unknown-key", 3, None, None),
+                ("expired", "expired-key", 4, "2026-07-01T09:00:00", "2026-07-10T18:00:00"),
+            ]
+            with repository.connect() as connection, connection:
+                for opportunity_id, external_key, sequence, opening, closing in rows:
+                    connection.execute(
+                        """
+                        INSERT INTO opportunities (
+                            id, external_key, source, source_cnpj, year, sequence,
+                            title, published_at, proposal_start_at, proposal_end_at,
+                            record_hash, created_at, updated_at
+                        ) VALUES (?, ?, 'pncp', '12345678000199', 2026, ?, ?,
+                                  '2026-08-10T09:00:00', ?, ?, 'hash',
+                                  '2026-08-10T09:00:00', '2026-08-10T09:00:00')
+                        """,
+                        (opportunity_id, external_key, sequence, opportunity_id, opening, closing),
+                    )
+
+            pending = enrich_missing_pncp_items._load_missing(
+                repository,
+                "2026-06-01",
+                None,
+                scope="publication",
+                as_of="2026-08-24",
+                retry_failures_after_hours=0,
+            )
+            closed_on_july_tenth = enrich_missing_pncp_items._load_missing(
+                repository,
+                "2026-07-10",
+                None,
+                scope="closing",
+                date_to="2026-07-10",
+                as_of="2026-08-24",
+                retry_failures_after_hours=0,
+            )
+
+        self.assertEqual([row["id"] for row in pending[:2]], ["open", "future"])
+        self.assertEqual([row["priority"] for row in pending[:2]], [0, 1])
+        self.assertEqual({row["id"] for row in pending}, {"open", "future", "unknown", "expired"})
+        self.assertEqual([row["id"] for row in closed_on_july_tenth], ["expired"])
+
+    def test_missing_item_batch_can_prioritize_and_filter_comprasgov_rows(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = ETLRepository(Path(temp_dir) / "etl.sqlite3")
+            repository.initialize()
+            rows = [
+                ("pncp-later", "pncp", "pncp-key", 1, "2026-08-30T18:00:00"),
+                ("compras-sooner", "comprasgov", "compras-key", 2, "2026-08-26T18:00:00"),
+            ]
+            with repository.connect() as connection, connection:
+                for opportunity_id, source, external_key, sequence, closing in rows:
+                    connection.execute(
+                        """
+                        INSERT INTO opportunities (
+                            id, external_key, source, source_cnpj, year, sequence,
+                            title, published_at, proposal_start_at, proposal_end_at,
+                            record_hash, created_at, updated_at
+                        ) VALUES (?, ?, ?, '12345678000199', 2026, ?, ?,
+                                  '2026-08-10T09:00:00', '2026-08-20T09:00:00', ?,
+                                  'hash', '2026-08-10T09:00:00', '2026-08-10T09:00:00')
+                        """,
+                        (opportunity_id, external_key, source, sequence, opportunity_id, closing),
+                    )
+
+            pending = enrich_missing_pncp_items._load_missing(
+                repository,
+                "2026-06-01",
+                None,
+                scope="publication",
+                as_of="2026-08-24",
+                retry_failures_after_hours=0,
+            )
+            compras_only = enrich_missing_pncp_items._load_missing(
+                repository,
+                "2026-06-01",
+                None,
+                scope="publication",
+                source="comprasgov",
+                as_of="2026-08-24",
+                retry_failures_after_hours=0,
+            )
+        self.assertEqual([row["id"] for row in pending], ["compras-sooner", "pncp-later"])
+        self.assertEqual([row["id"] for row in compras_only], ["compras-sooner"])
+
     def test_batch_enrichment_calls_only_item_endpoint_and_uses_atomic_persistence(self):
         persisted = []
 
         class Repository:
+            @staticmethod
+            def opportunity_has_items(_opportunity_id):
+                return False
+
             def persist_opportunity_items_enrichment(self, **kwargs):
                 persisted.append(kwargs)
                 return {"persisted": True, "count": len(kwargs["items"])}
@@ -1281,6 +1553,118 @@ class BatchItemEnrichmentTests(unittest.TestCase):
         self.assertEqual(connector.identity, ("12345678000199", 2026, 1, 20))
         self.assertFalse(persisted[0]["finish_run"])
         self.assertEqual(persisted[0]["audit_summary"]["mode"], "items_only_batch")
+
+    def test_batch_enrichment_skips_remote_call_when_bulk_items_arrived(self):
+        class Repository:
+            @staticmethod
+            def opportunity_has_items(_opportunity_id):
+                return True
+
+        class Connector:
+            def iter_items(self, *_args):
+                raise AssertionError("PNCP should not be called for indexed opportunities")
+
+        result = enrich_missing_pncp_items._enrich_one(
+            repository=Repository(),
+            connector=Connector(),
+            mapper=PNCPMapper(),
+            run_id="run-1",
+            row={
+                "id": "opportunity-1",
+                "external_key": "key-1",
+                "source_cnpj": "12345678000199",
+                "year": 2026,
+                "sequence": 1,
+                "detail_url": "https://pncp.test/opportunity-1",
+            },
+            item_max_pages=20,
+            dry_run=False,
+        )
+
+        self.assertEqual(result[0], "skipped")
+
+    def test_comprasgov_bulk_page_keeps_latest_item_state(self):
+        selected = {}
+        old = {
+            "numeroControlePNCPCompra": "12345678000199-1-000001/2026",
+            "idCompraItem": "item-1",
+            "numeroItemPncp": 1,
+            "situacaoCompraItemNome": "Em andamento",
+            "dataAtualizacaoPncp": "2026-06-01T10:00:00",
+        }
+        current = {
+            **old,
+            "situacaoCompraItemNome": "Homologado",
+            "temResultado": True,
+            "dataAtualizacaoPncp": "2026-06-02T10:00:00",
+        }
+
+        counts = bulk_enrich_comprasgov_items._collect_page(
+            selected,
+            [old, current, {"numeroControlePNCPCompra": "not-stored"}],
+            {"12345678000199-1-000001/2026": "opportunity-1"},
+        )
+
+        self.assertEqual(counts, (3, 2, 1))
+        stored = next(iter(selected["opportunity-1"].values()))
+        self.assertEqual(stored["situacaoCompraItemNome"], "Homologado")
+
+    def test_repository_merges_item_pages_idempotently(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = ETLRepository(Path(temp_dir) / "etl.sqlite3")
+            repository.initialize()
+            with repository.connect() as connection, connection:
+                connection.execute(
+                    """
+                    INSERT INTO opportunities (
+                        id, external_key, source, title, record_hash, created_at, updated_at
+                    ) VALUES ('opportunity-1', 'key-1', 'comprasgov', 'Compra', 'hash',
+                              '2026-08-10T09:00:00', '2026-08-10T09:00:00')
+                    """
+                )
+            repository.merge_opportunity_items({
+                "opportunity-1": [OpportunityItem("source-1", "1", "Cadeira antiga")],
+            })
+            result = repository.merge_opportunity_items({
+                "opportunity-1": [
+                    OpportunityItem(
+                        "source-1",
+                        "1",
+                        "Cadeira atualizada",
+                        description="Cadeira escolar estofada",
+                        status="Homologado",
+                    )
+                ],
+            })
+            with repository.connect() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT title, description, status
+                    FROM opportunity_items
+                    WHERE opportunity_id = 'opportunity-1'
+                    """
+                ).fetchall()
+
+        self.assertEqual(result, {"opportunities": 1, "items": 1})
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(tuple(rows[0]), ("Cadeira atualizada", "Cadeira escolar estofada", "Homologado"))
+
+    def test_bulk_status_falls_back_when_atomic_replace_is_temporarily_locked(self):
+        for module in (bulk_enrich_comprasgov_items, enrich_missing_pncp_items):
+            with self.subTest(module=module.__name__), tempfile.TemporaryDirectory() as temp_dir:
+                status_path = Path(temp_dir) / "status.json"
+                with (
+                    patch.object(Path, "replace", side_effect=PermissionError("locked")),
+                    patch.object(module.time, "sleep"),
+                ):
+                    module._write_status(
+                        status_path,
+                        {"status": "running", "completed": 10},
+                    )
+
+                payload = json.loads(status_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(payload, {"status": "running", "completed": 10})
 
 
 if __name__ == "__main__":

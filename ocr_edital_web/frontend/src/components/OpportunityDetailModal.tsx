@@ -255,7 +255,12 @@ export function OpportunityDetailModal({
             <button
               className="button button-primary opportunity-business-action"
               type="button"
-              disabled={adding || added || (selectingForBusiness && !selectedBusinessItems.size)}
+              disabled={
+                adding
+                || added
+                || !detail.itens.length
+                || (selectingForBusiness && !selectedBusinessItems.size)
+              }
               onClick={() => {
                 if (!selectingForBusiness) startBusinessSelection();
                 else void addToBusiness();
@@ -457,13 +462,26 @@ export function OpportunityDetailModal({
                   </article>
                 );
               })}
-              {!filteredItems.length ? <p className="opportunity-panel-empty">Nenhum item corresponde à pesquisa.</p> : null}
+              {!filteredItems.length ? (
+                <p className="opportunity-panel-empty">
+                  {detail.itens.length
+                    ? "Nenhum item corresponde à pesquisa."
+                    : "Nenhum item foi carregado para esta oportunidade."}
+                </p>
+              ) : null}
             </div>
           </section>
 
           <footer className="opportunity-footer">
             <span>Dados da oportunidade: {detail.fontes.oportunidade}</span>
-            <button className="button button-small button-secondary" type="button" onClick={() => onUseLink(opportunity.link_pncp)}>
+            <button
+              className="button button-small button-secondary"
+              type="button"
+              onClick={() => {
+                onClose();
+                onUseLink(opportunity.link_pncp);
+              }}
+            >
               Usar no Bloco 2
             </button>
           </footer>
