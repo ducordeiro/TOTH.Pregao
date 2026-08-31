@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  BookOpen,
   BriefcaseBusiness,
   ChevronDown,
   ExternalLink,
@@ -18,16 +19,19 @@ import type {
   Bid,
   OpportunityAnswer,
   OpportunityDetail,
+  OpportunityItemSelection,
   UiMessage,
 } from "../types";
-import { parseLocalDate } from "../utils";
+import { normalizePncpUrl, parseLocalDate } from "../utils";
+import { opportunityItemKey, selectedOpportunityItems } from "../opportunitySelection";
 import { Modal } from "./Modal";
 import { StatusMessage } from "./StatusMessage";
 
 interface OpportunityDetailModalProps {
   bid: Bid | null;
   onClose: () => void;
-  onUseLink: (link: string) => void;
+  onGenerateProposal: (selection: OpportunityItemSelection) => void;
+  onGenerateCatalog: (selection: OpportunityItemSelection) => void;
 }
 
 function formatCurrency(value: number | string | null) {
@@ -53,16 +57,15 @@ function formatDateTime(value: string) {
 export function OpportunityDetailModal({
   bid,
   onClose,
-  onUseLink,
+  onGenerateProposal,
+  onGenerateCatalog,
 }: OpportunityDetailModalProps) {
-  const itemsSectionRef = useRef<HTMLElement>(null);
   const [detail, setDetail] = useState<OpportunityDetail | null>(null);
   const [message, setMessage] = useState<UiMessage | null>(null);
   const [loading, setLoading] = useState(false);
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState(false);
-  const [selectingForBusiness, setSelectingForBusiness] = useState(false);
-  const [selectedBusinessItems, setSelectedBusinessItems] = useState<Set<string>>(new Set());
+  const [selectionDrafts, setSelectionDrafts] = useState<Record<string, string[]>>({});
   const [activePanel, setActivePanel] = useState<"files" | "chat" | null>(null);
   const [itemSearch, setItemSearch] = useState("");
   const [openItems, setOpenItems] = useState<Set<string>>(new Set());
@@ -77,8 +80,6 @@ export function OpportunityDetailModal({
     setMessage(null);
     setLoading(true);
     setAdded(false);
-    setSelectingForBusiness(false);
-    setSelectedBusinessItems(new Set());
     setActivePanel(null);
     setItemSearch("");
     setOpenItems(new Set());
@@ -116,13 +117,28 @@ export function OpportunityDetailModal({
     );
   }, [detail, itemSearch]);
 
-  const itemKey = (lote: string, numero: string) => `${lote}\u0000${numero}`;
+  const selectionId = normalizePncpUrl(bid?.link || "") || bid?.link || "";
+  const selectedKeys = new Set(selectionDrafts[selectionId] || []);
+  const selectedItems = selectedOpportunityItems(detail?.itens || [], selectedKeys);
+
+  const updateSelection = (update: (current: Set<string>) => Set<string>) => {
+    if (adding) return;
+    setSelectionDrafts((current) => ({
+      ...current,
+      [selectionId]: [...update(new Set(current[selectionId] || []))],
+    }));
+    setAdded(false);
+    setMessage(null);
+  };
+
+  const useSelection = (onUse: (selection: OpportunityItemSelection) => void) => {
+    if (!detail || !selectedItems.length || adding) return;
+    onUse({ pncpLink: detail.oportunidade.link_pncp, items: selectedItems.map((item) => ({ ...item })) });
+    onClose();
+  };
 
   const addToBusiness = async () => {
-    if (!bid || !detail || !selectedBusinessItems.size) return;
-    const selectedItems = detail.itens.filter((item) =>
-      selectedBusinessItems.has(itemKey(item.lote, item.numero)),
-    );
+    if (!bid || !detail || !selectedItems.length || adding) return;
     setAdding(true);
     setMessage(null);
     try {
@@ -132,7 +148,6 @@ export function OpportunityDetailModal({
         await importBusiness(bid.link, "", selectedItems, detail.oportunidade);
       }
       setAdded(true);
-      setSelectingForBusiness(false);
       setMessage({
         kind: "success",
         text: `${selectedItems.length} item(ns) adicionado(s) aos seus negócios.`,
@@ -146,15 +161,6 @@ export function OpportunityDetailModal({
     } finally {
       setAdding(false);
     }
-  };
-
-  const startBusinessSelection = () => {
-    setSelectingForBusiness(true);
-    setSelectedBusinessItems(new Set());
-    setMessage({ kind: "info", text: "Selecione os itens que deseja levar para o Bloco 4." });
-    window.setTimeout(() => {
-      itemsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 0);
   };
 
   const askDocument = async (event: React.FormEvent) => {
@@ -252,29 +258,6 @@ export function OpportunityDetailModal({
               <MessageSquareText size={17} />
               Converse com o edital
             </button>
-            <button
-              className="button button-primary opportunity-business-action"
-              type="button"
-              disabled={
-                adding
-                || added
-                || !detail.itens.length
-                || (selectingForBusiness && !selectedBusinessItems.size)
-              }
-              onClick={() => {
-                if (!selectingForBusiness) startBusinessSelection();
-                else void addToBusiness();
-              }}
-            >
-              <BriefcaseBusiness size={17} />
-              {added
-                ? "Adicionada aos negócios"
-                : adding
-                  ? "Adicionando..."
-                  : selectingForBusiness
-                    ? `Adicionar ${selectedBusinessItems.size} item(ns)`
-                    : "Adicionar aos meus negócios"}
-            </button>
           </div>
 
           {activePanel === "files" ? (
@@ -329,7 +312,6 @@ export function OpportunityDetailModal({
           <section
             className="opportunity-items"
             aria-labelledby="opportunity-items-heading"
-            ref={itemsSectionRef}
           >
             <div className="opportunity-items-heading">
               <div>
@@ -341,6 +323,7 @@ export function OpportunityDetailModal({
                 <input
                   value={itemSearch}
                   placeholder="Pesquisar itens"
+                  aria-label="Pesquisar itens"
                   onChange={(event) => setItemSearch(event.target.value)}
                 />
               </label>
@@ -378,52 +361,67 @@ export function OpportunityDetailModal({
                 }}
               />
             ) : null}
-            {selectingForBusiness ? (
+            {detail.itens.length > 0 ? (
               <div className="opportunity-selection-toolbar">
-                <strong>{selectedBusinessItems.size} de {detail.itens.length} item(ns) selecionado(s)</strong>
+                <strong aria-live="polite">{selectedItems.length} de {detail.itens.length} item(ns) selecionado(s)</strong>
                 <div>
                   <button
                     type="button"
-                    onClick={() => setSelectedBusinessItems((current) => {
+                    disabled={adding || !filteredItems.length}
+                    onClick={() => updateSelection((current) => {
                       const next = new Set(current);
-                      filteredItems.forEach((item) => next.add(itemKey(item.lote, item.numero)));
+                      filteredItems.forEach((item) => next.add(opportunityItemKey(item)));
                       return next;
                     })}
                   >
                     Selecionar exibidos
                   </button>
-                  <button type="button" onClick={() => setSelectedBusinessItems(new Set())}>
+                  <button type="button" disabled={adding || !selectedItems.length} onClick={() => updateSelection(() => new Set())}>
                     Limpar seleção
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectingForBusiness(false);
-                      setSelectedBusinessItems(new Set());
-                      setMessage(null);
-                    }}
-                  >
-                    Cancelar
                   </button>
                 </div>
               </div>
             ) : null}
+            <div className="opportunity-actions" role="group" aria-label="Ações dos itens selecionados">
+              <button
+                className="button button-secondary" type="button"
+                disabled={adding || !selectedItems.length}
+                onClick={() => useSelection(onGenerateProposal)}
+              >
+                <FileText size={17} /> Gerar proposta
+              </button>
+              <button
+                className="button button-primary opportunity-business-action" type="button"
+                disabled={adding || added || !selectedItems.length}
+                onClick={() => void addToBusiness()}
+              >
+                <BriefcaseBusiness size={17} />
+                {added ? "Adicionada aos negócios" : adding ? "Adicionando..." : "Adicionar aos meus negócios"}
+              </button>
+              <button
+                className="button button-secondary" type="button"
+                disabled={adding || !selectedItems.length}
+                onClick={() => useSelection(onGenerateCatalog)}
+              >
+                <BookOpen size={17} /> Gerar catálogo
+              </button>
+            </div>
             <div className="opportunity-item-list">
               {filteredItems.map((item) => {
-                const key = itemKey(item.lote, item.numero);
+                const key = opportunityItemKey(item);
                 const isOpen = openItems.has(key);
-                const isSelected = selectedBusinessItems.has(key);
+                const isSelected = selectedKeys.has(key);
                 return (
                   <article
-                    className={`opportunity-item${isOpen ? " is-open" : ""}${selectingForBusiness ? " is-selecting" : ""}${isSelected ? " is-selected" : ""}`}
+                    className={`opportunity-item is-selecting${isOpen ? " is-open" : ""}${isSelected ? " is-selected" : ""}`}
                     key={key}
                   >
-                    {selectingForBusiness ? (
-                      <label className="opportunity-item-selector" aria-label={`Selecionar item ${item.numero}`}>
+                      <label className="opportunity-item-selector" aria-label={`Selecionar item ${item.numero}${item.lote ? ` do lote ${item.lote}` : ""}`}>
                         <input
                           type="checkbox"
                           checked={isSelected}
-                          onChange={(event) => setSelectedBusinessItems((current) => {
+                          disabled={adding}
+                          onChange={(event) => updateSelection((current) => {
                             const next = new Set(current);
                             if (event.target.checked) next.add(key);
                             else next.delete(key);
@@ -431,7 +429,6 @@ export function OpportunityDetailModal({
                           })}
                         />
                       </label>
-                    ) : null}
                     <button
                       type="button"
                       aria-expanded={isOpen}
@@ -474,16 +471,6 @@ export function OpportunityDetailModal({
 
           <footer className="opportunity-footer">
             <span>Dados da oportunidade: {detail.fontes.oportunidade}</span>
-            <button
-              className="button button-small button-secondary"
-              type="button"
-              onClick={() => {
-                onClose();
-                onUseLink(opportunity.link_pncp);
-              }}
-            >
-              Usar no Bloco 2
-            </button>
           </footer>
         </div>
       ) : null}

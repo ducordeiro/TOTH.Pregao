@@ -142,6 +142,7 @@ BLOCO2_ENRICHMENT_LOCKS_GUARD = threading.Lock()
 DETAIL_DOCUMENT_ENRICHMENT_LOCK = threading.Lock()
 CATALOG_TEXT_CACHE = {}
 CATALOG_DRAFT_CACHE = {}
+BUSINESS_FILE_CACHE = {}
 DOCUMENT_CACHE_TTL = 900
 PROPOSAL_PREVIEW_TTL = 30 * 60
 CACHE_MAX_ENTRIES = 32
@@ -2466,9 +2467,9 @@ def list_businesses(include_archived=False):
     return [business_record(row) for row in rows]
 
 
-def business_files(connection, row):
+def business_files(connection, row, *, allow_remote=True):
     files = []
-    if row["contratacao_id"]:
+    if connection is not None and row["contratacao_id"]:
         stored = connection.execute(
             """
             SELECT titulo, tipo_documento, url, selecionado
@@ -2489,11 +2490,21 @@ def business_files(connection, row):
         ]
     if files:
         return files
+    if not allow_remote:
+        return []
+    cache_key = (
+        compact(row["cnpj_orgao"]),
+        compact(row["ano"]),
+        compact(row["sequencial"]),
+    )
+    cached = cache_get(BUSINESS_FILE_CACHE, cache_key, SEARCH_CACHE_TTL)
+    if cached is not None:
+        return cached
     try:
         remote = list_pncp_files(row["cnpj_orgao"], row["ano"], row["sequencial"])
     except Exception:
         remote = []
-    return [
+    files = [
         {
             "titulo": compact(
                 item.get("titulo")
@@ -2509,6 +2520,8 @@ def business_files(connection, row):
         }
         for item in remote
     ]
+    cache_set(BUSINESS_FILE_CACHE, cache_key, files)
+    return files
 
 
 def get_business(business_id, include_details=False):
@@ -2522,6 +2535,7 @@ def get_business(business_id, include_details=False):
         if not row:
             raise FileNotFoundError("Negócio não encontrado.")
         result = business_record(row)
+        business_row = dict(row)
         if include_details:
             result["historico"] = [
                 {
@@ -2557,7 +2571,7 @@ def get_business(business_id, include_details=False):
                     (business_id,),
                 ).fetchall()
             ]
-            result["arquivos"] = business_files(connection, row)
+            result["arquivos"] = business_files(connection, row, allow_remote=False)
             result["itens"] = [
                 {
                     "id": str(item["id"]),
@@ -2581,6 +2595,8 @@ def get_business(business_id, include_details=False):
                     (business_id,),
                 ).fetchall()
             ]
+    if include_details and not result["arquivos"]:
+        result["arquivos"] = business_files(None, business_row)
     return result
 
 
@@ -10540,11 +10556,34 @@ def catalog_generator_document_candidates(cnpj, ano, sequencial, maximum=6):
     return candidates, errors
 
 
-def run_catalog_generator_job(job_id, pncp_link):
+def validate_catalog_item_keys(value):
+    if value is None:
+        return None
+    if not isinstance(value, list) or not value:
+        raise ValueError("Selecione pelo menos um item para o catálogo.")
+    if any(
+        not isinstance(key, str)
+        or not key.strip()
+        or any(not part.strip() for part in key.split("/"))
+        for key in value
+    ):
+        raise ValueError("A seleção de itens do catálogo é inválida.")
+    return list(dict.fromkeys(normalized_wanted_item_key(key) for key in value))
+
+
+def catalog_selection_key(item):
+    return item_lookup_key({
+        "item": item.get("item") or item.get("numero") or item.get("numeroItem"),
+        "lote": item.get("lote"),
+    })
+
+
+def run_catalog_generator_job(job_id, pncp_link, selected_item_keys=None):
     warnings = []
     documents = []
     document_items = []
     try:
+        selected_item_keys = validate_catalog_item_keys(selected_item_keys)
         update_catalog_generator_job(job_id, status="processing", stage="validacao", progress=5)
         cnpj, ano, sequencial = parse_pncp_link(pncp_link)
         official_link = pncp_app_link(cnpj, ano, sequencial)
@@ -10601,12 +10640,22 @@ def run_catalog_generator_job(job_id, pncp_link):
         except Exception as exc:
             warnings.append(f"Documentos anexos não puderam ser processados: {exc}")
 
-        known_numbers = {compact(item.get("item") or item.get("numero")) for item in raw_items}
+        known_keys = {catalog_selection_key(item) for item in raw_items}
         for item in document_items:
-            number = compact(item.get("item") or item.get("numero"))
-            if not raw_items or (number and number not in known_numbers):
+            key = catalog_selection_key(item)
+            if not raw_items or (key and key not in known_keys):
                 raw_items.append(item)
-                known_numbers.add(number)
+                known_keys.add(key)
+        if selected_item_keys is not None:
+            wanted_keys = set(selected_item_keys)
+            missing_keys = wanted_keys - {catalog_selection_key(item) for item in raw_items}
+            if missing_keys:
+                raise ValueError(
+                    "Os itens selecionados não foram encontrados nas fontes do edital: "
+                    + ", ".join(sorted(missing_keys, key=identifier_sort_key))
+                    + ". Atualize o detalhamento e tente novamente."
+                )
+            raw_items = [item for item in raw_items if catalog_selection_key(item) in wanted_keys]
         items = normalize_items(raw_items, official_link, structured.get("source") or "Base estruturada/PNCP")
         if not items:
             warnings.append(
@@ -10649,11 +10698,13 @@ def run_catalog_generator_job(job_id, pncp_link):
 def create_catalog_generator_job(payload):
     pncp_link = compact((payload or {}).get("pncp_link"))
     parse_pncp_link(pncp_link)
+    selected_item_keys = validate_catalog_item_keys((payload or {}).get("selected_item_keys"))
     job_id = uuid.uuid4().hex
     now = datetime.now().isoformat(timespec="seconds")
     job = {
         "id": job_id,
         "pncp_link": pncp_link,
+        "selected_item_keys": selected_item_keys,
         "status": "queued",
         "stage": "validacao",
         "progress": 0,
@@ -10667,7 +10718,7 @@ def create_catalog_generator_job(payload):
         CATALOG_GENERATOR_JOBS[job_id] = job
     threading.Thread(
         target=run_catalog_generator_job,
-        args=(job_id, pncp_link),
+        args=(job_id, pncp_link, selected_item_keys),
         daemon=True,
         name=f"catalog-generator-{job_id[:8]}",
     ).start()
@@ -11158,7 +11209,8 @@ class App(BaseHTTPRequestHandler):
                     return
 
                 out_name = (
-                    f"Proposta_Final_{context['source_name']}_{int(time.time())}.docx"
+                    f"Proposta_Final_{context['source_name']}_{int(time.time())}_"
+                    f"{uuid.uuid4().hex[:12]}.docx"
                 )
                 out_path = OUTPUT_DIR / out_name
                 build_docx(

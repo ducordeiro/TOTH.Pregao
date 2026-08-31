@@ -1,32 +1,56 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Check, Download, ExternalLink, FileArchive, LoaderCircle, Play, ShieldCheck } from "lucide-react";
 import { createCatalogGeneratorJob, exportGeneratedCatalog, getCatalogGeneratorJob } from "../api";
-import type { CatalogExportFile, CatalogGeneratorJob, GeneratedCatalogItem } from "../types";
+import type { CatalogExportFile, CatalogGeneratorJob, GeneratedCatalogItem, OpportunityItemSelection } from "../types";
+import { opportunityItemKey, selectionForLink } from "../opportunitySelection";
 
 interface CatalogGeneratorBlockProps {
   pncpLink: string;
   onPncpLinkChange: (value: string) => void;
+  itemSelection?: OpportunityItemSelection | null;
 }
 
-export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange }: CatalogGeneratorBlockProps) {
+export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelection }: CatalogGeneratorBlockProps) {
   const [job, setJob] = useState<CatalogGeneratorJob | null>(null);
   const [items, setItems] = useState<GeneratedCatalogItem[]>([]);
   const [exports, setExports] = useState<Record<string, CatalogExportFile>>({});
   const [error, setError] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const requestVersion = useRef(0);
+  const exportVersion = useRef(0);
+  const selection = selectionForLink(itemSelection, pncpLink);
+
+  useEffect(() => {
+    requestVersion.current += 1;
+    exportVersion.current += 1;
+    setJob(null);
+    setItems([]);
+    setExports({});
+    setError("");
+    setStarting(false);
+    setExporting(false);
+  }, [pncpLink, itemSelection]);
 
   useEffect(() => {
     if (!job || !["queued", "processing"].includes(job.status)) return;
+    let cancelled = false;
     const timer = window.setInterval(() => {
       getCatalogGeneratorJob(job.id)
         .then((updated) => {
+          if (cancelled) return;
           setJob(updated);
           if (updated.result) setItems(updated.result.items);
           if (updated.status === "failed") setError(updated.error);
         })
-        .catch((reason) => setError(reason instanceof Error ? reason.message : "Falha ao acompanhar o processamento."));
+        .catch((reason) => {
+          if (!cancelled) setError(reason instanceof Error ? reason.message : "Falha ao acompanhar o processamento.");
+        });
     }, 900);
-    return () => window.clearInterval(timer);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [job?.id, job?.status]);
 
   const stageIndex = useMemo(
@@ -35,35 +59,88 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange }: CatalogGen
   );
 
   const start = async () => {
+    if (starting) return;
+    const version = ++requestVersion.current;
+    exportVersion.current += 1;
+    setStarting(true);
+    setExporting(false);
+    setJob(null);
     setError("");
     setExports({});
     setItems([]);
     try {
-      setJob(await createCatalogGeneratorJob(pncpLink));
+      const created = await createCatalogGeneratorJob(
+        pncpLink,
+        selection?.items.map(opportunityItemKey),
+      );
+      if (version === requestVersion.current) setJob(created);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível iniciar o catálogo.");
+      if (version === requestVersion.current) setError(reason instanceof Error ? reason.message : "Não foi possível iniciar o catálogo.");
+    } finally {
+      if (version === requestVersion.current) setStarting(false);
     }
   };
 
   const updateItem = (id: string, field: keyof GeneratedCatalogItem, value: string) => {
-    setItems((current) => current.map((item) => item.id === id ? { ...item, [field]: value } : item));
+    exportVersion.current += 1;
+    setExporting(false);
+    setExports({});
+    setItems((current) => current.map((item) => {
+      if (item.id !== id) return item;
+      const updated = { ...item, [field]: value };
+      const missing = [
+        ["descricao", "descrição"],
+        ["quantidade", "quantidade"],
+        ["unidade", "unidade"],
+      ].filter(([key]) => !String(updated[key as keyof GeneratedCatalogItem] || "").trim())
+        .map(([, label]) => label);
+      return {
+        ...updated,
+        campos_ausentes: missing,
+        status_evidencia: missing.length ? "incompleto" : "confirmado",
+      };
+    }));
   };
 
   const runExport = async () => {
     if (!job) return;
+    const version = requestVersion.current;
+    const currentExportVersion = ++exportVersion.current;
     setExporting(true);
     setError("");
     try {
       const response = await exportGeneratedCatalog(job.id, items);
-      setExports(response.exports);
+      if (version === requestVersion.current && currentExportVersion === exportVersion.current) {
+        setExports(response.exports);
+      }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível exportar o catálogo.");
+      if (version === requestVersion.current && currentExportVersion === exportVersion.current) {
+        setError(reason instanceof Error ? reason.message : "Não foi possível exportar o catálogo.");
+      }
     } finally {
-      setExporting(false);
+      if (version === requestVersion.current && currentExportVersion === exportVersion.current) {
+        setExporting(false);
+      }
     }
   };
 
   const result = job?.result;
+  const currentValidation = useMemo(() => {
+    const incompletos = items.filter((item) => item.campos_ausentes.length > 0).length;
+    const conflitos = items.filter((item) => item.conflitos.length > 0).length;
+    const avisos = [
+      ...(incompletos ? [`${incompletos} item(ns) possuem campos obrigatórios ausentes.`] : []),
+      ...(conflitos ? [`${conflitos} item(ns) possuem divergências entre fontes.`] : []),
+      ...(!items.length ? ["Nenhum item foi identificado nas fontes disponíveis."] : []),
+    ];
+    return { incompletos, conflitos, avisos };
+  }, [items]);
+  const currentWarnings = result
+    ? [
+        ...result.warnings.filter((warning) => !result.validation.avisos.includes(warning)),
+        ...currentValidation.avisos,
+      ]
+    : [];
   return (
     <section className="catalog-generator" aria-label="Gerador de catálogo">
       <form className="catalog-generator-input" onSubmit={(event) => { event.preventDefault(); void start(); }}>
@@ -77,11 +154,25 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange }: CatalogGen
             placeholder="https://pncp.gov.br/app/editais/..."
             required
           />
-          <button className="button button-primary" type="submit" disabled={job?.status === "processing" || job?.status === "queued"}>
-            <Play size={17} aria-hidden="true" /> Processar edital
+          <button className="button button-primary" type="submit" disabled={starting || job?.status === "processing" || job?.status === "queued" || selection?.items.length === 0}>
+            <Play size={17} aria-hidden="true" /> {starting ? "Iniciando..." : selection ? "Processar seleção" : "Processar edital"}
           </button>
         </div>
       </form>
+
+      {selection && (
+        <section className="catalog-generator-selection" aria-label="Itens selecionados no detalhamento">
+          <strong>{selection.items.length} item(ns) selecionado(s)</strong>
+          <ul>
+            {selection.items.map((item) => (
+              <li key={opportunityItemKey(item)}>
+                <span>Item {item.numero}{item.lote ? ` · Lote ${item.lote}` : ""}</span>
+                <span>{item.descricao}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {job && (
         <section className="catalog-generator-progress" aria-live="polite">
@@ -112,7 +203,7 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange }: CatalogGen
               <small>{String(result.metadata.orgao || "Órgão não informado")}</small>
             </div>
             <div><span>Modalidade</span><strong>{String(result.metadata.modalidade || "Não informada")}</strong><small>{String(result.metadata.situacao || "Situação não informada")}</small></div>
-            <div><span>Itens</span><strong>{items.length}</strong><small>{result.validation.incompletos} pendência(s)</small></div>
+            <div><span>Itens</span><strong>{items.length}</strong><small>{currentValidation.incompletos} pendência(s)</small></div>
             <div><span>Fabricante</span><strong>Goldflex</strong><small>{result.manufacturer.cnpj}</small></div>
           </section>
 
@@ -122,7 +213,7 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange }: CatalogGen
             <a href={String(result.metadata.link_pncp)} target="_blank" rel="noreferrer">Abrir fonte oficial <ExternalLink size={14} /></a>
           </section>
 
-          {(result.warnings.length > 0 || result.documents.length > 0) && (
+          {(currentWarnings.length > 0 || result.documents.length > 0) && (
             <section className="catalog-generator-evidence">
               <div>
                 <h2>Documentos processados</h2>
@@ -132,7 +223,7 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange }: CatalogGen
               </div>
               <div>
                 <h2>Avisos de validação</h2>
-                {result.warnings.length ? result.warnings.map((warning) => <p key={warning}><AlertTriangle size={15} />{warning}</p>) : <p><Check size={15} />Nenhuma pendência automática encontrada.</p>}
+                {currentWarnings.length ? currentWarnings.map((warning) => <p key={warning}><AlertTriangle size={15} />{warning}</p>) : <p><Check size={15} />Nenhuma pendência automática encontrada.</p>}
               </div>
             </section>
           )}
@@ -150,14 +241,14 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange }: CatalogGen
                 <tbody>
                   {items.map((item) => (
                     <tr key={item.id}>
-                      <td><input value={item.numero} onChange={(event) => updateItem(item.id, "numero", event.target.value)} /></td>
+                      <td><input value={item.numero} onChange={(event) => updateItem(item.id, "numero", event.target.value)} />{item.lote && <small>Lote {item.lote}</small>}</td>
                       <td>
                         <input value={item.produto} aria-label={`Produto do item ${item.numero}`} onChange={(event) => updateItem(item.id, "produto", event.target.value)} />
                         <textarea value={item.descricao} aria-label={`Descrição do item ${item.numero}`} onChange={(event) => updateItem(item.id, "descricao", event.target.value)} />
                         <small title={item.fontes[0]?.url}>{item.fontes[0]?.documento} · {item.fontes[0]?.secao}</small>
                       </td>
-                      <td><input value={item.unidade} onChange={(event) => updateItem(item.id, "unidade", event.target.value)} /></td>
-                      <td><input value={item.quantidade} onChange={(event) => updateItem(item.id, "quantidade", event.target.value)} /></td>
+                      <td><input value={item.unidade} aria-label={`Unidade do item ${item.numero}`} onChange={(event) => updateItem(item.id, "unidade", event.target.value)} /></td>
+                      <td><input value={item.quantidade} aria-label={`Quantidade do item ${item.numero}`} onChange={(event) => updateItem(item.id, "quantidade", event.target.value)} /></td>
                       <td><input value={item.categoria} onChange={(event) => updateItem(item.id, "categoria", event.target.value)} /></td>
                       <td><span className={`evidence-status is-${item.status_evidencia}`}>{item.status_evidencia}</span>{item.campos_ausentes.length > 0 && <small>{item.campos_ausentes.join(", ")}</small>}</td>
                     </tr>

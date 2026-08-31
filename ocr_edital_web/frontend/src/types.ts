@@ -212,6 +212,11 @@ export interface OpportunityItem {
   confidence?: number | string | null;
 }
 
+export interface OpportunityItemSelection {
+  pncpLink: string;
+  items: OpportunityItem[];
+}
+
 export interface OpportunityFile {
   titulo: string;
   tipo: string;
@@ -399,6 +404,7 @@ export interface GeneratedCatalogSource {
 export interface GeneratedCatalogItem {
   id: string;
   numero: string;
+  lote?: string;
   codigo: string;
   produto: string;
   descricao: string;

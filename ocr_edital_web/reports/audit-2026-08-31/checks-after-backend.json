@@ -1,0 +1,103 @@
+[
+  {
+    "name": "pagination",
+    "passed": true,
+    "ms": 33.08
+  },
+  {
+    "name": "keyword_in_items_and_uf",
+    "passed": true,
+    "ms": 7.18,
+    "count": 12
+  },
+  {
+    "name": "detail_local",
+    "passed": true,
+    "ms": 6.4
+  },
+  {
+    "name": "selection_to_business",
+    "passed": true,
+    "status": 201,
+    "item_count": 1,
+    "ms": 31.25
+  },
+  {
+    "name": "business_import_idempotent",
+    "passed": true
+  },
+  {
+    "name": "proposal_process_local",
+    "passed": true,
+    "ms": 15.69
+  },
+  {
+    "name": "template_structure",
+    "passed": true,
+    "ms": 33.38
+  },
+  {
+    "name": "proposal_export",
+    "passed": true,
+    "ms": 82.5
+  },
+  {
+    "name": "immutable_proposal_downloads",
+    "passed": true,
+    "first_filename": "Proposta_Final_AUDIT_COLLISION_1800000000_bca43185754d.docx",
+    "second_filename": "Proposta_Final_AUDIT_COLLISION_1800000000_a6fb828999d9.docx",
+    "original_download_changed": false
+  },
+  {
+    "name": "catalog_job_selection",
+    "passed": true,
+    "ms": 82.63
+  },
+  {
+    "name": "catalog_exports",
+    "passed": true,
+    "ms": 65.76,
+    "formats": [
+      "xlsx",
+      "csv",
+      "json",
+      "pdf"
+    ]
+  },
+  {
+    "name": "catalog_revalidates_edited_required_fields",
+    "passed": true,
+    "status": 200,
+    "validation": {
+      "incompletos": 1,
+      "conflitos": 0,
+      "avisos": [
+        "1 item(ns) possuem campos obrigatórios ausentes."
+      ]
+    }
+  },
+  {
+    "name": "catalog_pdf_preserves_full_description",
+    "passed": true,
+    "description_length": 1323,
+    "sentinel_present": true
+  },
+  {
+    "name": "validation_/catalog-generator/jobs",
+    "passed": true,
+    "status": 422,
+    "ms": 2.21
+  },
+  {
+    "name": "validation_/api/docx-structure",
+    "passed": true,
+    "status": 422,
+    "ms": 2.09
+  },
+  {
+    "name": "unrelated_db_read_not_blocked_by_remote_io",
+    "passed": true,
+    "injected_remote_ms": 1000,
+    "unrelated_read_ms": 3.63
+  }
+]

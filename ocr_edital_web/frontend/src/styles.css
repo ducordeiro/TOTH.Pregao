@@ -787,13 +787,13 @@ main {
   box-shadow: 0 7px 16px rgb(40 40 45 / 22%);
 }
 
-.proposal-retro .docx-mini-box:not(.is-generated-table) {
+.proposal-retro .docx-mini-box {
   cursor: grab;
   touch-action: none;
   user-select: none;
 }
 
-.proposal-retro .docx-mini-box:not(.is-generated-table).is-dragging {
+.proposal-retro .docx-mini-box.is-dragging {
   cursor: grabbing;
 }
 
@@ -2779,6 +2779,11 @@ input[type="checkbox"] {
 
 .opportunity-selection-toolbar button:hover {
   color: var(--cor-texto-principal);
+}
+
+.opportunity-selection-toolbar button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .opportunity-item {
@@ -6974,6 +6979,29 @@ textarea:focus-visible,
   color: var(--muted);
   font-size: 13px;
   font-weight: 700;
+}
+
+.catalog-generator-selection {
+  min-width: 0;
+  padding: 0 18px;
+  font-size: 13px;
+}
+
+.catalog-generator-selection ul {
+  max-height: 180px;
+  margin: 10px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.catalog-generator-selection li {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.25fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line-strong);
+  overflow-wrap: anywhere;
 }
 
 .catalog-generator-link-row {

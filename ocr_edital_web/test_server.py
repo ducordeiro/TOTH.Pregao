@@ -1,4 +1,5 @@
 import json
+import threading
 import unittest
 import time
 import tempfile
@@ -1163,6 +1164,59 @@ class CatalogGenerationTests(unittest.TestCase):
             self.assertEqual(set(exports), {"xlsx", "csv", "json", "pdf"})
             self.assertTrue(all((Path(temp_dir) / entry["filename"]).stat().st_size for entry in exports.values()))
 
+    def test_block7_revalidates_edited_required_fields(self):
+        items = catalog_generator.normalize_items(
+            [make_item("1", "Cadeira giratória", quantidade="12")],
+            "https://pncp.gov.br/app/editais/45780087000103/2026/43",
+        )
+        edited = dict(items[0], descricao="", quantidade="", campos_ausentes=[])
+
+        summary = catalog_generator.validation_summary([edited])
+        sanitized = catalog_generator.sanitize_export_items([edited])[0]
+
+        self.assertEqual(summary["incompletos"], 1)
+        self.assertEqual(sanitized["status_evidencia"], "incompleto")
+        self.assertEqual(
+            sanitized["campos_ausentes"],
+            ["descrição", "quantidade", "unidade"],
+        )
+
+    def test_block7_pdf_preserves_long_description_and_escapes_markup(self):
+        items = catalog_generator.normalize_items(
+            [make_item("1", "Cadeira giratória", quantidade="12")],
+            "https://pncp.gov.br/app/editais/45780087000103/2026/43",
+        )
+        description = ("Descrição técnica <segura> detalhada. " * 120) + "SENTINELA_FINAL_QA"
+        items[0]["descricao"] = description
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            exports = catalog_generator.export_catalog(
+                Path(temp_dir), {"objeto": "Aquisição <teste>"}, items, "c" * 32
+            )
+            pdf_path = Path(temp_dir) / exports["pdf"]["filename"]
+            with server.pdfplumber.open(pdf_path) as pdf:
+                text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+
+        self.assertIn("SENTINELA_FINAL_QA", text)
+        self.assertIn("segura", text)
+
+    def test_block7_exports_are_unique_within_the_same_second(self):
+        items = catalog_generator.normalize_items(
+            [make_item("1", "Cadeira giratória", quantidade="12")],
+            "https://pncp.gov.br/app/editais/45780087000103/2026/43",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir)
+            with patch.object(catalog_generator, "datetime") as clock:
+                clock.now.return_value = datetime(2026, 8, 31, 12, 0, 0)
+                first = catalog_generator.export_catalog(output, {}, items, "d" * 32)
+                original = (output / first["json"]["filename"]).read_bytes()
+                items[0]["descricao"] = "Segunda versão"
+                second = catalog_generator.export_catalog(output, {}, items, "d" * 32)
+
+            self.assertNotEqual(first["json"]["filename"], second["json"]["filename"])
+            self.assertEqual((output / first["json"]["filename"]).read_bytes(), original)
+
     def test_block7_keeps_document_fallback_when_item_api_is_unavailable(self):
         job_id = "b" * 32
         server.CATALOG_GENERATOR_JOBS[job_id] = {
@@ -1209,6 +1263,71 @@ class CatalogGenerationTests(unittest.TestCase):
         self.assertIn("Giratória", source_text)
         self.assertIn("espuma D-28", description)
         self.assertNotIn("Estrutura fixa", description)
+
+    def test_catalog_job_validates_selection_before_starting_a_worker(self):
+        link = "https://pncp.gov.br/app/editais/45780087000103/2026/43"
+        with patch.object(server.threading, "Thread") as worker:
+            for selection in ([], "1", [""], [None], ["1/"]):
+                with self.subTest(selection=selection), self.assertRaises(ValueError):
+                    server.create_catalog_generator_job({
+                        "pncp_link": link, "selected_item_keys": selection,
+                    })
+            worker.assert_not_called()
+
+    def test_catalog_job_passes_normalized_selection_to_worker(self):
+        link = "https://pncp.gov.br/app/editais/45780087000103/2026/43"
+        with (
+            patch.dict(server.CATALOG_GENERATOR_JOBS, {}, clear=True),
+            patch.object(server.threading, "Thread") as worker,
+        ):
+            job = server.create_catalog_generator_job({
+                "pncp_link": link, "selected_item_keys": ["01/02", "1/2", "3"],
+            })
+            self.assertEqual(job["selected_item_keys"], ["1/2", "3"])
+            self.assertEqual(worker.call_args.kwargs["args"], (job["id"], link, ["1/2", "3"]))
+
+    def test_catalog_selection_filters_document_items_and_preserves_distinct_lots(self):
+        job_id = "c" * 32
+        first = {**make_item("1", "Cadeira fixa", quantidade="2"), "lote": "1"}
+        second = {**first, "lote": "2"}
+        unselected = make_item("3", "Mesa", quantidade="4")
+        with (
+            patch.dict(server.CATALOG_GENERATOR_JOBS, {job_id: {"id": job_id}}, clear=True),
+            patch.object(server, "pncp_purchase_metadata", return_value={"objeto": "Mobiliario"}),
+            patch.object(server, "identify_items_from_pncp_link", return_value={"items": [first, unselected]}),
+            patch.object(server, "catalog_generator_document_candidates", return_value=([
+                {"path": Path("itens.xlsx"), "file_info": {"titulo": "Itens"}},
+            ], [])),
+            patch.object(server, "extract_items_cached", return_value=[second, unselected]),
+        ):
+            server.run_catalog_generator_job(
+                job_id, "https://pncp.gov.br/app/editais/45780087000103/2026/43", ["1/1", "2/1"],
+            )
+            job = server.catalog_generator_job(job_id)
+
+        self.assertEqual(job["status"], "ready")
+        items = job["result"]["items"]
+        self.assertEqual([(item["lote"], item["numero"]) for item in items], [("1", "1"), ("2", "1")])
+        self.assertEqual(job["result"]["metadata"]["total_itens"], 2)
+        self.assertEqual(catalog_generator.sanitize_export_items(items)[1]["lote"], "2")
+
+    def test_catalog_missing_selection_fails_instead_of_processing_every_item(self):
+        job_id = "d" * 32
+        with (
+            patch.dict(server.CATALOG_GENERATOR_JOBS, {job_id: {"id": job_id}}, clear=True),
+            patch.object(server, "pncp_purchase_metadata", return_value={}),
+            patch.object(server, "identify_items_from_pncp_link", return_value={"items": [make_item("1", "Cadeira")]}),
+            patch.object(server, "catalog_generator_document_candidates", return_value=([], [])),
+            patch.object(server.LOGGER, "exception"),
+        ):
+            server.run_catalog_generator_job(
+                job_id, "https://pncp.gov.br/app/editais/45780087000103/2026/43", ["99"],
+            )
+            job = server.catalog_generator_job(job_id)
+
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("99", job["error"])
+        self.assertNotIn("result", job)
 
     def test_catalog_exports_docx_pdf_json_and_images(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2723,6 +2842,7 @@ class BusinessItemSelectionTests(unittest.TestCase):
         self.database_path_patch.start()
         self.data_dir_patch.start()
         server.init_database()
+        server.BUSINESS_FILE_CACHE.clear()
         self.link = "https://pncp.gov.br/app/editais/18428888000123/2026/138"
         self.metadata = {
             "numero_compra": "138/2026",
@@ -2827,6 +2947,42 @@ class BusinessItemSelectionTests(unittest.TestCase):
         })
 
         self.assertEqual(server.get_business(business_id)["position_number"], 3)
+
+    def test_remote_document_lookup_does_not_hold_the_database_lock(self):
+        with patch.object(server, "pncp_purchase_metadata", return_value=self.metadata):
+            created = server.import_business({
+                "pncp_link": self.link,
+                "empresa": "Empresa Teste",
+                "itens": [self.item(1, "Cadeira")],
+            })
+
+        entered = threading.Event()
+
+        def slow_remote_lookup(*_args):
+            entered.set()
+            time.sleep(0.5)
+            return []
+
+        with patch.object(server, "list_pncp_files", side_effect=slow_remote_lookup) as remote_lookup:
+            worker = threading.Thread(
+                target=server.get_business,
+                args=(created["negocio"]["id"], True),
+                daemon=True,
+            )
+            worker.start()
+            self.assertTrue(entered.wait(2))
+            started = time.perf_counter()
+            server.list_responsibles()
+            elapsed = time.perf_counter() - started
+            worker.join(2)
+            cached_started = time.perf_counter()
+            server.get_business(created["negocio"]["id"], True)
+            cached_elapsed = time.perf_counter() - cached_started
+
+        self.assertFalse(worker.is_alive())
+        self.assertLess(elapsed, 0.25)
+        self.assertLess(cached_elapsed, 0.25)
+        remote_lookup.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()

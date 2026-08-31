@@ -10,7 +10,7 @@ import { ResponsibleManagerModal } from "./components/ResponsibleManagerModal";
 import { SearchBlock } from "./components/SearchBlock";
 import { Sidebar, type ActiveBlock } from "./components/Sidebar";
 import { TemplateManagerModal } from "./components/TemplateManagerModal";
-import type { Responsible, Template, UiMessage } from "./types";
+import type { OpportunityItemSelection, Responsible, Template, UiMessage } from "./types";
 import { CLASSIFICATION_HASH, opensClassifications } from "./classificationNavigation";
 
 export default function App() {
@@ -18,6 +18,8 @@ export default function App() {
   const [activeBlock, setActiveBlock] = useState<ActiveBlock>(classificationHash ? "business" : "search");
   const [classificationOpen, setClassificationOpen] = useState(classificationHash);
   const [pncpLink, setPncpLink] = useState("");
+  const [proposalSelection, setProposalSelection] = useState<OpportunityItemSelection | null>(null);
+  const [catalogSelection, setCatalogSelection] = useState<OpportunityItemSelection | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [responsibles, setResponsibles] = useState<Responsible[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
@@ -92,6 +94,12 @@ export default function App() {
     });
   };
 
+  const changePncpLink = (link: string) => {
+    setPncpLink(link);
+    setProposalSelection(null);
+    setCatalogSelection(null);
+  };
+
   const headerByBlock: Record<ActiveBlock, {
     eyebrow: string;
     title: string;
@@ -158,15 +166,26 @@ export default function App() {
           <div id="search-workspace" hidden={activeBlock !== "search"}>
             <SearchBlock
               onUseLink={(link) => {
-                setPncpLink(link);
+                changePncpLink(link);
                 selectBlock("proposal");
+              }}
+              onGenerateProposal={(selection) => {
+                setPncpLink(selection.pncpLink);
+                setProposalSelection(selection);
+                selectBlock("proposal");
+              }}
+              onGenerateCatalog={(selection) => {
+                setPncpLink(selection.pncpLink);
+                setCatalogSelection(selection);
+                selectBlock("catalogGenerator");
               }}
             />
           </div>
           <div id="proposal-workspace" hidden={activeBlock !== "proposal"}>
             <ProposalBlock
               pncpLink={pncpLink}
-              onPncpLinkChange={setPncpLink}
+              onPncpLinkChange={changePncpLink}
+              itemSelection={proposalSelection}
               templates={templates}
               responsibles={responsibles}
               selectedTemplateId={selectedTemplateId}
@@ -180,7 +199,7 @@ export default function App() {
           <div id="catalog-workspace" hidden={activeBlock !== "catalog"}>
             <CatalogBlock
               pncpLink={pncpLink}
-              onPncpLinkChange={setPncpLink}
+              onPncpLinkChange={changePncpLink}
             />
           </div>
           <div id="business-workspace" hidden={activeBlock !== "business"}>
@@ -209,7 +228,11 @@ export default function App() {
             <ProjectStructureBlock />
           </div>
           <div id="catalog-generator-workspace" hidden={activeBlock !== "catalogGenerator"}>
-            <CatalogGeneratorBlock pncpLink={pncpLink} onPncpLinkChange={setPncpLink} />
+            <CatalogGeneratorBlock
+              pncpLink={pncpLink}
+              onPncpLinkChange={changePncpLink}
+              itemSelection={catalogSelection}
+            />
           </div>
         </main>
       </div>

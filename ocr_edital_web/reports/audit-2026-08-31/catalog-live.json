@@ -1,0 +1,11 @@
+{
+  "job_id": "1a3fbe790af9414187dd8e3e463baf85",
+  "status": "ready",
+  "stage": "concluido",
+  "elapsed_ms": 1057.49,
+  "submission_ms": 41.22,
+  "poll_interval_ms": 1000,
+  "items": 1,
+  "warnings": [],
+  "error": ""
+}

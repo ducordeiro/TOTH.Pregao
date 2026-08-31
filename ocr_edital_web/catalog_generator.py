@@ -1,6 +1,8 @@
 import csv
+import html
 import json
 import re
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +21,7 @@ MANUFACTURER = {
 
 EXPORT_COLUMNS = (
     ("numero", "Item"),
+    ("lote", "Lote"),
     ("codigo", "Código"),
     ("produto", "Produto"),
     ("descricao", "Descrição"),
@@ -37,6 +40,26 @@ EXPORT_COLUMNS = (
 
 def compact(value):
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def required_field_gaps(item):
+    return [
+        label
+        for field, label in (
+            ("descricao", "descrição"),
+            ("quantidade", "quantidade"),
+            ("unidade", "unidade"),
+        )
+        if not compact(item.get(field))
+    ]
+
+
+def refresh_validation(item):
+    refreshed = dict(item)
+    missing = required_field_gaps(refreshed)
+    refreshed["campos_ausentes"] = missing
+    refreshed["status_evidencia"] = "incompleto" if missing else "confirmado"
+    return refreshed
 
 
 def item_number(item, index):
@@ -65,20 +88,17 @@ def normalize_items(items, source_url, source_name="API oficial do PNCP"):
             raw.get("descricao") or raw.get("description") or raw.get("objeto")
         )
         number = item_number(raw, index)
-        key = (number, description.lower())
+        lot = compact(raw.get("lote"))
+        key = (lot, number, description.lower())
         if key in seen:
             continue
         seen.add(key)
         category, subcategory = classify_item(description)
         item_source = compact(raw.get("_catalog_source_name")) or source_name
-        missing = [
-            label
-            for field, label in (("descricao", "descrição"), ("quantidade", "quantidade"), ("unidade", "unidade"))
-            if not compact(raw.get(field)) and not (field == "descricao" and description)
-        ]
-        normalized.append({
+        normalized.append(refresh_validation({
             "id": f"item-{index + 1}",
             "numero": number,
+            "lote": lot,
             "codigo": compact(raw.get("codigo") or raw.get("codigoItem") or raw.get("material")),
             "produto": compact(raw.get("produto") or raw.get("nome") or raw.get("_nome")) or description[:120],
             "descricao": description,
@@ -91,22 +111,25 @@ def normalize_items(items, source_url, source_name="API oficial do PNCP"):
             "observacoes": compact(raw.get("observacoes")),
             "categoria": category,
             "subcategoria": subcategory,
-            "status_evidencia": "confirmado" if description else "incompleto",
-            "campos_ausentes": missing,
             "conflitos": [],
             "fontes": [{
                 "documento": item_source,
                 "pagina": None,
-                "secao": f"Item {number}",
+                "secao": f"Item {number}" + (f" · Lote {lot}" if lot else ""),
                 "url": source_url,
             }],
-        })
+        }))
     return normalized
 
 
 def validation_summary(items):
-    incomplete = sum(bool(item.get("campos_ausentes")) for item in items)
-    conflicts = sum(bool(item.get("conflitos")) for item in items)
+    validated = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("Cada item do catálogo deve ser um objeto válido.")
+        validated.append(refresh_validation(item))
+    incomplete = sum(bool(item["campos_ausentes"]) for item in validated)
+    conflicts = sum(bool(item.get("conflitos")) for item in validated)
     warnings = []
     if incomplete:
         warnings.append(f"{incomplete} item(ns) possuem campos obrigatórios ausentes.")
@@ -120,11 +143,18 @@ def validation_summary(items):
 def sanitize_export_items(items):
     clean = []
     for index, raw in enumerate(items or []):
-        item = {key: raw.get(key, "") for key, _ in EXPORT_COLUMNS}
+        if not isinstance(raw, dict):
+            raise ValueError("Cada item do catálogo deve ser um objeto válido.")
+        item = {
+            key: raw.get(key, "")
+            if isinstance(raw.get(key, ""), (str, int, float))
+            else ""
+            for key, _ in EXPORT_COLUMNS
+        }
         item["numero"] = compact(item["numero"]) or str(index + 1)
         item["fontes"] = raw.get("fontes") if isinstance(raw.get("fontes"), list) else []
-        item["campos_ausentes"] = raw.get("campos_ausentes") if isinstance(raw.get("campos_ausentes"), list) else []
-        clean.append(item)
+        item["conflitos"] = raw.get("conflitos") if isinstance(raw.get("conflitos"), list) else []
+        clean.append(refresh_validation(item))
     return clean
 
 
@@ -132,7 +162,7 @@ def export_catalog(output_dir, metadata, items, job_id):
     output_dir.mkdir(parents=True, exist_ok=True)
     safe_items = sanitize_export_items(items)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    stem = f"catalogo_pncp_{job_id[:8]}_{stamp}"
+    stem = f"catalogo_pncp_{job_id[:8]}_{stamp}_{uuid.uuid4().hex[:8]}"
 
     json_path = output_dir / f"{stem}.json"
     json_path.write_text(json.dumps({
@@ -164,13 +194,34 @@ def export_catalog(output_dir, metadata, items, job_id):
 
     pdf_path = output_dir / f"{stem}.pdf"
     styles = getSampleStyleSheet()
+    body_style = styles["BodyText"].clone("CatalogBody")
+    body_style.fontSize = 7
+    body_style.leading = 8.4
+    header_style = body_style.clone("CatalogHeader")
+    header_style.textColor = colors.white
     document = SimpleDocTemplate(str(pdf_path), pagesize=landscape(A4), rightMargin=10 * mm, leftMargin=10 * mm, topMargin=10 * mm, bottomMargin=10 * mm)
-    story = [Paragraph("Catálogo de itens da licitação", styles["Title"]), Paragraph(compact(metadata.get("objeto")) or "Objeto não informado", styles["BodyText"]), Spacer(1, 5 * mm)]
+    story = [
+        Paragraph("Catálogo de itens da licitação", styles["Title"]),
+        Paragraph(html.escape(compact(metadata.get("objeto")) or "Objeto não informado"), styles["BodyText"]),
+        Spacer(1, 5 * mm),
+    ]
     pdf_columns = (("numero", "Item"), ("produto", "Produto"), ("descricao", "Descrição"), ("unidade", "Un."), ("quantidade", "Qtd."), ("valor_estimado", "Valor"), ("status_evidencia", "Evidência"))
-    rows = [[Paragraph(label, styles["BodyText"]) for _, label in pdf_columns]]
+    rows = [[Paragraph(label, header_style) for _, label in pdf_columns]]
     for item in safe_items:
-        rows.append([Paragraph(compact(item.get(key))[:800], styles["BodyText"]) for key, _ in pdf_columns])
-    table = Table(rows, repeatRows=1, colWidths=[14 * mm, 36 * mm, 105 * mm, 15 * mm, 18 * mm, 24 * mm, 24 * mm])
+        display_item = dict(item)
+        if compact(item.get("lote")):
+            display_item["numero"] = f"{item['numero']} (Lote {item['lote']})"
+        rows.append([
+            Paragraph(html.escape(compact(display_item.get(key))), body_style)
+            for key, _ in pdf_columns
+        ])
+    table = Table(
+        rows,
+        repeatRows=1,
+        colWidths=[14 * mm, 36 * mm, 105 * mm, 15 * mm, 18 * mm, 24 * mm, 24 * mm],
+        splitByRow=1,
+        splitInRow=1,
+    )
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#233254")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),

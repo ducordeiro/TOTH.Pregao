@@ -1,0 +1,43 @@
+{
+  "environment": "Isolated database with 24 synthetic opportunities, 2 items each; external requests stubbed",
+  "frontend": "Current production frontend_dist, unchanged by this audit",
+  "controlled_delays_ms": {"process": 4000, "pncp_search": 1000},
+  "passed": [
+    "Keyword cadeira matches the 12 opportunities with matching items, not their generic headings",
+    "Filtered page 2 shows 2 of 12 records; back navigation works after online completion",
+    "Detail allows selection before creating a business",
+    "One selected item is persisted to business and forwarded to proposal",
+    "Business Kanban, list and table views open",
+    "Business notes save, checklist changes from 0/15 to 1/16 with added task",
+    "Opportunity to qualification transition appears in business history",
+    "Reopened detail retains selected item and forwards only it to catalog",
+    "Catalog completes from local structured items when no documents are available",
+    "Catalog exposes XLSX, CSV, JSON and PDF downloads",
+    "Stable proposal flow processes one item, renders preview and generates Word",
+    "Generated table can be dragged onto document and preview reflects order",
+    "Dragging column boundary updates adjacent widths",
+    "No application console errors in inspected desktop flows"
+  ],
+  "failed": [
+    {
+      "id": "UI-1",
+      "case": "Local pagination remains available while online search runs",
+      "observed": "24 local results, 10 visible rows and no pagination while searchingAll; after completion page 1 of 3 appears"
+    },
+    {
+      "id": "UI-2",
+      "case": "Changing edital invalidates an in-flight proposal response",
+      "observed": "Started QA 001, changed URL to /2026/2 during injected 4-second response delay; proposal preview still contained Cadeira estofada - edital QA 001 and Word generation remained available"
+    },
+    {
+      "id": "UI-7",
+      "case": "Editing catalog invalidates previous exports",
+      "observed": "Changed description to Descricao revisada durante auditoria; Arquivos prontos and the original JSON href remained; downloaded JSON still contained Cadeira estofada - edital QA 001"
+    }
+  ],
+  "limitations": [
+    "Desktop browser interactions, not full mobile or accessibility certification",
+    "API timings measured independently; browser automation transport prevents precise interaction latency profiling",
+    "Archive and deletion of real business records were not exercised"
+  ]
+}

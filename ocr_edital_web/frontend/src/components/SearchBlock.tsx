@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, ChevronDown, ChevronLeft, ChevronRight, Search, Trash2 } from "lucide-react";
 import { searchBids, searchOnlineBids } from "../api";
-import type { Bid, SearchResponse, UiMessage } from "../types";
+import type { Bid, OpportunityItemSelection, SearchResponse, UiMessage } from "../types";
 import { localIsoDate, parseLocalDate, toPncpDate } from "../utils";
 import { DateRangePicker } from "./DateRangePicker";
 import { KeywordTagInput } from "./KeywordTagInput";
@@ -10,6 +10,8 @@ import { StatusMessage } from "./StatusMessage";
 
 interface SearchBlockProps {
   onUseLink: (link: string) => void;
+  onGenerateProposal: (selection: OpportunityItemSelection) => void;
+  onGenerateCatalog: (selection: OpportunityItemSelection) => void;
 }
 
 function defaultDates() {
@@ -77,7 +79,7 @@ const BRAZILIAN_UFS = [
   ["TO", "Tocantins"],
 ] as const;
 
-export function SearchBlock({ onUseLink }: SearchBlockProps) {
+export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }: SearchBlockProps) {
   const searchRequestRef = useRef(0);
   const ufFieldRef = useRef<HTMLDivElement>(null);
   const defaults = useMemo(defaultDates, []);
@@ -214,6 +216,7 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
           text: `Exibindo ${initialTotal.toLocaleString("pt-BR")} edital(is) da base interna. Verificando novas oportunidades no PNCP...`,
         });
       } catch (error) {
+        if (requestId !== searchRequestRef.current) return;
         localFailure = error;
         setSearchingAll(true);
         setMessage({
@@ -244,7 +247,7 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
           poll += 1
         ) {
           if (requestId !== searchRequestRef.current) return;
-          if (onlinePayload.results?.length) {
+          if (!localAvailable && onlinePayload.results?.length) {
             const previewResults = mergeBidPages(initialResults, onlinePayload.results);
             setResults(previewResults);
             setPage(1);
@@ -293,6 +296,7 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
             : `${refreshedPayload.results.length} edital(is) nesta pagina, de ${refreshedTotal.toLocaleString("pt-BR")} na base atualizada. ${inserted} nova(s) e ${updated} atualizada(s) nesta verificacao.`,
         });
       } catch (onlineError) {
+        if (requestId !== searchRequestRef.current) return;
         setSearchingAll(false);
         if (!localAvailable) {
           throw new Error(
@@ -305,6 +309,7 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
         });
       }
     } catch (error) {
+      if (requestId !== searchRequestRef.current) return;
       setMessage({
         kind: "error",
         text: error instanceof Error ? error.message : "Não foi possível consultar o PNCP.",
@@ -577,8 +582,8 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
         )}
       </div>
 
-      {totalPages > 0 && !searchingAll ? (
-        <nav className="search-pagination" aria-label="Paginação das oportunidades">
+      {totalPages > 0 ? (
+        <nav className="search-pagination" aria-label="Paginação das oportunidades" aria-busy={searchingAll}>
           <span>
             Página {page.toLocaleString("pt-BR")} de {totalPages.toLocaleString("pt-BR")} ·{" "}
             {total.toLocaleString("pt-BR")} edital(is) filtrado(s)
@@ -609,7 +614,8 @@ export function SearchBlock({ onUseLink }: SearchBlockProps) {
       <OpportunityDetailModal
         bid={selectedBid}
         onClose={() => setSelectedBid(null)}
-        onUseLink={onUseLink}
+        onGenerateProposal={onGenerateProposal}
+        onGenerateCatalog={onGenerateCatalog}
       />
     </section>
   );

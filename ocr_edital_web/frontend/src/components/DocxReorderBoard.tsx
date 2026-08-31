@@ -133,8 +133,8 @@ function SortableDocumentBlock({
   return (
     <article
       ref={setNodeRef}
-      {...(!generated ? attributes : {})}
-      {...(!generated ? listeners : {})}
+      {...attributes}
+      {...listeners}
       className={[
         "docx-mini-box",
         generated ? "is-generated-table" : `tone-${tone}`,
@@ -143,7 +143,7 @@ function SortableDocumentBlock({
       style={style}
       role="listitem"
       aria-label={`${generated ? "Tabela gerada" : "Mini-box"}, posição ${position} de ${total}`}
-      title={!generated ? "Clique duas vezes e mantenha pressionado para arrastar" : undefined}
+      title={generated ? "Arraste para mover a tabela" : "Clique duas vezes e mantenha pressionado para arrastar"}
     >
       <div className="docx-mini-box-toolbar">
         <span className="docx-mini-box-index" aria-hidden="true">
@@ -151,7 +151,9 @@ function SortableDocumentBlock({
         </span>
         <div
           className="docx-mini-box-actions"
-          onPointerDown={!generated ? (event) => event.stopPropagation() : undefined}
+          onPointerDown={(event) => event.stopPropagation()}
+          onTouchStart={generated ? (event) => event.stopPropagation() : undefined}
+          onKeyDown={generated ? (event) => event.stopPropagation() : undefined}
         >
           {!generated && (
             <>
@@ -249,7 +251,11 @@ function GeneratedTableDock({
     setNodeRef: setDraggableRef,
     transform,
     isDragging,
-  } = useDraggable({ id: block.id, disabled: disabled || !docked });
+  } = useDraggable({
+    // Only the visible table may register its document block ID.
+    id: docked ? block.id : GENERATED_TABLE_DOCK_ID,
+    disabled: disabled || !docked,
+  });
   const { isOver, setNodeRef: setDroppableRef } = useDroppable({
     id: GENERATED_TABLE_DOCK_ID,
     disabled: disabled || docked,
@@ -267,12 +273,21 @@ function GeneratedTableDock({
       {docked ? (
         <article
           ref={setDraggableRef}
+          {...attributes}
+          {...listeners}
           className={`docx-mini-box is-generated-table is-docked${isDragging ? " is-dragging" : ""}`}
           style={style}
+          aria-label="Tabela gerada na área lateral"
+          title="Arraste para mover a tabela"
         >
           <div className="docx-mini-box-toolbar">
             <Table2 size={18} aria-hidden="true" />
-            <div className="docx-mini-box-actions">
+            <div
+              className="docx-mini-box-actions"
+              onPointerDown={(event) => event.stopPropagation()}
+              onTouchStart={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+            >
               <button
                 type="button"
                 className="docx-order-button"

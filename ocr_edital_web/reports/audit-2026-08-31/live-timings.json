@@ -1,0 +1,260 @@
+{
+  "date": "2026-08-31T13:34:31.464681",
+  "base_url": "http://127.0.0.1:8765",
+  "method": "3 sequential requests; first/min/median/max, not a load test",
+  "cases": [
+    {
+      "name": "inicio",
+      "path": "/",
+      "ms": [
+        21.23,
+        15.67,
+        15.58
+      ],
+      "status": [
+        200,
+        200,
+        200
+      ],
+      "counts": [
+        null,
+        null,
+        null
+      ],
+      "first_ms": 21.23,
+      "min_ms": 15.58,
+      "median_ms": 15.67,
+      "max_ms": 21.23
+    },
+    {
+      "name": "templates",
+      "path": "/api/templates",
+      "ms": [
+        24.37,
+        23.9,
+        8.01
+      ],
+      "status": [
+        200,
+        200,
+        200
+      ],
+      "counts": [
+        2,
+        2,
+        2
+      ],
+      "first_ms": 24.37,
+      "min_ms": 8.01,
+      "median_ms": 23.9,
+      "max_ms": 24.37
+    },
+    {
+      "name": "responsaveis",
+      "path": "/api/responsaveis",
+      "ms": [
+        21.36,
+        21.57,
+        27.86
+      ],
+      "status": [
+        200,
+        200,
+        200
+      ],
+      "counts": [
+        2,
+        2,
+        2
+      ],
+      "first_ms": 21.36,
+      "min_ms": 21.36,
+      "median_ms": 21.57,
+      "max_ms": 27.86
+    },
+    {
+      "name": "negocios_lista",
+      "path": "/api/negocios",
+      "ms": [
+        19.07,
+        32.24,
+        37.14
+      ],
+      "status": [
+        200,
+        200,
+        200
+      ],
+      "counts": [
+        1,
+        1,
+        1
+      ],
+      "first_ms": 19.07,
+      "min_ms": 19.07,
+      "median_ms": 32.24,
+      "max_ms": 37.14
+    },
+    {
+      "name": "busca_ampla",
+      "path": "/internal/opportunities?dataInicial=20260831&dataFinal=20260929&campoData=encerramento&incluirSemDataEncerramento=1&pagina=1&tamanhoPagina=10",
+      "ms": [
+        930.63,
+        843.81,
+        828.09
+      ],
+      "status": [
+        200,
+        200,
+        200
+      ],
+      "counts": [
+        28982,
+        28982,
+        28982
+      ],
+      "first_ms": 930.63,
+      "min_ms": 828.09,
+      "median_ms": 843.81,
+      "max_ms": 930.63
+    },
+    {
+      "name": "busca_cadeira",
+      "path": "/internal/opportunities?dataInicial=20260831&dataFinal=20260929&campoData=encerramento&incluirSemDataEncerramento=1&pagina=1&tamanhoPagina=10&palavraChave=cadeira",
+      "ms": [
+        374.51,
+        343.65,
+        323.33
+      ],
+      "status": [
+        200,
+        200,
+        200
+      ],
+      "counts": [
+        459,
+        459,
+        459
+      ],
+      "first_ms": 374.51,
+      "min_ms": 323.33,
+      "median_ms": 343.65,
+      "max_ms": 374.51
+    },
+    {
+      "name": "busca_uf_sp",
+      "path": "/internal/opportunities?dataInicial=20260831&dataFinal=20260929&campoData=encerramento&incluirSemDataEncerramento=1&pagina=1&tamanhoPagina=10&uf=SP",
+      "ms": [
+        207.55,
+        199.63,
+        206.47
+      ],
+      "status": [
+        200,
+        200,
+        200
+      ],
+      "counts": [
+        5693,
+        5693,
+        5693
+      ],
+      "first_ms": 207.55,
+      "min_ms": 199.63,
+      "median_ms": 206.47,
+      "max_ms": 207.55
+    },
+    {
+      "name": "busca_pagina_2",
+      "path": "/internal/opportunities?dataInicial=20260831&dataFinal=20260929&campoData=encerramento&incluirSemDataEncerramento=1&pagina=2&tamanhoPagina=10",
+      "ms": [
+        719.16,
+        706.63,
+        726.84
+      ],
+      "status": [
+        200,
+        200,
+        200
+      ],
+      "counts": [
+        28982,
+        28982,
+        28982
+      ],
+      "first_ms": 719.16,
+      "min_ms": 706.63,
+      "median_ms": 719.16,
+      "max_ms": 726.84
+    },
+    {
+      "name": "itens_locais",
+      "path": "/identify-items?pncp_link=https%3A%2F%2Fpncp.gov.br%2Fapp%2Feditais%2F01612623000188%2F2026%2F15",
+      "ms": [
+        7.1,
+        9.58,
+        18.14
+      ],
+      "status": [
+        200,
+        200,
+        200
+      ],
+      "counts": [
+        90,
+        90,
+        90
+      ],
+      "first_ms": 7.1,
+      "min_ms": 7.1,
+      "median_ms": 9.58,
+      "max_ms": 18.14
+    },
+    {
+      "name": "negocio_detalhe",
+      "path": "/api/negocios/10",
+      "ms": [
+        147.06,
+        19.2,
+        39.96
+      ],
+      "status": [
+        200,
+        200,
+        200
+      ],
+      "counts": [
+        0,
+        0,
+        0
+      ],
+      "first_ms": 147.06,
+      "min_ms": 19.2,
+      "median_ms": 39.96,
+      "max_ms": 147.06
+    },
+    {
+      "name": "oportunidade_detalhe",
+      "path": "/internal/opportunities/24c871fd7c4b455eb7cabd5480f008cc",
+      "ms": [
+        325.02,
+        55.74,
+        50.4
+      ],
+      "status": [
+        200,
+        200,
+        200
+      ],
+      "counts": [
+        0,
+        0,
+        0
+      ],
+      "first_ms": 325.02,
+      "min_ms": 50.4,
+      "median_ms": 55.74,
+      "max_ms": 325.02
+    }
+  ]
+}

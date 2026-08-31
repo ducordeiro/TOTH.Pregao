@@ -18,6 +18,7 @@ import type {
   DocxStructureResponse,
   IdentifyResponse,
   MiniBoxTextAlign,
+  OpportunityItemSelection,
   ProcessResponse,
   ProposalColumnWidths,
   ProposalItem,
@@ -30,6 +31,7 @@ import {
   miniBoxOrderFromDocumentOrder,
 } from "../docxOrder";
 import { defaultProposalColumnWidths } from "../proposalPreviewLayout";
+import { proposalItemsFromSelection, selectionForLink } from "../opportunitySelection";
 import {
   calculateItemTotal,
   isValidPncpUrl,
@@ -46,6 +48,7 @@ import { ProposalLivePreview } from "./ProposalLivePreview";
 interface ProposalBlockProps {
   pncpLink: string;
   onPncpLinkChange: (link: string) => void;
+  itemSelection?: OpportunityItemSelection | null;
   templates: Template[];
   responsibles: Responsible[];
   selectedTemplateId: string;
@@ -84,6 +87,7 @@ function applyCommercialData(
 export function ProposalBlock({
   pncpLink,
   onPncpLinkChange,
+  itemSelection,
   templates,
   responsibles,
   selectedTemplateId,
@@ -94,6 +98,8 @@ export function ProposalBlock({
   onOpenResponsibles,
 }: ProposalBlockProps) {
   const customTemplateRef = useRef<HTMLInputElement>(null);
+  const processVersionRef = useRef(0);
+  const generationVersionRef = useRef(0);
   const [customTemplate, setCustomTemplate] = useState<File | null>(null);
   const [brand, setBrand] = useState("");
   const [identified, setIdentified] = useState<IdentifyResponse | null>(null);
@@ -129,6 +135,11 @@ export function ProposalBlock({
   const showLot = Boolean(identified?.items.some((item) => String(item.lote || "").trim()));
 
   const resetProcessedTemplateState = () => {
+    processVersionRef.current += 1;
+    generationVersionRef.current += 1;
+    setProcessing(false);
+    setGenerating(false);
+    setStructureLoading(false);
     setProcessed(null);
     setDownload(null);
     setDocumentStructure(null);
@@ -155,6 +166,11 @@ export function ProposalBlock({
   }, [selectedTemplateVersion]);
 
   useEffect(() => {
+    setIdentified(null);
+    setSelectedKeys(new Set());
+    setUnitValues({});
+    resetProcessedTemplateState();
+    setMessage(null);
     const link = pncpLink.trim();
     if (!link) {
       setIdentifyMessage({ kind: "info", text: "Aguardando link PNCP." });
@@ -169,11 +185,24 @@ export function ProposalBlock({
       return;
     }
 
+    const selection = selectionForLink(itemSelection, normalizedLink);
+    if (selection) {
+      const items = proposalItemsFromSelection(selection.items);
+      setIdentified({ items });
+      setSelectedKeys(new Set(items.map(itemKey)));
+      setIdentifyMessage({
+        kind: "success",
+        text: `${items.length} item(ns) selecionado(s) no detalhamento.`,
+      });
+      return;
+    }
+
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setIdentifyMessage({ kind: "info", text: "Consultando edital..." });
       try {
         const payload = await identifyItems(normalizedLink, controller.signal);
+        if (controller.signal.aborted) return;
         setIdentified(payload);
         setSelectedKeys(new Set());
         setUnitValues(
@@ -212,7 +241,7 @@ export function ProposalBlock({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [pncpLink]);
+  }, [pncpLink, itemSelection]);
 
   const selectedCountText = useMemo(() => {
     const total = identified?.items.length || 0;
@@ -220,6 +249,7 @@ export function ProposalBlock({
   }, [identified?.items.length, selectedKeys.size]);
 
   const toggleItem = (key: string) => {
+    resetProcessedTemplateState();
     setSelectedKeys((current) => {
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
@@ -229,6 +259,7 @@ export function ProposalBlock({
   };
 
   const updateUnitValue = (key: string, value: string) => {
+    resetProcessedTemplateState();
     setUnitValues((current) => ({ ...current, [key]: value }));
     if (value.trim()) {
       setSelectedKeys((current) => new Set(current).add(key));
@@ -263,6 +294,10 @@ export function ProposalBlock({
       setMessage({ kind: "warning", text: validationError });
       return;
     }
+    const processVersion = ++processVersionRef.current;
+    generationVersionRef.current += 1;
+    setGenerating(false);
+    setDownload(null);
     setProcessing(true);
     setMessage({ kind: "info", text: "Processando proposta..." });
     try {
@@ -275,6 +310,7 @@ export function ProposalBlock({
       else body.append("template_choice", selectedTemplateId);
 
       const response = await processProposal(body);
+      if (processVersion !== processVersionRef.current) return;
       const values = unitValues;
       const selectedItems = response.items
         .filter((item) => selectedKeys.has(itemKey(item)))
@@ -298,6 +334,7 @@ export function ProposalBlock({
       setStructureLoading(true);
       try {
         const structure = await getDocxStructure(response.template_ref);
+        if (processVersion !== processVersionRef.current) return;
         setDocumentStructure(structure);
         setDocumentNodes(structure.nodes.map((node) => ({ ...node })));
         setDocumentBlockIds(
@@ -313,6 +350,7 @@ export function ProposalBlock({
           text: `Proposta processada com sucesso. ${selectedItems.length} item(ns) preparado(s). Modelo ${response.template_source === "upload" ? "avulso" : "cadastrado"} aplicado: ${response.template_name}.`,
         });
       } catch (structureFailure) {
+        if (processVersion !== processVersionRef.current) return;
         const errorText = structureFailure instanceof Error
           ? structureFailure.message
           : "Não foi possível analisar os blocos do modelo Word.";
@@ -322,9 +360,10 @@ export function ProposalBlock({
           text: `A proposta foi processada, mas a estrutura do modelo não pôde ser carregada. ${errorText}`,
         });
       } finally {
-        setStructureLoading(false);
+        if (processVersion === processVersionRef.current) setStructureLoading(false);
       }
     } catch (error) {
+      if (processVersion !== processVersionRef.current) return;
       setMessage({
         kind: "error",
         text: error instanceof Error
@@ -332,8 +371,14 @@ export function ProposalBlock({
           : "Não foi possível processar a proposta. Nenhum dado anterior foi alterado.",
       });
     } finally {
-      setProcessing(false);
+      if (processVersion === processVersionRef.current) setProcessing(false);
     }
+  };
+
+  const invalidateGeneratedDocument = () => {
+    generationVersionRef.current += 1;
+    setGenerating(false);
+    setDownload(null);
   };
 
   const updateProcessedItem = (
@@ -351,7 +396,7 @@ export function ProposalBlock({
       });
       return { ...current, items };
     });
-    setDownload(null);
+    invalidateGeneratedDocument();
   };
 
   const preparedItems = (): ProposalItem[] =>
@@ -375,7 +420,7 @@ export function ProposalBlock({
 
   const updateDocumentOrder = (order: string[]) => {
     setDocumentBlockIds(order);
-    setDownload(null);
+    invalidateGeneratedDocument();
   };
 
   const commitDocumentOrder = () => {
@@ -387,7 +432,7 @@ export function ProposalBlock({
 
   const updateMiniBoxAlignment = (id: string, alignment: MiniBoxTextAlign) => {
     setMiniBoxAlignments((current) => ({ ...current, [id]: alignment }));
-    setDownload(null);
+    invalidateGeneratedDocument();
     setMessage({
       kind: "info",
       text: alignment === "center"
@@ -398,7 +443,7 @@ export function ProposalBlock({
 
   const resetMiniBoxAlignments = (alignments: Record<string, MiniBoxTextAlign>) => {
     setMiniBoxAlignments(alignments);
-    setDownload(null);
+    invalidateGeneratedDocument();
   };
 
   const validateDocument = (): boolean => {
@@ -420,7 +465,9 @@ export function ProposalBlock({
 
   const generate = async () => {
     if (!processed || generating || !validateDocument()) return;
+    const generationVersion = ++generationVersionRef.current;
     setGenerating(true);
+    setDownload(null);
     setMessage({ kind: "info", text: "Gerando documento Word..." });
     try {
       const response = await generateProposal(
@@ -434,15 +481,17 @@ export function ProposalBlock({
         miniBoxAlignments,
         proposalColumnWidths,
       );
+      if (generationVersion !== generationVersionRef.current) return;
       setDownload({ url: response.download_url, filename: response.filename });
       setMessage({ kind: "success", text: "Documento Word gerado com sucesso." });
     } catch (error) {
+      if (generationVersion !== generationVersionRef.current) return;
       setMessage({
         kind: "error",
         text: error instanceof Error ? error.message : "Não foi possível gerar o documento Word.",
       });
     } finally {
-      setGenerating(false);
+      if (generationVersion === generationVersionRef.current) setGenerating(false);
     }
   };
 
@@ -460,7 +509,10 @@ export function ProposalBlock({
             maxLength={500}
             value={pncpLink}
             placeholder="https://pncp.gov.br/app/editais/CNPJ/ANO/SEQUENCIAL"
-            onChange={(event) => onPncpLinkChange(event.target.value)}
+            onChange={(event) => {
+              resetProcessedTemplateState();
+              onPncpLinkChange(event.target.value);
+            }}
             onBlur={(event) => {
               const normalized = normalizePncpUrl(event.target.value);
               if (normalized) onPncpLinkChange(normalized);
@@ -477,7 +529,10 @@ export function ProposalBlock({
               maxLength={120}
               value={brand}
               placeholder="Ex.: Goldflex"
-              onChange={(event) => setBrand(event.target.value)}
+              onChange={(event) => {
+                resetProcessedTemplateState();
+                setBrand(event.target.value);
+              }}
               onBlur={() => setBrand((current) => current.trim())}
             />
           </label>
@@ -486,9 +541,9 @@ export function ProposalBlock({
             <div className="field-with-action">
               <select
                 value={selectedResponsibleId}
-                onChange={(event) => {
+              onChange={(event) => {
                   onSelectedResponsibleChange(event.target.value);
-                  setDownload(null);
+                  invalidateGeneratedDocument();
                 }}
               >
                 {!responsibles.length && <option value="">Nenhum responsável cadastrado</option>}
@@ -515,6 +570,7 @@ export function ProposalBlock({
               <select
                 value={selectedTemplateId}
                 onChange={(event) => {
+                  resetProcessedTemplateState();
                   onSelectedTemplateChange(event.target.value);
                 }}
               >
@@ -735,7 +791,7 @@ export function ProposalBlock({
                 columnWidths={proposalColumnWidths}
                 onColumnWidthsChange={(widths) => {
                   setProposalColumnWidths(widths);
-                  setDownload(null);
+                  invalidateGeneratedDocument();
                 }}
               />
             )}
