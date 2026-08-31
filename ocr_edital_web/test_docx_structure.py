@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
 from PIL import Image
 
 from docx_structure import (
@@ -177,7 +178,7 @@ class DocxStructureTests(unittest.TestCase):
                     {identifiers[0]: "center", identifiers[1]: "left"},
                 )
 
-    def test_validation_rejects_missing_duplicate_and_stale_identifiers(self):
+    def test_validation_accepts_deleted_blocks_and_rejects_duplicate_or_stale_ids(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = self.create_marker_template(Path(temp_dir))
             structure = inspect_docx_structure(path)
@@ -185,8 +186,10 @@ class DocxStructureTests(unittest.TestCase):
                 node["id"] for node in structure["nodes"] if node["type"] == "MINI_BOX"
             ]
 
-            with self.assertRaisesRegex(ValueError, "estrutura do modelo"):
-                validate_mini_box_order(path, identifiers[:-1])
+            self.assertEqual(
+                validate_mini_box_order(path, identifiers[:-1]),
+                identifiers[:-1],
+            )
             with self.assertRaisesRegex(ValueError, "duplicados"):
                 validate_mini_box_order(path, [identifiers[0]] * len(identifiers))
             with self.assertRaisesRegex(ValueError, "estrutura do modelo"):
@@ -204,6 +207,33 @@ class DocxStructureTests(unittest.TestCase):
                     path,
                     [*identifiers, identifiers[-1]],
                 )
+
+    def test_rebuild_removes_deleted_mini_boxes_from_the_generated_copy(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "exclusao.docx"
+            output = root / "exclusao_resultado.docx"
+            document = Document()
+            document.add_paragraph("{Primeiro}")
+            document.add_paragraph("{Segundo}")
+            document.add_paragraph("{Terceiro}")
+            document.save(source)
+            structure = inspect_docx_structure(source)
+            identifiers = [
+                node["id"] for node in structure["nodes"] if node["type"] == "MINI_BOX"
+            ]
+
+            rebuild_docx_with_mini_box_order(
+                source,
+                output,
+                [identifiers[2], identifiers[0]],
+            )
+            rebuilt = Document(output)
+
+        self.assertEqual(
+            [paragraph.text for paragraph in rebuilt.paragraphs],
+            ["{Terceiro}", "{Primeiro}", ""],
+        )
 
     def test_unmatched_braces_remain_fixed_and_produce_warnings(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -316,6 +346,56 @@ class ProposalDocxIntegrationTests(unittest.TestCase):
         self.assertEqual(generated.paragraphs[1].alignment, WD_ALIGN_PARAGRAPH.CENTER)
         self.assertEqual(generated.tables[0].rows[1].cells[3].text, "Item de teste")
 
+    def test_build_docx_applies_the_requested_proposal_column_widths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output = root / "saida_com_larguras.docx"
+            server.build_docx(
+                [self.proposal_item()],
+                None,
+                output,
+                proposal_column_widths={
+                    "item": 40,
+                    "quantidade": 8,
+                    "unidade": 8,
+                    "descricao": 10,
+                    "marca": 10,
+                    "valor_unitario": 12,
+                    "valor_total": 12,
+                },
+            )
+            generated = Document(output)
+            header_cells = generated.tables[0].rows[0].cells
+            cell_widths = [
+                int(cell._tc.tcPr.tcW.get(qn("w:w")))
+                for cell in header_cells
+            ]
+
+        self.assertGreater(cell_widths[0], cell_widths[3])
+        self.assertAlmostEqual(cell_widths[0] / cell_widths[3], 4, delta=0.2)
+
+    def test_proposal_column_widths_are_validated_and_normalized(self):
+        normalized = server.normalize_proposal_column_widths(
+            [self.proposal_item()],
+            {
+                "item": 40,
+                "quantidade": 8,
+                "unidade": 8,
+                "descricao": 10,
+                "marca": 10,
+                "valor_unitario": 12,
+                "valor_total": 12,
+            },
+        )
+
+        self.assertAlmostEqual(sum(normalized.values()), 100)
+        self.assertEqual(normalized["item"], 40)
+        with self.assertRaisesRegex(ValueError, "largura mínima"):
+            server.normalize_proposal_column_widths(
+                [self.proposal_item()],
+                {"item": 1},
+            )
+
     def test_table_cannot_split_two_markers_from_the_same_paragraph(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             template = self.create_template(Path(temp_dir))
@@ -391,6 +471,32 @@ class ProposalDocxIntegrationTests(unittest.TestCase):
 
         self.assertEqual(context["document_block_order"], document_order)
         self.assertEqual(context["mini_box_order"], [identifiers[1], identifiers[0]])
+
+    def test_generation_context_accepts_a_document_order_with_deleted_mini_box(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template = self.create_separate_marker_template(Path(temp_dir))
+            structure = inspect_docx_structure(template)
+            identifiers = [
+                node["id"] for node in structure["nodes"] if node["type"] == "MINI_BOX"
+            ]
+            document_order = [identifiers[1], GENERATED_TABLE_BLOCK_ID]
+            payload = {
+                "items": [self.proposal_item()],
+                "template_ref": "managed:proposta_blocos.docx",
+                "source_name": "edital",
+                "responsible_id": "1",
+                "commercial_terms": {},
+                "mini_box_order": [identifiers[1]],
+                "document_block_order": document_order,
+            }
+            with (
+                patch.object(server, "resolve_template", return_value=template),
+                patch.object(server, "resolve_responsible", return_value={"id": "1"}),
+            ):
+                context = server.proposal_generation_context(payload)
+
+        self.assertEqual(context["document_block_order"], document_order)
+        self.assertEqual(context["mini_box_order"], [identifiers[1]])
 
     def test_structure_endpoint_contract_resolves_the_requested_template(self):
         with tempfile.TemporaryDirectory() as temp_dir:

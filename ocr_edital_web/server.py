@@ -9,6 +9,7 @@ import hashlib
 import html
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -4084,6 +4085,37 @@ def widths_for_columns(columns):
     return [650, 650, 600, 4500, 1200, 1600, 1900]
 
 
+def normalize_proposal_column_widths(items, requested_widths):
+    if requested_widths is None:
+        return None
+    if not isinstance(requested_widths, dict):
+        raise ValueError("As larguras das colunas da proposta são inválidas.")
+    allowed_keys = {key for key, _ in [LOT_COLUMN] + COLUMNS}
+    if not set(requested_widths).issubset(allowed_keys):
+        raise ValueError("As larguras das colunas da proposta são inválidas.")
+
+    columns = columns_for_items(items)
+    defaults = widths_for_columns(columns)
+    values = []
+    for (key, _), default in zip(columns, defaults):
+        candidate = requested_widths.get(key, default)
+        if (
+            isinstance(candidate, bool)
+            or not isinstance(candidate, (int, float))
+            or not math.isfinite(candidate)
+            or candidate < 2
+        ):
+            raise ValueError("Cada coluna da proposta deve possuir largura mínima de 2%.")
+        values.append(float(candidate))
+    total = sum(values)
+    if total <= 0:
+        raise ValueError("As larguras das colunas da proposta são inválidas.")
+    return {
+        key: (value / total) * 100
+        for (key, _), value in zip(columns, values)
+    }
+
+
 def fit_widths_to_section(widths, section):
     available_width = int(
         (section.page_width - section.left_margin - section.right_margin) / 635
@@ -4111,10 +4143,15 @@ def build_docx(
     mini_box_order=None,
     document_block_order=None,
     mini_box_alignments=None,
+    proposal_column_widths=None,
 ):
     table_paragraph_index = None
     if template_path and template_path.exists():
-        if mini_box_alignments and not mini_box_order:
+        if (
+            mini_box_alignments
+            and mini_box_order is None
+            and document_block_order is None
+        ):
             mini_box_order = [
                 node["id"]
                 for node in inspect_docx_structure(template_path)["nodes"]
@@ -4132,7 +4169,7 @@ def build_docx(
             table_paragraph_index = layout.table_paragraph_index
         with TEMPLATE_LOCK:
             shutil.copyfile(template_path, output_path)
-        if mini_box_order:
+        if mini_box_order is not None:
             rebuild_docx_with_mini_box_order(
                 output_path,
                 output_path,
@@ -4153,9 +4190,17 @@ def build_docx(
         set_table_grid_borders(table)
     table.autofit = False
 
-    total_width, widths = fit_widths_to_section(
-        widths_for_columns(columns), doc.sections[-1]
+    requested_widths = normalize_proposal_column_widths(items, proposal_column_widths)
+    default_widths = widths_for_columns(columns)
+    width_weights = (
+        [
+            requested_widths[key] * sum(default_widths) / 100
+            for key, _ in columns
+        ]
+        if requested_widths is not None
+        else default_widths
     )
+    total_width, widths = fit_widths_to_section(width_weights, doc.sections[-1])
     set_table_width(table, total_width)
 
     header_row = table.rows[0]
@@ -6548,9 +6593,14 @@ def proposal_generation_context(payload):
     requested_order = payload.get("mini_box_order")
     requested_document_order = payload.get("document_block_order")
     requested_alignments = payload.get("mini_box_alignments")
+    requested_column_widths = payload.get("proposal_column_widths")
     mini_box_order = None
     document_block_order = None
     mini_box_alignments = {}
+    proposal_column_widths = normalize_proposal_column_widths(
+        items,
+        requested_column_widths,
+    )
     if requested_document_order is not None:
         if not template_path:
             raise ValueError("O modelo Word selecionado não está disponível.")
@@ -6589,6 +6639,7 @@ def proposal_generation_context(payload):
         "mini_box_order": mini_box_order,
         "document_block_order": document_block_order,
         "mini_box_alignments": mini_box_alignments,
+        "proposal_column_widths": proposal_column_widths,
     }
 
 
@@ -6610,6 +6661,7 @@ def proposal_preview_fingerprint(context):
         "mini_box_order": context.get("mini_box_order"),
         "document_block_order": context.get("document_block_order"),
         "mini_box_alignments": context.get("mini_box_alignments"),
+        "proposal_column_widths": context.get("proposal_column_widths"),
     }
     encoded = json.dumps(
         signature,
@@ -6833,6 +6885,7 @@ def create_proposal_preview(context):
                 mini_box_order=context.get("mini_box_order"),
                 document_block_order=context.get("document_block_order"),
                 mini_box_alignments=context.get("mini_box_alignments"),
+                proposal_column_widths=context.get("proposal_column_widths"),
             )
             try:
                 convert_docx_to_pdf(preview_docx, preview_pdf)
@@ -11117,6 +11170,7 @@ class App(BaseHTTPRequestHandler):
                     mini_box_order=context["mini_box_order"],
                     document_block_order=context["document_block_order"],
                     mini_box_alignments=context["mini_box_alignments"],
+                    proposal_column_widths=context["proposal_column_widths"],
                 )
                 try:
                     record_generated_document(context["responsible_id"], out_path)

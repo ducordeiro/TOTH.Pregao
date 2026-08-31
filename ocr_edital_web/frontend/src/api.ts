@@ -11,6 +11,7 @@ import type {
   GenerateResponse,
   IdentifyResponse,
   ProposalItem,
+  ProposalColumnWidths,
   MiniBoxTextAlign,
   ProcessResponse,
   Responsible,
@@ -306,6 +307,7 @@ export async function generateProposal(
   miniBoxOrder?: string[],
   documentBlockOrder?: string[],
   miniBoxAlignments?: Record<string, MiniBoxTextAlign>,
+  proposalColumnWidths?: ProposalColumnWidths,
 ): Promise<GenerateResponse> {
   const response = await fetch("/generate", {
     method: "POST",
@@ -319,6 +321,7 @@ export async function generateProposal(
       ...(miniBoxOrder ? { mini_box_order: miniBoxOrder } : {}),
       ...(documentBlockOrder ? { document_block_order: documentBlockOrder } : {}),
       ...(miniBoxAlignments ? { mini_box_alignments: miniBoxAlignments } : {}),
+      ...(proposalColumnWidths ? { proposal_column_widths: proposalColumnWidths } : {}),
     }),
   });
   return parseJson<GenerateResponse>(response);

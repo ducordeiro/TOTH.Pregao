@@ -505,7 +505,7 @@ main {
   overflow: auto;
   border: 1px solid #85868a;
   border-radius: 6px;
-  background: #707174;
+  background: var(--brand-background);
 }
 
 .proposal-retro .docx-stage-column {
@@ -585,6 +585,7 @@ main {
 .proposal-retro .proposal-replica-toolbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 7px;
   min-height: 34px;
   padding: 7px 10px;
@@ -595,9 +596,30 @@ main {
   font-weight: 700;
 }
 
-.proposal-retro .proposal-replica-viewport {
+.proposal-retro .proposal-replica-toolbar > div {
   display: flex;
-  justify-content: center;
+  align-items: center;
+  gap: 7px;
+}
+
+.proposal-retro .proposal-replica-reset-columns {
+  display: inline-grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  border: 1px solid #4a4c54;
+  border-radius: 4px;
+  background: #292a30;
+  color: #e4e4e8;
+  cursor: pointer;
+}
+
+.proposal-retro .proposal-replica-viewport {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 16px;
   min-height: 390px;
   max-height: 620px;
   padding: 16px;
@@ -606,17 +628,28 @@ main {
 }
 
 .proposal-retro .proposal-replica-page {
+  position: relative;
   width: min(100%, 500px);
   min-width: 330px;
   min-height: 466px;
   aspect-ratio: 210 / 297;
   padding: 7% 6.5%;
+  overflow: hidden;
   background: #fff;
   color: #15161a;
   box-shadow: 0 10px 24px rgb(0 0 0 / 28%);
   font-family: Arial, Helvetica, sans-serif;
   font-size: 8px;
   line-height: 1.35;
+}
+
+.proposal-retro .proposal-replica-page-number {
+  position: absolute;
+  right: 6.5%;
+  bottom: 3.5%;
+  color: #6c6e75;
+  font-size: 6px;
+  font-variant-numeric: tabular-nums;
 }
 
 .proposal-retro .proposal-replica-fixed-text,
@@ -662,13 +695,42 @@ main {
 }
 
 .proposal-retro .proposal-replica-table th {
+  position: relative;
   background: #e8ebf0;
   font-weight: 800;
 }
 
-.proposal-retro .proposal-replica-table th:nth-last-child(3),
-.proposal-retro .proposal-replica-table td:nth-last-child(3) {
-  width: 33%;
+.proposal-retro .proposal-column-resizer {
+  position: absolute;
+  z-index: 2;
+  top: -1px;
+  right: -4px;
+  width: 8px;
+  height: calc(100% + 2px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.proposal-retro .proposal-column-resizer::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  content: "";
+}
+
+.proposal-retro .proposal-column-resizer:hover::after,
+.proposal-retro .proposal-column-resizer:focus-visible::after {
+  background: #ef7838;
+}
+
+.proposal-retro .proposal-replica-table tr.is-continuation td {
+  border-top-style: dashed;
 }
 
 .proposal-retro .proposal-replica-description {
@@ -723,6 +785,16 @@ main {
 .proposal-retro .docx-mini-box:hover {
   border-color: #93665d;
   box-shadow: 0 7px 16px rgb(40 40 45 / 22%);
+}
+
+.proposal-retro .docx-mini-box:not(.is-generated-table) {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.proposal-retro .docx-mini-box:not(.is-generated-table).is-dragging {
+  cursor: grabbing;
 }
 
 .proposal-retro .docx-mini-box:active {
@@ -819,6 +891,12 @@ main {
   background: #fff;
   color: #17171d;
   box-shadow: inset 0 -2px 0 #ef7838;
+}
+
+.proposal-retro .docx-delete-button:hover:not(:disabled) {
+  border-color: #9f3737;
+  background: #fff;
+  color: #9f2020;
 }
 
 .proposal-retro .docx-order-button:disabled,

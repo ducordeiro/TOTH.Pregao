@@ -103,6 +103,28 @@ describe("DOCX mini-box ordering", () => {
       .toEqual(["Antes", "Entre"]);
   });
 
+  it("removes an excluded mini-box from the replica without removing fixed text", () => {
+    const table = {
+      id: "generated-table",
+      type: "GENERATED_TABLE" as const,
+      content: "Tabela gerada",
+    };
+    const replica = createReplicaDocumentBlocks(
+      nodes,
+      ["box-c", "box-a", table.id],
+      table,
+    );
+
+    expect(replica.map((block) => block.id)).toEqual([
+      "fixed-a",
+      "box-c",
+      "fixed-b",
+      "box-a",
+      table.id,
+    ]);
+    expect(replica.some((block) => block.id === "box-b")).toBe(false);
+  });
+
   it("falls back to the original replica order when the visual order is invalid", () => {
     const table = {
       id: "generated-table",

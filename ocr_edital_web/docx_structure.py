@@ -286,7 +286,7 @@ def _validated_order(analysis: DocxAnalysis, ordered_ids: object) -> list[str]:
         raise ValueError("A ordem dos blocos contém identificadores duplicados.")
 
     expected_ids = {slot.id for slot in analysis.slots}
-    if len(ordered_ids) != len(analysis.slots) or set(ordered_ids) != expected_ids:
+    if not set(ordered_ids).issubset(expected_ids):
         raise ValueError(
             "A estrutura do modelo foi alterada. Reprocesse a proposta antes de gerar o arquivo."
         )
@@ -331,9 +331,12 @@ def _validated_document_block_order(
     if len(ordered_ids) != len(set(ordered_ids)):
         raise ValueError("A ordem visual do documento contém blocos duplicados.")
 
-    expected_ids = {slot.id for slot in analysis.slots}
-    expected_ids.add(GENERATED_TABLE_BLOCK_ID)
-    if len(ordered_ids) != len(expected_ids) or set(ordered_ids) != expected_ids:
+    mini_box_ids = {slot.id for slot in analysis.slots}
+    supplied_ids = set(ordered_ids)
+    if (
+        GENERATED_TABLE_BLOCK_ID not in supplied_ids
+        or not (supplied_ids - {GENERATED_TABLE_BLOCK_ID}).issubset(mini_box_ids)
+    ):
         raise ValueError(
             "A estrutura do modelo foi alterada. Reprocesse a proposta antes de gerar o arquivo."
         )
@@ -433,7 +436,7 @@ def _replace_text_range(
 def _rewrite_part(
     data: bytes,
     slots: list[MiniBoxSlot],
-    replacement_contents: dict[str, str],
+    replacement_contents: dict[str, str | None],
     replacement_alignments: dict[str, str] | None = None,
 ) -> bytes:
     root = _parse_xml(data)
@@ -448,8 +451,9 @@ def _rewrite_part(
         paragraph = paragraphs[paragraph_index]
         if replacement_alignments is not None:
             selected_alignments = {
-                replacement_alignments.get(slot.id, slot.text_align)
+                replacement_alignments[slot.id]
                 for slot in paragraph_slots
+                if slot.id in replacement_alignments
             }
             if len(selected_alignments) > 1:
                 raise ValueError(
@@ -458,11 +462,12 @@ def _rewrite_part(
             if selected_alignments:
                 _set_paragraph_text_alignment(paragraph, selected_alignments.pop())
         for slot in sorted(paragraph_slots, key=lambda item: item.start, reverse=True):
+            replacement_content = replacement_contents[slot.id]
             _replace_text_range(
                 paragraph,
                 slot.start,
                 slot.end,
-                "{" + replacement_contents[slot.id] + "}",
+                "{" + replacement_content + "}" if replacement_content is not None else "",
             )
 
     return etree.tostring(
@@ -485,10 +490,14 @@ def rebuild_docx_with_mini_box_order(
     validated_order = _validated_order(analysis, ordered_ids)
     validated_alignments = _validated_alignments(analysis, alignments)
     slots_by_id = {slot.id: slot for slot in analysis.slots}
-    replacement_contents = {
+    replacement_contents: dict[str, str | None] = {
         target_slot.id: slots_by_id[source_id].content
         for target_slot, source_id in zip(analysis.slots, validated_order)
     }
+    replacement_contents.update({
+        slot.id: None
+        for slot in analysis.slots[len(validated_order):]
+    })
     replacement_alignments = {
         target_slot.id: validated_alignments.get(
             source_id,

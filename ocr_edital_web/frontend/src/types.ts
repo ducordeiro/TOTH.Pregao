@@ -63,6 +63,18 @@ export interface ProposalItem {
   valor_total: string;
 }
 
+export type ProposalColumnKey =
+  | "lote"
+  | "item"
+  | "quantidade"
+  | "unidade"
+  | "descricao"
+  | "marca"
+  | "valor_unitario"
+  | "valor_total";
+
+export type ProposalColumnWidths = Partial<Record<ProposalColumnKey, number>>;
+
 export interface DescriptionReview {
   status: "ok" | "warn" | "error";
   message: string;

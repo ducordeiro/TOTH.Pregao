@@ -27,6 +27,7 @@ import {
   Plus,
   RotateCcw,
   Table2,
+  Trash2,
   Undo2,
 } from "lucide-react";
 import {
@@ -71,6 +72,7 @@ interface SortableDocumentBlockProps {
   alignment: MiniBoxTextAlign;
   onMove: (id: string, direction: -1 | 1) => void;
   onToggleAlignment: (id: string) => void;
+  onDelete: (id: string) => void;
   onReturnToDock: () => void;
 }
 
@@ -112,6 +114,7 @@ function SortableDocumentBlock({
   alignment,
   onMove,
   onToggleAlignment,
+  onDelete,
   onReturnToDock,
 }: SortableDocumentBlockProps) {
   const {
@@ -130,6 +133,8 @@ function SortableDocumentBlock({
   return (
     <article
       ref={setNodeRef}
+      {...(!generated ? attributes : {})}
+      {...(!generated ? listeners : {})}
       className={[
         "docx-mini-box",
         generated ? "is-generated-table" : `tone-${tone}`,
@@ -138,24 +143,40 @@ function SortableDocumentBlock({
       style={style}
       role="listitem"
       aria-label={`${generated ? "Tabela gerada" : "Mini-box"}, posição ${position} de ${total}`}
+      title={!generated ? "Clique duas vezes e mantenha pressionado para arrastar" : undefined}
     >
       <div className="docx-mini-box-toolbar">
         <span className="docx-mini-box-index" aria-hidden="true">
           {String(position).padStart(2, "0")}
         </span>
-        <div className="docx-mini-box-actions">
+        <div
+          className="docx-mini-box-actions"
+          onPointerDown={!generated ? (event) => event.stopPropagation() : undefined}
+        >
           {!generated && (
-            <button
-              type="button"
-              className={`docx-order-button docx-align-button${alignment === "center" ? " is-active" : ""}`}
-              onClick={() => onToggleAlignment(id)}
-              disabled={disabled}
-              aria-label={alignment === "center" ? "Remover centralização do mini-box" : "Centralizar texto do mini-box"}
-              aria-pressed={alignment === "center"}
-              title={alignment === "center" ? "Alinhar texto à esquerda" : "Centralizar texto"}
-            >
-              <AlignCenter size={16} />
-            </button>
+            <>
+              <button
+                type="button"
+                className={`docx-order-button docx-align-button${alignment === "center" ? " is-active" : ""}`}
+                onClick={() => onToggleAlignment(id)}
+                disabled={disabled}
+                aria-label={alignment === "center" ? "Remover centralização do mini-box" : "Centralizar texto do mini-box"}
+                aria-pressed={alignment === "center"}
+                title={alignment === "center" ? "Alinhar texto à esquerda" : "Centralizar texto"}
+              >
+                <AlignCenter size={16} />
+              </button>
+              <button
+                type="button"
+                className="docx-order-button docx-delete-button"
+                onClick={() => onDelete(id)}
+                disabled={disabled}
+                aria-label={`Excluir mini-box ${position}`}
+                title="Excluir mini-box"
+              >
+                <Trash2 size={15} />
+              </button>
+            </>
           )}
           <button
             type="button"
@@ -189,17 +210,19 @@ function SortableDocumentBlock({
               <Undo2 size={16} />
             </button>
           )}
-          <button
-            type="button"
-            className="docx-drag-handle"
-            disabled={disabled}
-            aria-label={`Arrastar ${generated ? "tabela gerada" : `mini-box ${position}`}`}
-            title="Arrastar bloco"
-            {...attributes}
-            {...listeners}
-          >
-            <GripVertical size={17} />
-          </button>
+          {generated && (
+            <button
+              type="button"
+              className="docx-drag-handle"
+              disabled={disabled}
+              aria-label="Arrastar tabela gerada"
+              title="Arrastar tabela"
+              {...attributes}
+              {...listeners}
+            >
+              <GripVertical size={17} />
+            </button>
+          )}
         </div>
       </div>
       <DocumentBlockContent content={content} generated={generated} alignment={alignment} />
@@ -484,6 +507,13 @@ export function DocxReorderBoard({
     );
   };
 
+  const deleteMiniBox = (nodeId: string) => {
+    commitOrder(
+      blockOrder.filter((candidateId) => candidateId !== nodeId),
+      "Mini-box excluído da composição e da pré-visualização.",
+    );
+  };
+
   const insertTableAtEnd = () => {
     setTableDocked(false);
     commitOrder(
@@ -511,7 +541,7 @@ export function DocxReorderBoard({
       <div className="docx-reorder-heading">
         <div>
           <h4 id="docx-reorder-heading">Composição visual do documento</h4>
-          <span>{structure.mini_box_count} mini-box(es) + tabela da proposta</span>
+          <span>{blockOrder.filter((nodeId) => nodeId !== tableId).length} mini-box(es) + tabela da proposta</span>
         </div>
         {hasChanges && (
           <button
@@ -576,6 +606,7 @@ export function DocxReorderBoard({
                         : alignments[nodeId] || node?.text_align || "left"}
                       onMove={handleMove}
                       onToggleAlignment={toggleTextAlignment}
+                      onDelete={deleteMiniBox}
                       onReturnToDock={returnTableToDock}
                     />
                   );

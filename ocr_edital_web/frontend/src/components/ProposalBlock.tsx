@@ -19,16 +19,17 @@ import type {
   IdentifyResponse,
   MiniBoxTextAlign,
   ProcessResponse,
+  ProposalColumnWidths,
   ProposalItem,
   Responsible,
   Template,
   UiMessage,
 } from "../types";
 import {
-  applyMiniBoxOrder,
   createDocumentBlockOrder,
   miniBoxOrderFromDocumentOrder,
 } from "../docxOrder";
+import { defaultProposalColumnWidths } from "../proposalPreviewLayout";
 import {
   calculateItemTotal,
   isValidPncpUrl,
@@ -111,6 +112,9 @@ export function ProposalBlock({
   const [documentNodes, setDocumentNodes] = useState<DocumentNode[]>([]);
   const [documentBlockIds, setDocumentBlockIds] = useState<string[]>([]);
   const [miniBoxAlignments, setMiniBoxAlignments] = useState<Record<string, MiniBoxTextAlign>>({});
+  const [proposalColumnWidths, setProposalColumnWidths] = useState<ProposalColumnWidths>(
+    defaultProposalColumnWidths(false),
+  );
   const [structureLoading, setStructureLoading] = useState(false);
   const [structureError, setStructureError] = useState("");
 
@@ -131,6 +135,7 @@ export function ProposalBlock({
     setDocumentNodes([]);
     setDocumentBlockIds([]);
     setMiniBoxAlignments({});
+    setProposalColumnWidths(defaultProposalColumnWidths(false));
     setStructureError("");
   };
 
@@ -182,6 +187,7 @@ export function ProposalBlock({
         setDocumentNodes([]);
         setDocumentBlockIds([]);
         setMiniBoxAlignments({});
+        setProposalColumnWidths(defaultProposalColumnWidths(false));
         setStructureError("");
         const review = payload.description_review;
         const verification = payload.pncp_items_check;
@@ -285,6 +291,9 @@ export function ProposalBlock({
       setDocumentNodes([]);
       setDocumentBlockIds([]);
       setMiniBoxAlignments({});
+      setProposalColumnWidths(defaultProposalColumnWidths(
+        selectedItems.some((item) => Boolean(String(item.lote || "").trim())),
+      ));
       setStructureError("");
       setStructureLoading(true);
       try {
@@ -366,13 +375,6 @@ export function ProposalBlock({
 
   const updateDocumentOrder = (order: string[]) => {
     setDocumentBlockIds(order);
-    if (documentStructure) {
-      const miniBoxes = miniBoxOrderFromDocumentOrder(
-        order,
-        documentStructure.generated_table_block.id,
-      );
-      setDocumentNodes((current) => applyMiniBoxOrder(current, miniBoxes));
-    }
     setDownload(null);
   };
 
@@ -430,6 +432,7 @@ export function ProposalBlock({
         orderedMiniBoxIds,
         orderedDocumentBlockIds,
         miniBoxAlignments,
+        proposalColumnWidths,
       );
       setDownload({ url: response.download_url, filename: response.filename });
       setMessage({ kind: "success", text: "Documento Word gerado com sucesso." });
@@ -729,6 +732,11 @@ export function ProposalBlock({
                 commercialTerms={processed.response.commercial_terms}
                 responsible={selectedResponsible}
                 miniBoxAlignments={miniBoxAlignments}
+                columnWidths={proposalColumnWidths}
+                onColumnWidthsChange={(widths) => {
+                  setProposalColumnWidths(widths);
+                  setDownload(null);
+                }}
               />
             )}
           />

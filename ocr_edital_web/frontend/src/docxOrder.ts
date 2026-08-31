@@ -37,11 +37,14 @@ export function createReplicaDocumentBlocks(
 ): ReplicaDocumentBlock[] {
   const originalMiniBoxes = miniBoxNodes(nodes);
   const expectedIds = originalMiniBoxes.map((node) => node.id);
-  const expectedOrder = [...expectedIds, generatedTable.id];
-  const hasValidOrder = documentOrder.length === expectedOrder.length
+  const hasValidOrder = documentOrder.includes(generatedTable.id)
     && new Set(documentOrder).size === documentOrder.length
-    && expectedOrder.every((nodeId) => documentOrder.includes(nodeId));
-  const resolvedOrder = hasValidOrder ? documentOrder : expectedOrder;
+    && documentOrder
+      .filter((nodeId) => nodeId !== generatedTable.id)
+      .every((nodeId) => expectedIds.includes(nodeId));
+  const resolvedOrder = hasValidOrder
+    ? documentOrder
+    : [...expectedIds, generatedTable.id];
   const miniBoxesById = new Map(originalMiniBoxes.map((node) => [node.id, node]));
   const orderedMiniBoxes = resolvedOrder
     .filter((nodeId) => nodeId !== generatedTable.id)
@@ -61,7 +64,8 @@ export function createReplicaDocumentBlocks(
       replica.push(generatedTable);
       tableInserted = true;
     }
-    replica.push(orderedMiniBoxes[miniBoxSlot] || node);
+    const miniBox = orderedMiniBoxes[miniBoxSlot];
+    if (miniBox) replica.push(miniBox);
     miniBoxSlot += 1;
   }
   if (!tableInserted) replica.push(generatedTable);
