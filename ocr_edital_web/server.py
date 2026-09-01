@@ -51,7 +51,13 @@ from catalog import (
     catalog_draft_from_item,
     write_catalog_json,
 )
-from catalog_generator import export_catalog, normalize_items, validation_summary
+from catalog_generator import (
+    export_catalog,
+    normalize_items,
+    prepare_catalog_items,
+    validation_summary,
+)
+from catalog_rules import catalog_policy_summary, catalog_summary, repertoire_summary
 from docx_structure import (
     GENERATED_TABLE_BLOCK_ID,
     inspect_docx_structure,
@@ -10504,8 +10510,8 @@ CATALOG_GENERATOR_STAGES = (
     ("metadados", "Consultando metadados oficiais"),
     ("itens", "Consultando e normalizando itens"),
     ("documentos", "Enriquecendo pelos documentos relevantes"),
-    ("validacao_catalogo", "Validando evidências e campos"),
-    ("concluido", "Catálogo pronto para revisão"),
+    ("validacao_catalogo", "Comparando requisitos com o repertório"),
+    ("concluido", "Catálogo técnico pronto para revisão"),
 )
 
 
@@ -10667,11 +10673,15 @@ def run_catalog_generator_job(job_id, pncp_link, selected_item_keys=None):
         update_catalog_generator_job(job_id, stage="validacao_catalogo", progress=86)
         validation = validation_summary(items)
         warnings.extend(validation["avisos"])
+        technical_summary = catalog_summary(items)
         result = {
             "metadata": metadata,
             "documents": documents,
             "items": items,
             "validation": validation,
+            "catalog_summary": technical_summary,
+            "catalog_policy": catalog_policy_summary(),
+            "repertoire": repertoire_summary(),
             "warnings": warnings,
             "manufacturer": {
                 "razao_social": "GOLDFLEX INDUSTRIA E COMERCIO DE MOVEIS E EQUIPAMENTOS LTDA",
@@ -10732,8 +10742,14 @@ def export_catalog_generator_job(job_id, payload):
     items = (payload or {}).get("items")
     if not isinstance(items, list):
         raise ValueError("Envie os itens revisados para exportação.")
-    exports = export_catalog(OUTPUT_DIR, job["result"]["metadata"], items, job_id)
-    return {"exports": exports, "validation": validation_summary(items)}
+    prepared_items = prepare_catalog_items(items)
+    exports = export_catalog(OUTPUT_DIR, job["result"]["metadata"], prepared_items, job_id)
+    return {
+        "exports": exports,
+        "items": prepared_items,
+        "validation": validation_summary(prepared_items),
+        "catalog_summary": catalog_summary(prepared_items),
+    }
 
 
 class App(BaseHTTPRequestHandler):

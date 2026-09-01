@@ -4,14 +4,28 @@ import json
 import re
 import uuid
 from datetime import datetime
-from pathlib import Path
 
+from docx import Document
+from docx.enum.section import WD_ORIENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Mm, Pt, RGBColor
 from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+from catalog_rules import (
+    analyze_catalog_item,
+    build_catalog_entries,
+    catalog_policy_summary,
+    catalog_summary,
+    repertoire_summary,
+)
 
 
 MANUFACTURER = {
@@ -19,13 +33,15 @@ MANUFACTURER = {
     "cnpj": "33.661.439/0001-14",
 }
 
+COMPUTED_EXPORT_KEYS = {"modelo_catalogo", "resultado_aderencia", "status_catalogo"}
+
 EXPORT_COLUMNS = (
     ("numero", "Item"),
     ("lote", "Lote"),
     ("codigo", "Código"),
     ("produto", "Produto"),
-    ("descricao", "Descrição"),
-    ("especificacao_tecnica", "Especificação técnica"),
+    ("descricao", "Descrição da oportunidade"),
+    ("especificacao_tecnica", "Especificação da oportunidade"),
     ("unidade", "Unidade"),
     ("quantidade", "Quantidade"),
     ("marca_referencia", "Marca/referência"),
@@ -34,7 +50,10 @@ EXPORT_COLUMNS = (
     ("observacoes", "Observações"),
     ("categoria", "Categoria"),
     ("subcategoria", "Subcategoria"),
-    ("status_evidencia", "Evidência"),
+    ("status_evidencia", "Evidência da oportunidade"),
+    ("modelo_catalogo", "Modelo técnico de referência"),
+    ("resultado_aderencia", "Resultado da análise"),
+    ("status_catalogo", "Status do catálogo"),
 )
 
 
@@ -95,7 +114,7 @@ def normalize_items(items, source_url, source_name="API oficial do PNCP"):
         seen.add(key)
         category, subcategory = classify_item(description)
         item_source = compact(raw.get("_catalog_source_name")) or source_name
-        normalized.append(refresh_validation({
+        item = refresh_validation({
             "id": f"item-{index + 1}",
             "numero": number,
             "lote": lot,
@@ -118,7 +137,8 @@ def normalize_items(items, source_url, source_name="API oficial do PNCP"):
                 "secao": f"Item {number}" + (f" · Lote {lot}" if lot else ""),
                 "url": source_url,
             }],
-        }))
+        })
+        normalized.append(analyze_catalog_item(item))
     return normalized
 
 
@@ -150,90 +170,429 @@ def sanitize_export_items(items):
             if isinstance(raw.get(key, ""), (str, int, float))
             else ""
             for key, _ in EXPORT_COLUMNS
+            if key not in COMPUTED_EXPORT_KEYS
         }
+        item["id"] = compact(raw.get("id")) or f"item-{index + 1}"
         item["numero"] = compact(item["numero"]) or str(index + 1)
         item["fontes"] = raw.get("fontes") if isinstance(raw.get("fontes"), list) else []
         item["conflitos"] = raw.get("conflitos") if isinstance(raw.get("conflitos"), list) else []
-        clean.append(refresh_validation(item))
+        analyzed = analyze_catalog_item(refresh_validation(item))
+        reference = analyzed.get("modelo_referencia") or {}
+        fit = analyzed.get("analise_aderencia") or {}
+        analyzed["modelo_catalogo"] = reference.get("nome", "")
+        analyzed["resultado_aderencia"] = fit.get("resultado", "")
+        clean.append(analyzed)
     return clean
 
 
-def export_catalog(output_dir, metadata, items, job_id):
-    output_dir.mkdir(parents=True, exist_ok=True)
-    safe_items = sanitize_export_items(items)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    stem = f"catalogo_pncp_{job_id[:8]}_{stamp}_{uuid.uuid4().hex[:8]}"
+def prepare_catalog_items(items):
+    return sanitize_export_items(items)
 
-    json_path = output_dir / f"{stem}.json"
-    json_path.write_text(json.dumps({
+
+def format_number(value):
+    number = float(value)
+    if number.is_integer():
+        return str(int(number))
+    return f"{number:.1f}".replace(".", ",")
+
+
+def format_dimension(dimension):
+    values = dimension["valores_mm"]
+    use_millimetres = dimension["parte"] in {"altura_assento", "altura_total"}
+    if use_millimetres:
+        display_values = [format_number(value) for value in values]
+        unit = "mm"
+    else:
+        display_values = [format_number(value / 10.0) for value in values]
+        unit = "cm"
+    separator = " a " if dimension["parte"] in {"altura_assento", "altura_total"} else " x "
+    prefix = "aprox. " if dimension["aproximada"] else ""
+    return f"{dimension['rotulo']}: {prefix}{separator.join(display_values)} {unit}"
+
+
+def catalog_characteristics(entry):
+    characteristics = list(entry["caracteristicas"])
+    characteristics.extend(format_dimension(dimension) for dimension in entry["dimensoes"])
+    if entry.get("capacidade_kg") is not None:
+        characteristics.append(
+            f"Capacidade declarada no repertório: {format_number(entry['capacidade_kg'])} kg."
+        )
+    if entry.get("normas"):
+        characteristics.append("Normas declaradas: " + ", ".join(entry["normas"]) + ".")
+    return characteristics
+
+
+def set_cell_shading(cell, color):
+    properties = cell._tc.get_or_add_tcPr()
+    shading = properties.find(qn("w:shd"))
+    if shading is None:
+        shading = OxmlElement("w:shd")
+        properties.append(shading)
+    shading.set(qn("w:fill"), color)
+
+
+def configure_docx(document):
+    section = document.sections[0]
+    section.orientation = WD_ORIENT.PORTRAIT
+    section.page_width = Mm(210)
+    section.page_height = Mm(297)
+    section.top_margin = Mm(18)
+    section.bottom_margin = Mm(16)
+    section.left_margin = Mm(18)
+    section.right_margin = Mm(18)
+
+    normal = document.styles["Normal"]
+    normal.font.name = "Arial"
+    normal.font.size = Pt(10)
+    normal.paragraph_format.space_after = Pt(6)
+    for style_name, size, color in (
+        ("Title", 25, "232323"),
+        ("Heading 1", 18, "232323"),
+        ("Heading 2", 13, "232323"),
+    ):
+        style = document.styles[style_name]
+        style.font.name = "Arial"
+        style.font.size = Pt(size)
+        style.font.color.rgb = RGBColor.from_string(color)
+
+    header = section.header.paragraphs[0]
+    header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    header_run = header.add_run("GOLDFLEX")
+    header_run.bold = True
+    header_run.font.name = "Arial"
+    header_run.font.size = Pt(9)
+    header_run.font.color.rgb = RGBColor.from_string("666666")
+
+    footer = section.footer.paragraphs[0]
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    footer_run = footer.add_run("Documento técnico para revisão")
+    footer_run.font.name = "Arial"
+    footer_run.font.size = Pt(8)
+    footer_run.font.color.rgb = RGBColor.from_string("777777")
+
+
+def add_docx_band(document, text):
+    table = document.add_table(rows=1, cols=1)
+    table.autofit = True
+    cell = table.cell(0, 0)
+    set_cell_shading(cell, "FFC000")
+    paragraph = cell.paragraphs[0]
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    run = paragraph.add_run(text)
+    run.bold = True
+    run.font.name = "Arial"
+    run.font.size = Pt(11)
+    run.font.color.rgb = RGBColor.from_string("222222")
+
+
+def write_catalog_docx(path, entries):
+    document = Document()
+    configure_docx(document)
+    document.core_properties.title = "Catálogo técnico Goldflex"
+    document.core_properties.subject = "Catálogo genérico por modelo"
+    document.core_properties.author = MANUFACTURER["razao_social"]
+
+    title = document.add_paragraph(style="Title")
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.add_run("Catálogo técnico Goldflex")
+    subtitle = document.add_paragraph()
+    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    subtitle_run = subtitle.add_run("Modelos técnicos consolidados para revisão")
+    subtitle_run.font.name = "Arial"
+    subtitle_run.font.size = Pt(12)
+    subtitle_run.font.color.rgb = RGBColor.from_string("666666")
+    document.add_paragraph()
+    add_docx_band(document, "GOLDFLEX")
+    manufacturer = document.add_paragraph()
+    manufacturer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    manufacturer.add_run(MANUFACTURER["razao_social"]).bold = True
+    manufacturer.add_run(f"\nCNPJ {MANUFACTURER['cnpj']}")
+    status = document.add_paragraph()
+    status.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    status_run = status.add_run("RASCUNHO TÉCNICO — REVISÃO HUMANA OBRIGATÓRIA")
+    status_run.bold = True
+    status_run.font.color.rgb = RGBColor.from_string("9C6500")
+
+    if not entries:
+        document.add_page_break()
+        add_docx_band(document, "MODELO NÃO IDENTIFICADO")
+        warning = document.add_paragraph()
+        warning.add_run(
+            "Nenhuma característica técnica foi publicada porque o repertório estruturado "
+            "não apresentou um modelo com evidência suficiente."
+        )
+        document.add_paragraph(
+            "A liberação permanece bloqueada até a identificação do modelo e a validação das evidências."
+        )
+    for entry in entries:
+        document.add_page_break()
+        heading = document.add_paragraph(style="Heading 1")
+        heading.add_run(entry["nome"])
+        family = document.add_paragraph()
+        family_run = family.add_run(entry["familia"])
+        family_run.bold = True
+        family_run.font.color.rgb = RGBColor.from_string("666666")
+        add_docx_band(document, "Características")
+        for value in catalog_characteristics(entry):
+            document.add_paragraph(value, style="List Bullet")
+        document.add_heading("Documentação e referência", level=2)
+        document.add_paragraph(entry["fonte"])
+        document.add_heading("Dados a confirmar", level=2)
+        for value in entry["pendencias"]:
+            document.add_paragraph(value, style="List Bullet")
+        review = document.add_paragraph()
+        review_run = review.add_run("Status: rascunho para revisão humana.")
+        review_run.bold = True
+        review_run.font.color.rgb = RGBColor.from_string("9C6500")
+
+    document.save(path)
+
+
+def pdf_header_footer(canvas, document):
+    canvas.saveState()
+    width, height = A4
+    canvas.setFillColor(colors.HexColor("#666666"))
+    canvas.setFont("Helvetica-Bold", 8)
+    canvas.drawRightString(width - 18 * mm, height - 10 * mm, "GOLDFLEX")
+    canvas.setFont("Helvetica", 7.5)
+    canvas.drawCentredString(
+        width / 2,
+        9 * mm,
+        f"Documento técnico para revisão - Página {document.page}",
+    )
+    canvas.restoreState()
+
+
+def write_catalog_pdf(path, entries):
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "GoldflexTitle",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=24,
+        leading=29,
+        textColor=colors.HexColor("#232323"),
+        alignment=1,
+        spaceAfter=8 * mm,
+    )
+    subtitle_style = ParagraphStyle(
+        "GoldflexSubtitle",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=11,
+        leading=15,
+        textColor=colors.HexColor("#666666"),
+        alignment=1,
+        spaceAfter=7 * mm,
+    )
+    heading_style = ParagraphStyle(
+        "GoldflexHeading",
+        parent=styles["Heading1"],
+        fontName="Helvetica-Bold",
+        fontSize=17,
+        leading=21,
+        textColor=colors.HexColor("#232323"),
+        spaceAfter=3 * mm,
+    )
+    section_style = ParagraphStyle(
+        "GoldflexSection",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=11,
+        leading=14,
+        textColor=colors.HexColor("#232323"),
+    )
+    body_style = ParagraphStyle(
+        "GoldflexBody",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=9.5,
+        leading=13,
+        textColor=colors.HexColor("#333333"),
+        spaceAfter=2.2 * mm,
+    )
+    bullet_style = ParagraphStyle(
+        "GoldflexBullet",
+        parent=body_style,
+        leftIndent=5 * mm,
+        firstLineIndent=-3 * mm,
+        bulletIndent=1 * mm,
+    )
+    status_style = ParagraphStyle(
+        "GoldflexStatus",
+        parent=body_style,
+        fontName="Helvetica-Bold",
+        textColor=colors.HexColor("#9C6500"),
+        alignment=1,
+        spaceBefore=4 * mm,
+    )
+    document = SimpleDocTemplate(
+        str(path),
+        pagesize=A4,
+        rightMargin=18 * mm,
+        leftMargin=18 * mm,
+        topMargin=18 * mm,
+        bottomMargin=16 * mm,
+        title="Catálogo técnico Goldflex",
+        author=MANUFACTURER["razao_social"],
+    )
+    story = [
+        Spacer(1, 27 * mm),
+        Paragraph("Catálogo técnico Goldflex", title_style),
+        Paragraph("Modelos técnicos consolidados para revisão", subtitle_style),
+        Table(
+            [[Paragraph("<b>GOLDFLEX</b>", section_style)]],
+            colWidths=[174 * mm],
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FFC000")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5 * mm),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5 * mm),
+                ("TOPPADDING", (0, 0), (-1, -1), 3 * mm),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3 * mm),
+            ]),
+        ),
+        Spacer(1, 7 * mm),
+        Paragraph(html.escape(MANUFACTURER["razao_social"]), subtitle_style),
+        Paragraph(f"CNPJ {MANUFACTURER['cnpj']}", subtitle_style),
+        Paragraph("RASCUNHO TÉCNICO — REVISÃO HUMANA OBRIGATÓRIA", status_style),
+    ]
+    if not entries:
+        story.extend([
+            PageBreak(),
+            Table(
+                [[Paragraph("<b>MODELO NÃO IDENTIFICADO</b>", section_style)]],
+                colWidths=[174 * mm],
+                style=TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FFC000")),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5 * mm),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3 * mm),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3 * mm),
+                ]),
+            ),
+            Spacer(1, 6 * mm),
+            Paragraph(
+                "Nenhuma característica técnica foi publicada porque o repertório estruturado "
+                "não apresentou um modelo com evidência suficiente.",
+                body_style,
+            ),
+            Paragraph(
+                "A liberação permanece bloqueada até a identificação do modelo e a validação das evidências.",
+                body_style,
+            ),
+        ])
+    for entry in entries:
+        story.extend([
+            PageBreak(),
+            Paragraph(html.escape(entry["nome"]), heading_style),
+            Paragraph(f"<b>{html.escape(entry['familia'])}</b>", body_style),
+            Table(
+                [[Paragraph("<b>Características</b>", section_style)]],
+                colWidths=[174 * mm],
+                style=TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FFC000")),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5 * mm),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3 * mm),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3 * mm),
+                ]),
+            ),
+            Spacer(1, 4 * mm),
+        ])
+        story.extend(
+            Paragraph(f"• {html.escape(value)}", bullet_style)
+            for value in catalog_characteristics(entry)
+        )
+        story.extend([
+            Spacer(1, 2 * mm),
+            Paragraph("Documentação e referência", section_style),
+            Paragraph(html.escape(entry["fonte"]), body_style),
+            Paragraph("Dados a confirmar", section_style),
+        ])
+        story.extend(
+            Paragraph(f"• {html.escape(value)}", bullet_style)
+            for value in entry["pendencias"]
+        )
+        story.append(Paragraph("Status: rascunho para revisão humana.", status_style))
+
+    document.build(story, onFirstPage=pdf_header_footer, onLaterPages=pdf_header_footer)
+
+
+def write_audit_json(path, metadata, safe_items, entries):
+    path.write_text(json.dumps({
+        "schema_version": "2.0",
         "fabricante": MANUFACTURER,
-        "edital": metadata,
-        "itens": safe_items,
+        "regras_catalogo": catalog_policy_summary(),
+        "repertorio": repertoire_summary(),
+        "catalogos": entries,
+        "auditoria_oportunidade": {
+            "edital": metadata,
+            "itens": safe_items,
+            "resumo": catalog_summary(safe_items),
+            "nota": (
+                "A análise identifica referências e pendências. Ela não constitui declaração "
+                "automática de atendimento ao edital."
+            ),
+        },
         "gerado_em": datetime.now().isoformat(timespec="seconds"),
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    csv_path = output_dir / f"{stem}.csv"
-    with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=[key for key, _ in EXPORT_COLUMNS], extrasaction="ignore", delimiter=";")
+
+def write_audit_csv(path, safe_items):
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[key for key, _ in EXPORT_COLUMNS],
+            extrasaction="ignore",
+            delimiter=";",
+        )
         writer.writeheader()
         writer.writerows(safe_items)
 
-    xlsx_path = output_dir / f"{stem}.xlsx"
+
+def write_audit_xlsx(path, safe_items):
     workbook = Workbook()
     sheet = workbook.active
-    sheet.title = "Catálogo"
+    sheet.title = "Auditoria"
     sheet.append([label for _, label in EXPORT_COLUMNS])
     for item in safe_items:
         sheet.append([item.get(key, "") for key, _ in EXPORT_COLUMNS])
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = sheet.dimensions
+    header_fill = PatternFill("solid", fgColor="FFC000")
+    for cell in sheet[1]:
+        cell.fill = header_fill
+        cell.font = Font(bold=True, color="222222")
     for column in sheet.columns:
         width = min(max(len(str(cell.value or "")) for cell in column) + 2, 48)
         sheet.column_dimensions[column[0].column_letter].width = width
-    workbook.save(xlsx_path)
+    workbook.save(path)
 
+
+def export_catalog(output_dir, metadata, items, job_id):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    safe_items = prepare_catalog_items(items)
+    entries = build_catalog_entries(safe_items)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stem = f"catalogo_goldflex_{job_id[:8]}_{stamp}_{uuid.uuid4().hex[:8]}"
+
+    json_path = output_dir / f"{stem}_auditoria.json"
+    csv_path = output_dir / f"{stem}_auditoria.csv"
+    xlsx_path = output_dir / f"{stem}_auditoria.xlsx"
+    docx_path = output_dir / f"{stem}.docx"
     pdf_path = output_dir / f"{stem}.pdf"
-    styles = getSampleStyleSheet()
-    body_style = styles["BodyText"].clone("CatalogBody")
-    body_style.fontSize = 7
-    body_style.leading = 8.4
-    header_style = body_style.clone("CatalogHeader")
-    header_style.textColor = colors.white
-    document = SimpleDocTemplate(str(pdf_path), pagesize=landscape(A4), rightMargin=10 * mm, leftMargin=10 * mm, topMargin=10 * mm, bottomMargin=10 * mm)
-    story = [
-        Paragraph("Catálogo de itens da licitação", styles["Title"]),
-        Paragraph(html.escape(compact(metadata.get("objeto")) or "Objeto não informado"), styles["BodyText"]),
-        Spacer(1, 5 * mm),
-    ]
-    pdf_columns = (("numero", "Item"), ("produto", "Produto"), ("descricao", "Descrição"), ("unidade", "Un."), ("quantidade", "Qtd."), ("valor_estimado", "Valor"), ("status_evidencia", "Evidência"))
-    rows = [[Paragraph(label, header_style) for _, label in pdf_columns]]
-    for item in safe_items:
-        display_item = dict(item)
-        if compact(item.get("lote")):
-            display_item["numero"] = f"{item['numero']} (Lote {item['lote']})"
-        rows.append([
-            Paragraph(html.escape(compact(display_item.get(key))), body_style)
-            for key, _ in pdf_columns
-        ])
-    table = Table(
-        rows,
-        repeatRows=1,
-        colWidths=[14 * mm, 36 * mm, 105 * mm, 15 * mm, 18 * mm, 24 * mm, 24 * mm],
-        splitByRow=1,
-        splitInRow=1,
-    )
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#233254")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#B7B7C2")),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("FONTSIZE", (0, 0), (-1, -1), 7),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F2F2F5")]),
-    ]))
-    story.append(table)
-    document.build(story)
+
+    write_audit_json(json_path, metadata, safe_items, entries)
+    write_audit_csv(csv_path, safe_items)
+    write_audit_xlsx(xlsx_path, safe_items)
+    write_catalog_docx(docx_path, entries)
+    write_catalog_pdf(pdf_path, entries)
 
     return {
         kind: {"filename": path.name, "download_url": f"/download/{path.name}"}
-        for kind, path in (("xlsx", xlsx_path), ("csv", csv_path), ("json", json_path), ("pdf", pdf_path))
+        for kind, path in (
+            ("docx", docx_path),
+            ("pdf", pdf_path),
+            ("xlsx", xlsx_path),
+            ("csv", csv_path),
+            ("json", json_path),
+        )
     }

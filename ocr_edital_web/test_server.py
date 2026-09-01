@@ -1161,7 +1161,7 @@ class CatalogGenerationTests(unittest.TestCase):
                 items,
                 "a" * 32,
             )
-            self.assertEqual(set(exports), {"xlsx", "csv", "json", "pdf"})
+            self.assertEqual(set(exports), {"docx", "pdf", "xlsx", "csv", "json"})
             self.assertTrue(all((Path(temp_dir) / entry["filename"]).stat().st_size for entry in exports.values()))
 
     def test_block7_revalidates_edited_required_fields(self):
@@ -1181,13 +1181,14 @@ class CatalogGenerationTests(unittest.TestCase):
             ["descrição", "quantidade", "unidade"],
         )
 
-    def test_block7_pdf_preserves_long_description_and_escapes_markup(self):
+    def test_block7_keeps_opportunity_description_in_audit_not_generic_catalog(self):
         items = catalog_generator.normalize_items(
-            [make_item("1", "Cadeira giratória", quantidade="12")],
+            [make_item("1", "Cadeira giratória em tela Mesh", quantidade="12")],
             "https://pncp.gov.br/app/editais/45780087000103/2026/43",
         )
         description = ("Descrição técnica <segura> detalhada. " * 120) + "SENTINELA_FINAL_QA"
         items[0]["descricao"] = description
+        items[0]["especificacao_tecnica"] = description
 
         with tempfile.TemporaryDirectory() as temp_dir:
             exports = catalog_generator.export_catalog(
@@ -1196,9 +1197,16 @@ class CatalogGenerationTests(unittest.TestCase):
             pdf_path = Path(temp_dir) / exports["pdf"]["filename"]
             with server.pdfplumber.open(pdf_path) as pdf:
                 text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+            audit = json.loads(
+                (Path(temp_dir) / exports["json"]["filename"]).read_text(encoding="utf-8")
+            )
 
-        self.assertIn("SENTINELA_FINAL_QA", text)
-        self.assertIn("segura", text)
+        self.assertNotIn("SENTINELA_FINAL_QA", text)
+        self.assertNotIn("segura", text)
+        self.assertIn(
+            "SENTINELA_FINAL_QA",
+            audit["auditoria_oportunidade"]["itens"][0]["descricao"],
+        )
 
     def test_block7_exports_are_unique_within_the_same_second(self):
         items = catalog_generator.normalize_items(

@@ -6963,6 +6963,7 @@ textarea:focus-visible,
 
 .catalog-generator-input,
 .catalog-generator-progress,
+.catalog-generator-policy,
 .catalog-generator-object,
 .catalog-generator-review,
 .catalog-generator-exports {
@@ -7110,6 +7111,53 @@ textarea:focus-visible,
 .catalog-generator-summary small { color: var(--muted); }
 .catalog-generator-summary strong { overflow-wrap: anywhere; }
 
+.catalog-generator-policy {
+  display: grid;
+  gap: 14px;
+}
+
+.catalog-generator-policy-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.catalog-generator-policy-heading svg {
+  flex: 0 0 auto;
+  color: var(--orange);
+}
+
+.catalog-generator-policy-heading h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.catalog-generator-policy-heading p,
+.catalog-generator-policy-note {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.catalog-generator-policy-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-block: 1px solid var(--line);
+}
+
+.catalog-generator-policy-grid > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 11px 13px;
+  border-right: 1px solid var(--line);
+}
+
+.catalog-generator-policy-grid > div:last-child { border-right: 0; }
+.catalog-generator-policy-grid span { color: var(--muted); font-size: 12px; }
+.catalog-generator-policy-grid strong { font-size: 13px; overflow-wrap: anywhere; }
+
 .catalog-generator-object > div,
 .catalog-generator-object a,
 .catalog-generator-evidence p,
@@ -7144,7 +7192,7 @@ textarea:focus-visible,
 
 .catalog-generator-table {
   width: 100%;
-  min-width: 980px;
+  min-width: 1180px;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -7158,9 +7206,11 @@ textarea:focus-visible,
 }
 
 .catalog-generator-table th:nth-child(1) { width: 64px; }
-.catalog-generator-table th:nth-child(2) { width: 46%; }
+.catalog-generator-table th:nth-child(2) { width: 36%; }
 .catalog-generator-table th:nth-child(3),
 .catalog-generator-table th:nth-child(4) { width: 95px; }
+.catalog-generator-table th:nth-child(6) { width: 250px; }
+.catalog-generator-table th:nth-child(7) { width: 120px; }
 
 .catalog-generator-table td {
   padding: 9px;
@@ -7173,6 +7223,13 @@ textarea:focus-visible,
 .catalog-generator-table textarea { min-height: 70px; margin-top: 6px; resize: vertical; }
 .catalog-generator-table small { display: block; margin-top: 6px; color: #777a89; }
 
+.catalog-generator-fit strong {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .evidence-status {
   display: inline-flex;
   padding: 4px 7px;
@@ -7184,6 +7241,9 @@ textarea:focus-visible,
 }
 
 .evidence-status.is-confirmado { border-color: rgb(79 209 161 / 36%); color: var(--success); }
+.evidence-status.is-rascunho_para_revisao { border-color: rgb(255 192 0 / 44%); color: #ffd451; }
+.evidence-status.is-bloqueado_sem_modelo,
+.evidence-status.is-bloqueado_por_divergencia { border-color: rgb(240 110 110 / 44%); color: #f28e8e; }
 .catalog-generator-exports { justify-content: flex-start; }
 .catalog-generator-exports a { padding: 8px 11px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--text); }
 .catalog-generator-exports a:hover { border-color: var(--orange); color: var(--orange); }
@@ -7192,6 +7252,8 @@ textarea:focus-visible,
   .catalog-generator-stages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .catalog-generator-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .catalog-generator-summary > div:nth-child(2) { border-right: 0; }
+  .catalog-generator-policy-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .catalog-generator-policy-grid > div:nth-child(2) { border-right: 0; }
   .catalog-generator-evidence { grid-template-columns: 1fr; }
 }
 
@@ -7199,6 +7261,8 @@ textarea:focus-visible,
   .catalog-generator-link-row { grid-template-columns: 1fr; }
   .catalog-generator-summary { grid-template-columns: 1fr; }
   .catalog-generator-summary > div { border-right: 0; border-bottom: 1px solid var(--line); }
+  .catalog-generator-policy-grid { grid-template-columns: 1fr; }
+  .catalog-generator-policy-grid > div { border-right: 0; border-bottom: 1px solid var(--line); }
   .catalog-generator-review-header { align-items: flex-start; flex-direction: column; }
   .catalog-generator-exports { align-items: flex-start; flex-wrap: wrap; }
 }

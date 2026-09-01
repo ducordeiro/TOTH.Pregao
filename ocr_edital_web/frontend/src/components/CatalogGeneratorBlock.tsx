@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Check, Download, ExternalLink, FileArchive, LoaderCircle, Play, ShieldCheck } from "lucide-react";
+import { AlertTriangle, BookOpenCheck, Check, Download, ExternalLink, FileArchive, LoaderCircle, Play, Scale } from "lucide-react";
 import { createCatalogGeneratorJob, exportGeneratedCatalog, getCatalogGeneratorJob } from "../api";
 import type { CatalogExportFile, CatalogGeneratorJob, GeneratedCatalogItem, OpportunityItemSelection } from "../types";
 import { opportunityItemKey, selectionForLink } from "../opportunitySelection";
@@ -9,6 +9,14 @@ interface CatalogGeneratorBlockProps {
   onPncpLinkChange: (value: string) => void;
   itemSelection?: OpportunityItemSelection | null;
 }
+
+const humanizeCatalogStatus = (value: string) => value.replaceAll("_", " ");
+
+const catalogExportLabel = (kind: string) => {
+  if (kind === "docx") return "Catálogo DOCX";
+  if (kind === "pdf") return "Catálogo PDF";
+  return "Auditoria " + kind.toUpperCase();
+};
 
 export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelection }: CatalogGeneratorBlockProps) {
   const [job, setJob] = useState<CatalogGeneratorJob | null>(null);
@@ -87,17 +95,31 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelectio
     setExports({});
     setItems((current) => current.map((item) => {
       if (item.id !== id) return item;
-      const updated = { ...item, [field]: value };
+      const updated = {
+        ...item,
+        [field]: value,
+        ...(field === "descricao" ? { especificacao_tecnica: value } : {}),
+      };
       const missing = [
         ["descricao", "descrição"],
         ["quantidade", "quantidade"],
         ["unidade", "unidade"],
       ].filter(([key]) => !String(updated[key as keyof GeneratedCatalogItem] || "").trim())
         .map(([, label]) => label);
+      const invalidatesAnalysis = [
+        "produto",
+        "descricao",
+        "especificacao_tecnica",
+        "criterios_aceitacao",
+        "observacoes",
+        "categoria",
+        "subcategoria",
+      ].includes(field);
       return {
         ...updated,
         campos_ausentes: missing,
         status_evidencia: missing.length ? "incompleto" : "confirmado",
+        analise_desatualizada: invalidatesAnalysis || updated.analise_desatualizada,
       };
     }));
   };
@@ -111,6 +133,7 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelectio
     try {
       const response = await exportGeneratedCatalog(job.id, items);
       if (version === requestVersion.current && currentExportVersion === exportVersion.current) {
+        setItems(response.items);
         setExports(response.exports);
       }
     } catch (reason) {
@@ -125,6 +148,15 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelectio
   };
 
   const result = job?.result;
+  const currentCatalogMetrics = useMemo(() => {
+    const current = items.filter((item) => !item.analise_desatualizada);
+    return {
+      modelos: new Set(current.map((item) => item.modelo_referencia?.id).filter(Boolean)).size,
+      semModelo: current.filter((item) => !item.modelo_referencia).length,
+      divergencias: current.filter((item) => item.status_catalogo === "bloqueado_por_divergencia").length,
+      reanalises: items.length - current.length,
+    };
+  }, [items]);
   const currentValidation = useMemo(() => {
     const incompletos = items.filter((item) => item.campos_ausentes.length > 0).length;
     const conflitos = items.filter((item) => item.conflitos.length > 0).length;
@@ -204,11 +236,25 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelectio
             </div>
             <div><span>Modalidade</span><strong>{String(result.metadata.modalidade || "Não informada")}</strong><small>{String(result.metadata.situacao || "Situação não informada")}</small></div>
             <div><span>Itens</span><strong>{items.length}</strong><small>{currentValidation.incompletos} pendência(s)</small></div>
-            <div><span>Fabricante</span><strong>Goldflex</strong><small>{result.manufacturer.cnpj}</small></div>
+            <div><span>Repertório estruturado</span><strong>{result.repertoire.structured_models} modelos</strong><small>{currentCatalogMetrics.modelos} localizado(s) nesta análise</small></div>
+          </section>
+
+          <section className="catalog-generator-policy" aria-label="Padrão técnico do catálogo">
+            <div className="catalog-generator-policy-heading">
+              <BookOpenCheck size={19} />
+              <div><h2>Padrão técnico Goldflex</h2><p>Catálogo editorial e auditoria da oportunidade são documentos independentes.</p></div>
+            </div>
+            <div className="catalog-generator-policy-grid">
+              <div><span>Formato</span><strong>{result.catalog_policy.page_size} vertical</strong></div>
+              <div><span>Publicação</span><strong>Somente dados evidenciados</strong></div>
+              <div><span>Base analisada</span><strong>{result.repertoire.source_documents} documentos</strong></div>
+              <div><span>Liberação</span><strong>Revisão humana obrigatória</strong></div>
+            </div>
+            <p className="catalog-generator-policy-note">{result.repertoire.scope_note}</p>
           </section>
 
           <section className="catalog-generator-object">
-            <div><ShieldCheck size={18} /><strong>Objeto da contratação</strong></div>
+            <div><Scale size={18} /><strong>Objeto usado somente na auditoria de aderência</strong></div>
             <p>{String(result.metadata.objeto || "Não informado pelo PNCP.")}</p>
             <a href={String(result.metadata.link_pncp)} target="_blank" rel="noreferrer">Abrir fonte oficial <ExternalLink size={14} /></a>
           </section>
@@ -230,14 +276,17 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelectio
 
           <section className="catalog-generator-review">
             <div className="catalog-generator-review-header">
-              <div><h2>Revisão dos itens</h2><p>Edite somente o que foi confirmado na documentação da licitação.</p></div>
+              <div>
+                <h2>Revisão dos requisitos e aderência</h2>
+                <p>{currentCatalogMetrics.semModelo} sem modelo · {currentCatalogMetrics.divergencias} com divergência · {currentCatalogMetrics.reanalises} aguardando reanálise</p>
+              </div>
               <button className="button button-primary" type="button" onClick={() => void runExport()} disabled={exporting || items.length === 0}>
-                {exporting ? <LoaderCircle className="spin" size={17} /> : <Download size={17} />} Gerar arquivos
+                {exporting ? <LoaderCircle className="spin" size={17} /> : <Download size={17} />} Gerar catálogo e auditoria
               </button>
             </div>
             <div className="catalog-generator-table-wrap">
               <table className="catalog-generator-table">
-                <thead><tr><th>Item</th><th>Produto e descrição</th><th>Unidade</th><th>Quantidade</th><th>Categoria</th><th>Evidência</th></tr></thead>
+                <thead><tr><th>Item</th><th>Produto e requisito</th><th>Unidade</th><th>Quantidade</th><th>Categoria</th><th>Modelo e aderência</th><th>Evidência</th></tr></thead>
                 <tbody>
                   {items.map((item) => (
                     <tr key={item.id}>
@@ -250,6 +299,19 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelectio
                       <td><input value={item.unidade} aria-label={`Unidade do item ${item.numero}`} onChange={(event) => updateItem(item.id, "unidade", event.target.value)} /></td>
                       <td><input value={item.quantidade} aria-label={`Quantidade do item ${item.numero}`} onChange={(event) => updateItem(item.id, "quantidade", event.target.value)} /></td>
                       <td><input value={item.categoria} onChange={(event) => updateItem(item.id, "categoria", event.target.value)} /></td>
+                      <td className="catalog-generator-fit">
+                        {item.analise_desatualizada ? (
+                          <><span className="evidence-status">reanálise necessária</span><small>Gere os arquivos para recalcular.</small></>
+                        ) : item.modelo_referencia ? (
+                          <>
+                            <strong>{item.modelo_referencia.nome}</strong>
+                            <span className={"evidence-status is-" + item.status_catalogo}>{humanizeCatalogStatus(item.analise_aderencia.resultado)}</span>
+                            <small>Confiança {item.modelo_referencia.confianca} · {item.analise_aderencia.pendencias.length} pendência(s)</small>
+                          </>
+                        ) : (
+                          <><span className="evidence-status is-bloqueado_sem_modelo">sem modelo correspondente</span><small>Características técnicas não serão publicadas.</small></>
+                        )}
+                      </td>
                       <td><span className={`evidence-status is-${item.status_evidencia}`}>{item.status_evidencia}</span>{item.campos_ausentes.length > 0 && <small>{item.campos_ausentes.join(", ")}</small>}</td>
                     </tr>
                   ))}
@@ -261,7 +323,7 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelectio
           {Object.keys(exports).length > 0 && (
             <section className="catalog-generator-exports">
               <strong>Arquivos prontos</strong>
-              {Object.entries(exports).map(([kind, file]) => <a key={kind} href={file.download_url} download><Download size={16} />{kind.toUpperCase()}</a>)}
+              {Object.entries(exports).map(([kind, file]) => <a key={kind} href={file.download_url} download><Download size={16} />{catalogExportLabel(kind)}</a>)}
             </section>
           )}
         </>

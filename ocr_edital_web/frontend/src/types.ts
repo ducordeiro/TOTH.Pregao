@@ -401,6 +401,75 @@ export interface GeneratedCatalogSource {
   url: string;
 }
 
+export interface CatalogModelReference {
+  id: string;
+  nome: string;
+  familia: string;
+  confianca: "alta" | "média" | "baixa";
+  pontuacao: number;
+  sinais_encontrados: string[];
+  fonte: string;
+}
+
+export interface CatalogFitCriterion {
+  id: string;
+  criterio: string;
+  requisito: string;
+  estado:
+    | "evidenciado_na_referencia"
+    | "potencialmente_atende"
+    | "compatibilidade_a_confirmar"
+    | "nao_evidenciado"
+    | "divergente";
+  evidencia_repertorio: string;
+  [key: string]: unknown;
+}
+
+export interface CatalogFitAnalysis {
+  resultado:
+    | "sem_modelo_correspondente"
+    | "revisao_obrigatoria"
+    | "referencia_identificada_com_pendencias"
+    | "referencia_identificada";
+  criterios: CatalogFitCriterion[];
+  pendencias: string[];
+  revisao_humana_obrigatoria: boolean;
+  declaracao_atendimento_automatica: false;
+}
+
+export interface CatalogTechnicalSummary {
+  items_analisados: number;
+  items_com_modelo: number;
+  items_sem_modelo: number;
+  items_com_divergencia: number;
+  modelos_catalogados: number;
+  status_liberacao:
+    | "bloqueado_sem_modelo"
+    | "bloqueado_com_pendencias"
+    | "pronto_para_revisao_humana";
+  revisao_humana_obrigatoria: boolean;
+}
+
+export interface CatalogPolicy {
+  version: string;
+  architecture: string;
+  page_size: "A4";
+  orientation: "retrato";
+  brand_color: string;
+  section_title: string;
+  manufacturer: string;
+  rules: string[];
+  evidence_states: string[];
+}
+
+export interface CatalogRepertoire {
+  structured_models: number;
+  source_documents: number;
+  source: string;
+  scope_note: string;
+  models: Array<{ id: string; nome: string; familia: string; fonte: string }>;
+}
+
 export interface GeneratedCatalogItem {
   id: string;
   numero: string;
@@ -421,6 +490,11 @@ export interface GeneratedCatalogItem {
   campos_ausentes: string[];
   conflitos: string[];
   fontes: GeneratedCatalogSource[];
+  modelo_referencia: CatalogModelReference | null;
+  caracteristicas_catalogo: string[];
+  analise_aderencia: CatalogFitAnalysis;
+  status_catalogo: "bloqueado_sem_modelo" | "bloqueado_por_divergencia" | "rascunho_para_revisao";
+  analise_desatualizada: boolean;
 }
 
 export interface CatalogGeneratorResult {
@@ -428,6 +502,9 @@ export interface CatalogGeneratorResult {
   documents: Array<{ nome: string; tipo: string; status: string; origem: string }>;
   items: GeneratedCatalogItem[];
   validation: { incompletos: number; conflitos: number; avisos: string[] };
+  catalog_summary: CatalogTechnicalSummary;
+  catalog_policy: CatalogPolicy;
+  repertoire: CatalogRepertoire;
   warnings: string[];
   manufacturer: { razao_social: string; cnpj: string };
 }
@@ -445,7 +522,9 @@ export interface CatalogGeneratorJob {
 
 export interface CatalogGeneratorExportResponse {
   exports: Record<string, CatalogExportFile>;
+  items: GeneratedCatalogItem[];
   validation: { incompletos: number; conflitos: number; avisos: string[] };
+  catalog_summary: CatalogTechnicalSummary;
 }
 
 export type MessageKind = "info" | "success" | "warning" | "error";
