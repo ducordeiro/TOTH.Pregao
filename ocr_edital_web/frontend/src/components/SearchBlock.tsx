@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, ChevronDown, ChevronLeft, ChevronRight, Search, Trash2 } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { ArrowRight, ChevronLeft, ChevronRight, Search, Trash2 } from "lucide-react";
 import { searchBids, searchOnlineBids } from "../api";
 import type { Bid, OpportunityItemSelection, SearchResponse, UiMessage } from "../types";
 import { localIsoDate, parseLocalDate, toPncpDate } from "../utils";
@@ -81,14 +81,12 @@ const BRAZILIAN_UFS = [
 
 export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }: SearchBlockProps) {
   const searchRequestRef = useRef(0);
-  const ufFieldRef = useRef<HTMLDivElement>(null);
   const defaults = useMemo(defaultDates, []);
   const [startDate, setStartDate] = useState(defaults.start);
   const [endDate, setEndDate] = useState(defaults.end);
   const [dateField, setDateField] = useState<SearchDateField>("encerramento");
   const [includeMissingEndDate, setIncludeMissingEndDate] = useState(true);
   const [ufs, setUfs] = useState<string[]>([]);
-  const [ufMenuOpen, setUfMenuOpen] = useState(false);
   const [keywords, setKeywords] = useState<string[]>([]);
   const [keywordDraft, setKeywordDraft] = useState("");
   const [objectType, setObjectType] = useState("");
@@ -104,15 +102,6 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
   const [busy, setBusy] = useState(false);
   const [selectedBid, setSelectedBid] = useState<Bid | null>(null);
 
-  useEffect(() => {
-    if (!ufMenuOpen) return;
-    const closeOnOutsideClick = (event: MouseEvent) => {
-      if (!ufFieldRef.current?.contains(event.target as Node)) setUfMenuOpen(false);
-    };
-    document.addEventListener("mousedown", closeOnOutsideClick);
-    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
-  }, [ufMenuOpen]);
-
   const clear = () => {
     searchRequestRef.current += 1;
     setStartDate("");
@@ -120,7 +109,6 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
     setDateField("encerramento");
     setIncludeMissingEndDate(true);
     setUfs([]);
-    setUfMenuOpen(false);
     setKeywords([]);
     setKeywordDraft("");
     setObjectType("");
@@ -387,65 +375,43 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
             </label>
           ) : null}
         </div>
-        <div className="uf-field" ref={ufFieldRef}>
+        <div className="uf-field">
           <span className="field-label">UF</span>
-          <button
-            className="uf-multi-trigger"
-            type="button"
-            aria-label="Selecionar UFs da oportunidade"
-            aria-haspopup="listbox"
-            aria-expanded={ufMenuOpen}
-            onClick={() => setUfMenuOpen((current) => !current)}
-          >
-            <span>
-              {ufs.length === 0
-                ? "Todos os estados"
-                : ufs.length <= 3
-                  ? ufs.join(", ")
-                  : `${ufs.slice(0, 3).join(", ")} +${ufs.length - 3}`}
-            </span>
-            <ChevronDown size={16} aria-hidden="true" />
-          </button>
-          {ufMenuOpen && (
-            <div
-              className="uf-multi-menu"
-              role="listbox"
-              aria-label="Estados selecionados"
-              aria-multiselectable="true"
+          <div className="uf-option-row" role="group" aria-label="Selecionar UFs da oportunidade">
+            <button
+              className={`uf-option-button is-all${ufs.length === 0 ? " is-active" : ""}`}
+              type="button"
+              aria-pressed={ufs.length === 0}
+              onClick={() => setUfs([])}
             >
-              <button
-                className={ufs.length === 0 ? "is-active" : ""}
-                type="button"
-                onClick={() => setUfs([])}
-              >
-                Todos os estados
-              </button>
-              <div className="uf-option-list">
-                {BRAZILIAN_UFS.map(([code, name]) => {
-                  const checked = ufs.includes(code);
-                  return (
-                    <label key={code} role="option" aria-selected={checked}>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(event) => {
-                          setUfs((current) => {
-                            const selected = new Set(current);
-                            if (event.target.checked) selected.add(code);
-                            else selected.delete(code);
-                            return BRAZILIAN_UFS
-                              .map(([ufCode]) => ufCode)
-                              .filter((ufCode) => selected.has(ufCode));
-                          });
-                        }}
-                      />
-                      <span><strong>{code}</strong>{name}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+              Todas
+            </button>
+            {BRAZILIAN_UFS.map(([code, name]) => {
+              const selected = ufs.includes(code);
+              return (
+                <button
+                  className={`uf-option-button${selected ? " is-active" : ""}`}
+                  type="button"
+                  key={code}
+                  title={name}
+                  aria-label={`${name} (${code})`}
+                  aria-pressed={selected}
+                  onClick={() => {
+                    setUfs((current) => {
+                      const next = new Set(current);
+                      if (next.has(code)) next.delete(code);
+                      else next.add(code);
+                      return BRAZILIAN_UFS
+                        .map(([ufCode]) => ufCode)
+                        .filter((ufCode) => next.has(ufCode));
+                    });
+                  }}
+                >
+                  {code}
+                </button>
+              );
+            })}
+          </div>
         </div>
         <div className="keyword-field">
           <span className="field-label">Palavras-chave</span>
