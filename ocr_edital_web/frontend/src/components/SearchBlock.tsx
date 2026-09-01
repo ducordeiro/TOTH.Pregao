@@ -1,6 +1,12 @@
 import { useMemo, useRef, useState } from "react";
 import { ArrowRight, ChevronLeft, ChevronRight, Search, Trash2 } from "lucide-react";
 import { searchBids, searchOnlineBids } from "../api";
+import {
+  ONLINE_SEARCH_MAX_POLLS,
+  ONLINE_SEARCH_POLL_MS,
+  shouldDeferOnlinePolling,
+  toggleOrderedValue,
+} from "../searchControls";
 import type { Bid, OpportunityItemSelection, SearchResponse, UiMessage } from "../types";
 import { localIsoDate, parseLocalDate, toPncpDate } from "../utils";
 import { DateRangePicker } from "./DateRangePicker";
@@ -22,9 +28,6 @@ function defaultDates() {
 }
 
 const PAGE_SIZE = 10;
-const ONLINE_SEARCH_MAX_POLLS = 300;
-const ONLINE_SEARCH_POLL_MS = 1_000;
-
 type SearchDateField = "publicacao" | "abertura" | "encerramento";
 
 const DATE_FIELD_OPTIONS: Array<{ value: SearchDateField; label: string; column: string }> = [
@@ -229,6 +232,14 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
       reconciliationParams.set("reconciliar", "1");
       try {
         let onlinePayload = await searchOnlineBids(reconciliationParams);
+        if (shouldDeferOnlinePolling(onlinePayload, localAvailable)) {
+          setSearchingAll(false);
+          setMessage({
+            kind: "warning",
+            text: `Exibindo ${initialTotal.toLocaleString("pt-BR")} edital(is) locais. O PNCP não respondeu no prazo da consulta rápida; a atualização continuará em segundo plano.`,
+          });
+          return;
+        }
         for (
           let poll = 0;
           onlinePayload.searching && poll < ONLINE_SEARCH_MAX_POLLS;
@@ -261,7 +272,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
           setSearchingAll(false);
           setMessage({
             kind: "warning",
-            text: "A base interna continua disponível, mas a verificação completa do PNCP excedeu cinco minutos. O processamento online continua em segundo plano.",
+            text: "A base interna continua disponível, mas a verificação completa do PNCP excedeu um minuto. O processamento online continua em segundo plano.",
           });
           return;
         }
@@ -397,14 +408,11 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
                   aria-label={`${name} (${code})`}
                   aria-pressed={selected}
                   onClick={() => {
-                    setUfs((current) => {
-                      const next = new Set(current);
-                      if (next.has(code)) next.delete(code);
-                      else next.add(code);
-                      return BRAZILIAN_UFS
-                        .map(([ufCode]) => ufCode)
-                        .filter((ufCode) => next.has(ufCode));
-                    });
+                    setUfs((current) => toggleOrderedValue(
+                      current,
+                      code,
+                      BRAZILIAN_UFS.map(([ufCode]) => ufCode),
+                    ));
                   }}
                 >
                   {code}

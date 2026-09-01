@@ -81,6 +81,15 @@ from etl.search_filters import (
 LOGGER = logging.getLogger("toth.pregao")
 
 
+def positive_environment_integer(name, default, maximum=None):
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    value = max(1, value)
+    return min(value, maximum) if maximum is not None else value
+
+
 ROOT = Path(__file__).resolve().parent
 WORKSPACE = ROOT.parent
 UPLOAD_DIR = Path(os.environ.get("TOTH_UPLOAD_DIR") or ROOT / "uploads")
@@ -139,6 +148,8 @@ SEARCH_ITEM_CACHE = {}
 SEARCH_DOCUMENT_ITEM_CACHE = {}
 PNCP_SEARCH_JOBS = {}
 CATALOG_GENERATOR_JOBS = {}
+CATALOG_GENERATOR_PERSISTED_IDS = set()
+DETAIL_DOCUMENT_FAILURE_CACHE = {}
 SEARCH_CACHE_TTL = 300
 SOURCE_CACHE = {}
 EXTRACTED_ITEMS_CACHE = {}
@@ -150,11 +161,29 @@ CATALOG_TEXT_CACHE = {}
 CATALOG_DRAFT_CACHE = {}
 BUSINESS_FILE_CACHE = {}
 DOCUMENT_CACHE_TTL = 900
+CATALOG_GENERATOR_WORKERS = positive_environment_integer(
+    "TOTH_CATALOG_GENERATOR_WORKERS", 2, maximum=4
+)
+CATALOG_GENERATOR_MAX_ACTIVE = positive_environment_integer(
+    "TOTH_CATALOG_GENERATOR_MAX_ACTIVE", 10, maximum=50
+)
+CATALOG_GENERATOR_JOB_RETENTION_HOURS = positive_environment_integer(
+    "TOTH_CATALOG_JOB_RETENTION_HOURS", 24 * 7
+)
+CATALOG_GENERATOR_OUTPUT_RETENTION_DAYS = positive_environment_integer(
+    "TOTH_CATALOG_OUTPUT_RETENTION_DAYS", 90
+)
+CATALOG_GENERATOR_CLEANUP_INTERVAL = 60 * 60
 PROPOSAL_PREVIEW_TTL = 30 * 60
 CACHE_MAX_ENTRIES = 32
 CACHE_LOCK = threading.Lock()
 PNCP_SEARCH_JOB_LOCK = threading.RLock()
 CATALOG_GENERATOR_JOB_LOCK = threading.RLock()
+CATALOG_GENERATOR_EXECUTOR = ThreadPoolExecutor(
+    max_workers=CATALOG_GENERATOR_WORKERS,
+    thread_name_prefix="catalog-generator",
+)
+CATALOG_GENERATOR_LAST_CLEANUP = 0.0
 OCR_LOCK = threading.Lock()
 TEMPLATE_LOCK = threading.RLock()
 DATABASE_LOCK = threading.RLock()
@@ -426,6 +455,14 @@ def _initialize_database():
                 UNIQUE (negocio_id, lote, numero_item)
             );
 
+            CREATE TABLE IF NOT EXISTS catalog_generator_jobs (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS app_migrations (
                 chave TEXT PRIMARY KEY,
                 aplicado_em TEXT NOT NULL
@@ -449,8 +486,44 @@ def _initialize_database():
                 ON negocio_tarefas (negocio_id, ordem, id);
             CREATE INDEX IF NOT EXISTS idx_negocio_itens
                 ON negocio_itens (negocio_id, ordem, id);
+            CREATE INDEX IF NOT EXISTS idx_catalog_generator_jobs_status
+                ON catalog_generator_jobs (status, updated_at);
             """
         )
+        recovery_now = datetime.now().astimezone().isoformat(timespec="seconds")
+        interrupted_jobs = connection.execute(
+            """
+            SELECT id, payload_json
+            FROM catalog_generator_jobs
+            WHERE status IN ('queued', 'processing')
+            """
+        ).fetchall()
+        for interrupted in interrupted_jobs:
+            try:
+                payload = json.loads(interrupted["payload_json"])
+            except (TypeError, json.JSONDecodeError):
+                payload = {"id": interrupted["id"]}
+            payload.update({
+                "status": "failed",
+                "stage": "erro",
+                "error": (
+                    "O processamento foi interrompido por uma reinicialização do sistema. "
+                    "Inicie a geração do catálogo novamente."
+                ),
+                "updated_at": recovery_now,
+            })
+            connection.execute(
+                """
+                UPDATE catalog_generator_jobs
+                SET status = 'failed', payload_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
+                    recovery_now,
+                    interrupted["id"],
+                ),
+            )
         business_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(negocios)")
         }
@@ -465,7 +538,7 @@ def _initialize_database():
             )
             """
         )
-        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        now = recovery_now
         seed_migration = "seed_responsaveis_v1"
         migration_applied = connection.execute(
             "SELECT 1 FROM app_migrations WHERE chave = ?", (seed_migration,)
@@ -10282,7 +10355,10 @@ def enrich_detail_documents(opportunity_id, current_detail):
     with DETAIL_DOCUMENT_ENRICHMENT_LOCK:
         fresh = etl_repository().get_opportunity(opportunity_id)
         if fresh and fresh.get("documents"):
+            cache_discard(DETAIL_DOCUMENT_FAILURE_CACHE, opportunity_id)
             return fresh
+        if cache_get(DETAIL_DOCUMENT_FAILURE_CACHE, opportunity_id, DOCUMENT_CACHE_TTL):
+            return fresh or current_detail
 
         repository = etl_repository()
         run_id = repository.create_run("pncp", "detail_documents", {
@@ -10297,11 +10373,24 @@ def enrich_detail_documents(opportunity_id, current_detail):
             raw_documents = _payload_records(fetched.payload)
             documents = PNCPMapper().map_documents(raw_documents, default_source="pncp")
             repository.replace_opportunity_documents(opportunity_id, documents)
+            if documents:
+                cache_discard(DETAIL_DOCUMENT_FAILURE_CACHE, opportunity_id)
+            else:
+                cache_set(
+                    DETAIL_DOCUMENT_FAILURE_CACHE,
+                    opportunity_id,
+                    "Nenhum arquivo oficial foi disponibilizado pelo PNCP nesta consulta.",
+                )
             counters["updated"] = 1
             repository.finish_run(run_id, status="success", counters=counters)
         except Exception as exc:
             counters["failed"] = 1
             repository.finish_run(run_id, status="failed", counters=counters, error_message=str(exc))
+            cache_set(
+                DETAIL_DOCUMENT_FAILURE_CACHE,
+                opportunity_id,
+                str(exc) or "O PNCP não respondeu à consulta de arquivos oficiais.",
+            )
             raise
     return etl_repository().get_opportunity(opportunity_id) or current_detail
 
@@ -10332,13 +10421,23 @@ def internal_opportunity_detail(opportunity_id):
 
     if not detail["documents"]:
         if ALLOW_DETAIL_DOCUMENT_ON_DEMAND and has_pncp_identity:
-            enrichment_tasks.append(
-                (
-                    "Arquivos oficiais pendentes",
-                    enrich_detail_documents,
-                    (opportunity_id, detail),
-                )
+            cached_document_failure = cache_get(
+                DETAIL_DOCUMENT_FAILURE_CACHE,
+                opportunity_id,
+                DOCUMENT_CACHE_TTL,
             )
+            if cached_document_failure:
+                enrichment_messages.append(
+                    f"Arquivos oficiais pendentes: {cached_document_failure}"
+                )
+            else:
+                enrichment_tasks.append(
+                    (
+                        "Arquivos oficiais pendentes",
+                        enrich_detail_documents,
+                        (opportunity_id, detail),
+                    )
+                )
         elif ALLOW_DETAIL_DOCUMENT_ON_DEMAND:
             enrichment_messages.append(
                 "Arquivos ainda nao carregados: a oportunidade nao possui identidade PNCP completa."
@@ -10358,6 +10457,16 @@ def internal_opportunity_detail(opportunity_id):
                 except Exception as exc:
                     enrichment_messages.append(f"{label}: {exc}")
         detail = etl_repository().get_opportunity(opportunity_id) or detail
+
+    cached_document_failure = cache_get(
+        DETAIL_DOCUMENT_FAILURE_CACHE,
+        opportunity_id,
+        DOCUMENT_CACHE_TTL,
+    )
+    if not detail["documents"] and cached_document_failure:
+        cached_message = f"Arquivos oficiais pendentes: {cached_document_failure}"
+        if cached_message not in enrichment_messages:
+            enrichment_messages.append(cached_message)
 
     if enrichment_messages:
         detail["enrichment_error"] = " ".join(enrichment_messages)
@@ -10515,20 +10624,130 @@ CATALOG_GENERATOR_STAGES = (
 )
 
 
+def persist_catalog_generator_job(job):
+    init_database()
+    payload = json.dumps(
+        job,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+    with DATABASE_LOCK, database_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO catalog_generator_jobs (
+                id, status, payload_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                status = excluded.status,
+                payload_json = excluded.payload_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                job["id"],
+                job["status"],
+                payload,
+                job["created_at"],
+                job["updated_at"],
+            ),
+        )
+
+
+def load_catalog_generator_job(job_id):
+    init_database()
+    with DATABASE_LOCK, database_connection() as connection:
+        row = connection.execute(
+            "SELECT payload_json FROM catalog_generator_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        job = json.loads(row["payload_json"])
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return job if isinstance(job, dict) else None
+
+
+def cleanup_catalog_generator_state(*, force=False, current_time=None, output_dir=None):
+    global CATALOG_GENERATOR_LAST_CLEANUP
+    timestamp = time.time() if current_time is None else float(current_time)
+    with CATALOG_GENERATOR_JOB_LOCK:
+        if (
+            not force
+            and timestamp - CATALOG_GENERATOR_LAST_CLEANUP
+            < CATALOG_GENERATOR_CLEANUP_INTERVAL
+        ):
+            return {"jobs": 0, "files": 0}
+        CATALOG_GENERATOR_LAST_CLEANUP = timestamp
+
+    init_database()
+    job_cutoff = datetime.fromtimestamp(
+        timestamp - (CATALOG_GENERATOR_JOB_RETENTION_HOURS * 60 * 60)
+    ).astimezone().isoformat(timespec="seconds")
+    with DATABASE_LOCK, database_connection() as connection:
+        expired_rows = connection.execute(
+            "SELECT id FROM catalog_generator_jobs WHERE updated_at < ?",
+            (job_cutoff,),
+        ).fetchall()
+        expired_ids = {row["id"] for row in expired_rows}
+        if expired_ids:
+            placeholders = ",".join("?" for _ in expired_ids)
+            connection.execute(
+                f"DELETE FROM catalog_generator_jobs WHERE id IN ({placeholders})",
+                tuple(expired_ids),
+            )
+
+    with CATALOG_GENERATOR_JOB_LOCK:
+        for job_id in expired_ids:
+            CATALOG_GENERATOR_JOBS.pop(job_id, None)
+            CATALOG_GENERATOR_PERSISTED_IDS.discard(job_id)
+
+    file_cutoff = timestamp - (CATALOG_GENERATOR_OUTPUT_RETENTION_DAYS * 24 * 60 * 60)
+    output_root = Path(output_dir or OUTPUT_DIR)
+    removed_files = 0
+    if output_root.is_dir():
+        resolved_root = output_root.resolve()
+        for path in output_root.glob("catalogo_goldflex_*"):
+            try:
+                if (
+                    path.is_file()
+                    and path.resolve().parent == resolved_root
+                    and path.stat().st_mtime < file_cutoff
+                ):
+                    path.unlink()
+                    removed_files += 1
+            except OSError as exc:
+                LOGGER.warning("Não foi possível remover o catálogo expirado %s: %s", path, exc)
+    return {"jobs": len(expired_ids), "files": removed_files}
+
+
 def update_catalog_generator_job(job_id, **changes):
+    persisted = False
+    snapshot = None
     with CATALOG_GENERATOR_JOB_LOCK:
         job = CATALOG_GENERATOR_JOBS.get(job_id)
         if job is not None:
             job.update(changes)
-            job["updated_at"] = datetime.now().isoformat(timespec="seconds")
+            job["updated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+            snapshot = copy.deepcopy(job)
+            persisted = job_id in CATALOG_GENERATOR_PERSISTED_IDS
+    if persisted and snapshot is not None:
+        persist_catalog_generator_job(snapshot)
 
 
 def catalog_generator_job(job_id):
     with CATALOG_GENERATOR_JOB_LOCK:
         job = CATALOG_GENERATOR_JOBS.get(job_id)
-        if not job:
-            raise FileNotFoundError("Processamento de catálogo não localizado.")
-        return copy.deepcopy(job)
+        if job:
+            return copy.deepcopy(job)
+    job = load_catalog_generator_job(job_id)
+    if not job:
+        raise FileNotFoundError("Processamento de catálogo não localizado.")
+    with CATALOG_GENERATOR_JOB_LOCK:
+        CATALOG_GENERATOR_JOBS[job_id] = copy.deepcopy(job)
+        CATALOG_GENERATOR_PERSISTED_IDS.add(job_id)
+    return copy.deepcopy(job)
 
 
 def catalog_generator_document_candidates(cnpj, ano, sequencial, maximum=6):
@@ -10709,12 +10928,28 @@ def create_catalog_generator_job(payload):
     pncp_link = compact((payload or {}).get("pncp_link"))
     parse_pncp_link(pncp_link)
     selected_item_keys = validate_catalog_item_keys((payload or {}).get("selected_item_keys"))
+    template_id = compact((payload or {}).get("template_id"))
+    template_name = ""
+    template_ref = ""
+    if template_id:
+        template_path = template_path_from_name(template_id)
+        if not template_path or not template_path.exists():
+            raise ValueError("O template selecionado não está disponível.")
+        template_name = template_record(template_path)["display_name"]
+        template_ref = f"managed:{template_id}"
     job_id = uuid.uuid4().hex
-    now = datetime.now().isoformat(timespec="seconds")
+    try:
+        cleanup_catalog_generator_state()
+    except Exception as exc:
+        LOGGER.warning("A limpeza periódica do gerador de catálogo falhou: %s", exc)
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
     job = {
         "id": job_id,
         "pncp_link": pncp_link,
         "selected_item_keys": selected_item_keys,
+        "template_id": template_id,
+        "template_name": template_name,
+        "template_ref": template_ref,
         "status": "queued",
         "stage": "validacao",
         "progress": 0,
@@ -10725,13 +10960,31 @@ def create_catalog_generator_job(payload):
         "error": "",
     }
     with CATALOG_GENERATOR_JOB_LOCK:
+        active_jobs = sum(
+            1
+            for current in CATALOG_GENERATOR_JOBS.values()
+            if current.get("status") in {"queued", "processing"}
+        )
+        if active_jobs >= CATALOG_GENERATOR_MAX_ACTIVE:
+            raise ValueError(
+                "A fila do gerador de catálogo está cheia. Aguarde a conclusão de um processamento."
+            )
         CATALOG_GENERATOR_JOBS[job_id] = job
-    threading.Thread(
-        target=run_catalog_generator_job,
-        args=(job_id, pncp_link, selected_item_keys),
-        daemon=True,
-        name=f"catalog-generator-{job_id[:8]}",
-    ).start()
+    try:
+        persist_catalog_generator_job(job)
+        with CATALOG_GENERATOR_JOB_LOCK:
+            CATALOG_GENERATOR_PERSISTED_IDS.add(job_id)
+        CATALOG_GENERATOR_EXECUTOR.submit(
+            run_catalog_generator_job,
+            job_id,
+            pncp_link,
+            selected_item_keys,
+        )
+    except Exception as exc:
+        with CATALOG_GENERATOR_JOB_LOCK:
+            CATALOG_GENERATOR_JOBS.pop(job_id, None)
+            CATALOG_GENERATOR_PERSISTED_IDS.discard(job_id)
+        raise RuntimeError("Não foi possível iniciar o processamento do catálogo.") from exc
     return copy.deepcopy(job)
 
 
@@ -10743,10 +10996,25 @@ def export_catalog_generator_job(job_id, payload):
     if not isinstance(items, list):
         raise ValueError("Envie os itens revisados para exportação.")
     prepared_items = prepare_catalog_items(items)
-    exports = export_catalog(OUTPUT_DIR, job["result"]["metadata"], prepared_items, job_id)
+    template_path = None
+    if job.get("template_ref"):
+        template_path = resolve_template(job["template_ref"])
+        if template_path is None:
+            raise ValueError(
+                "O template selecionado não está mais disponível. Selecione-o novamente."
+            )
+    exports = export_catalog(
+        OUTPUT_DIR,
+        job["result"]["metadata"],
+        prepared_items,
+        job_id,
+        template_path=template_path,
+    )
     return {
         "exports": exports,
         "items": prepared_items,
+        "template_id": job.get("template_id", ""),
+        "template_name": job.get("template_name", ""),
         "validation": validation_summary(prepared_items),
         "catalog_summary": catalog_summary(prepared_items),
     }
@@ -11019,6 +11287,8 @@ class App(BaseHTTPRequestHandler):
                 json_response(self, 202, create_catalog_generator_job(parse_json_body(self)))
             except ValueError as exc:
                 json_response(self, 422, {"error": str(exc) or "Link PNCP inválido."})
+            except RuntimeError as exc:
+                json_response(self, 503, {"error": str(exc)})
             return
         catalog_export_match = re.fullmatch(
             r"/catalog-generator/jobs/([a-f0-9]{32})/export",
@@ -11038,6 +11308,9 @@ class App(BaseHTTPRequestHandler):
                 json_response(self, 404, {"error": str(exc)})
             except ValueError as exc:
                 json_response(self, 422, {"error": str(exc)})
+            except Exception:
+                LOGGER.exception("Falha ao exportar o catálogo do Bloco 7")
+                json_response(self, 500, {"error": "Não foi possível exportar o catálogo com o template selecionado."})
             return
         if request_path in {"/internal/etl/pncp-sync", "/api/internal/etl/pncp-sync"}:
             expected_token = os.environ.get("TOTH_ETL_ADMIN_TOKEN", "")
@@ -11415,6 +11688,10 @@ class App(BaseHTTPRequestHandler):
 
 def main():
     init_database()
+    try:
+        cleanup_catalog_generator_state(force=True)
+    except Exception as exc:
+        LOGGER.warning("A limpeza inicial do gerador de catálogo falhou: %s", exc)
     cleanup_proposal_previews()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), App)
     print(f"Aplicação aberta em http://127.0.0.1:{PORT}")

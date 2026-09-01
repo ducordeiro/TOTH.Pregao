@@ -512,6 +512,8 @@ export interface CatalogGeneratorResult {
 export interface CatalogGeneratorJob {
   id: string;
   pncp_link: string;
+  template_id?: string;
+  template_name?: string;
   status: "queued" | "processing" | "ready" | "failed";
   stage: string;
   progress: number;

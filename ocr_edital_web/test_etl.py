@@ -388,6 +388,29 @@ class EtlSmokeTests(unittest.TestCase):
         self.assertEqual(materials["total"], 0)
         self.assertEqual(services["total"], 1)
 
+    def test_object_type_classification_is_refreshed_when_items_are_replaced(self):
+        self.connector.description = "Edital escolar para atendimento da rede municipal"
+        self.service.sync(SyncRequest(
+            endpoint="proposta",
+            filters={"dataFinal": "20260806", "codigoModalidadeContratacao": 6},
+            fetch_details=False,
+            max_pages=1,
+            max_records=10,
+        ))
+        opportunity_id = self.repository.list_opportunities({})["items"][0]["id"]
+
+        self.repository.replace_opportunity_items(opportunity_id, [OpportunityItem(
+            source_item_id="1",
+            item_number="1",
+            title="Contratação de empresa especializada para limpeza predial",
+            description="Serviço continuado de limpeza e conservação",
+        )])
+
+        materials = self.repository.list_opportunities({"object_type": "material"})
+        services = self.repository.list_opportunities({"object_type": "servico"})
+        self.assertEqual(materials["total"], 0)
+        self.assertEqual(services["total"], 1)
+
     def test_missing_proposal_end_date_can_use_publication_window_explicitly(self):
         self.sync()
         with self.repository.connect() as connection, connection:

@@ -285,16 +285,53 @@ def add_docx_band(document, text):
     run.font.color.rgb = RGBColor.from_string("222222")
 
 
-def write_catalog_docx(path, entries):
-    document = Document()
-    configure_docx(document)
-    document.core_properties.title = "Catálogo técnico Goldflex"
-    document.core_properties.subject = "Catálogo genérico por modelo"
-    document.core_properties.author = MANUFACTURER["razao_social"]
+def add_catalog_paragraph(document, text="", style=None, *, bold=False, size=None):
+    paragraph = document.add_paragraph()
+    if style:
+        try:
+            paragraph.style = style
+        except KeyError:
+            pass
+    if text:
+        run = paragraph.add_run(text)
+        run.bold = bold
+        if size is not None:
+            run.font.size = Pt(size)
+    return paragraph
 
-    title = document.add_paragraph(style="Title")
+
+def write_catalog_docx(path, entries, template_path=None):
+    document = Document(str(template_path)) if template_path else Document()
+    marker = next(
+        (paragraph for paragraph in document.paragraphs if paragraph.text.strip() == "{CATALOGO}"),
+        None,
+    )
+    body = document._body._element
+    original_elements = set(body.iterchildren())
+    template_has_content = bool(
+        template_path
+        and (
+            any(paragraph.text.strip() for paragraph in document.paragraphs if paragraph is not marker)
+            or document.tables
+        )
+    )
+
+    if not template_path:
+        configure_docx(document)
+    elif marker is None and template_has_content:
+        document.add_page_break()
+    if not document.core_properties.title:
+        document.core_properties.title = "Catálogo técnico Goldflex"
+    if not document.core_properties.subject:
+        document.core_properties.subject = "Catálogo genérico por modelo"
+    if not document.core_properties.author:
+        document.core_properties.author = MANUFACTURER["razao_social"]
+
+    title = add_catalog_paragraph(document, style="Title")
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title.add_run("Catálogo técnico Goldflex")
+    title_run = title.add_run("Catálogo técnico Goldflex")
+    title_run.bold = True
+    title_run.font.size = Pt(25)
     subtitle = document.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
     subtitle_run = subtitle.add_run("Modelos técnicos consolidados para revisão")
@@ -326,24 +363,48 @@ def write_catalog_docx(path, entries):
         )
     for entry in entries:
         document.add_page_break()
-        heading = document.add_paragraph(style="Heading 1")
-        heading.add_run(entry["nome"])
+        heading = add_catalog_paragraph(document, style="Heading 1")
+        heading_run = heading.add_run(entry["nome"])
+        heading_run.bold = True
+        heading_run.font.size = Pt(18)
         family = document.add_paragraph()
         family_run = family.add_run(entry["familia"])
         family_run.bold = True
         family_run.font.color.rgb = RGBColor.from_string("666666")
         add_docx_band(document, "Características")
         for value in catalog_characteristics(entry):
-            document.add_paragraph(value, style="List Bullet")
-        document.add_heading("Documentação e referência", level=2)
+            add_catalog_paragraph(document, value, style="List Bullet")
+        add_catalog_paragraph(
+            document,
+            "Documentação e referência",
+            style="Heading 2",
+            bold=True,
+            size=13,
+        )
         document.add_paragraph(entry["fonte"])
-        document.add_heading("Dados a confirmar", level=2)
+        add_catalog_paragraph(
+            document,
+            "Dados a confirmar",
+            style="Heading 2",
+            bold=True,
+            size=13,
+        )
         for value in entry["pendencias"]:
-            document.add_paragraph(value, style="List Bullet")
+            add_catalog_paragraph(document, value, style="List Bullet")
         review = document.add_paragraph()
         review_run = review.add_run("Status: rascunho para revisão humana.")
         review_run.bold = True
         review_run.font.color.rgb = RGBColor.from_string("9C6500")
+
+    if marker is not None:
+        generated_elements = [
+            element
+            for element in body.iterchildren()
+            if element not in original_elements and element.tag != qn("w:sectPr")
+        ]
+        for element in generated_elements:
+            marker._p.addprevious(element)
+        marker._element.getparent().remove(marker._element)
 
     document.save(path)
 
@@ -567,7 +628,7 @@ def write_audit_xlsx(path, safe_items):
     workbook.save(path)
 
 
-def export_catalog(output_dir, metadata, items, job_id):
+def export_catalog(output_dir, metadata, items, job_id, template_path=None):
     output_dir.mkdir(parents=True, exist_ok=True)
     safe_items = prepare_catalog_items(items)
     entries = build_catalog_entries(safe_items)
@@ -583,7 +644,7 @@ def export_catalog(output_dir, metadata, items, job_id):
     write_audit_json(json_path, metadata, safe_items, entries)
     write_audit_csv(csv_path, safe_items)
     write_audit_xlsx(xlsx_path, safe_items)
-    write_catalog_docx(docx_path, entries)
+    write_catalog_docx(docx_path, entries, template_path=template_path)
     write_catalog_pdf(pdf_path, entries)
 
     return {

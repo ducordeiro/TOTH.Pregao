@@ -23,6 +23,7 @@ export default function App() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [responsibles, setResponsibles] = useState<Responsible[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [selectedCatalogTemplateId, setSelectedCatalogTemplateId] = useState("");
   const [selectedResponsibleId, setSelectedResponsibleId] = useState("");
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [responsibleModalOpen, setResponsibleModalOpen] = useState(false);
@@ -37,6 +38,11 @@ export default function App() {
           ? desired
           : updated[0]?.id || "";
       });
+      setSelectedCatalogTemplateId((current) =>
+        updated.some((template) => template.id === current)
+          ? current
+          : updated[0]?.id || "",
+      );
     },
     [],
   );
@@ -232,6 +238,16 @@ export default function App() {
               pncpLink={pncpLink}
               onPncpLinkChange={changePncpLink}
               itemSelection={catalogSelection}
+              templates={templates}
+              selectedTemplateId={selectedCatalogTemplateId}
+              onSelectedTemplateChange={setSelectedCatalogTemplateId}
+              onTemplateCreated={(template) => {
+                setTemplates((current) => [
+                  ...current.filter((entry) => entry.id !== template.id),
+                  template,
+                ]);
+                setSelectedCatalogTemplateId(template.id);
+              }}
             />
           </div>
         </main>

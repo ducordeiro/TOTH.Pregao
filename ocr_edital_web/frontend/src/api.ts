@@ -261,6 +261,7 @@ export async function generateCatalog(
 export async function createCatalogGeneratorJob(
   pncpLink: string,
   selectedItemKeys?: string[],
+  templateId?: string,
 ): Promise<CatalogGeneratorJob> {
   const response = await fetch("/catalog-generator/jobs", {
     method: "POST",
@@ -268,6 +269,7 @@ export async function createCatalogGeneratorJob(
     body: JSON.stringify({
       pncp_link: pncpLink,
       ...(selectedItemKeys !== undefined ? { selected_item_keys: selectedItemKeys } : {}),
+      ...(templateId ? { template_id: templateId } : {}),
     }),
   });
   return parseJson<CatalogGeneratorJob>(response);

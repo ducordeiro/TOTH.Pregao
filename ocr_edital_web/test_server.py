@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 import unittest
 import time
@@ -13,6 +14,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from docx import Document
+from docx.shared import Mm
 from PIL import Image
 
 import catalog
@@ -163,6 +165,106 @@ class DatabaseInitializationTests(unittest.TestCase):
                 server.INITIALIZED_DATABASES.pop(database_key, None)
 
         self.assertEqual(calls, [database_path, database_path])
+
+
+class CatalogJobPersistenceTests(unittest.TestCase):
+    def test_catalog_job_survives_cache_reset_and_interrupted_job_is_recovered(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database_path = root / "pncp.sqlite3"
+            database_key = str(database_path.resolve())
+            jobs = {}
+            persisted_ids = set()
+            server.INITIALIZED_DATABASES.pop(database_key, None)
+            try:
+                with (
+                    patch.object(server, "DATABASE_PATH", database_path),
+                    patch.object(server, "DATA_DIR", root),
+                    patch.object(server, "OUTPUT_DIR", root / "outputs"),
+                    patch.object(server, "UPLOAD_DIR", root / "uploads"),
+                    patch.object(server, "PREVIEW_DIR", root / "previews"),
+                    patch.object(server, "CATALOG_GENERATOR_JOBS", jobs),
+                    patch.object(server, "CATALOG_GENERATOR_PERSISTED_IDS", persisted_ids),
+                    patch.object(server, "CATALOG_GENERATOR_LAST_CLEANUP", 0.0),
+                    patch.object(server.CATALOG_GENERATOR_EXECUTOR, "submit"),
+                ):
+                    job = server.create_catalog_generator_job({
+                        "pncp_link": "https://pncp.gov.br/app/editais/45780087000103/2026/43",
+                        "selected_item_keys": ["1"],
+                    })
+                    jobs.clear()
+                    persisted_ids.clear()
+                    restored = server.catalog_generator_job(job["id"])
+                    self.assertEqual(restored["status"], "queued")
+
+                    jobs.clear()
+                    persisted_ids.clear()
+                    server.INITIALIZED_DATABASES.pop(database_key, None)
+                    server.init_database()
+                    recovered = server.catalog_generator_job(job["id"])
+
+                self.assertEqual(recovered["status"], "failed")
+                self.assertIn("reinicialização", recovered["error"])
+            finally:
+                server.INITIALIZED_DATABASES.pop(database_key, None)
+
+    def test_catalog_cleanup_only_removes_expired_catalog_jobs_and_outputs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database_path = root / "pncp.sqlite3"
+            output_dir = root / "outputs"
+            output_dir.mkdir()
+            database_key = str(database_path.resolve())
+            timestamp = time.time()
+            old_timestamp = timestamp - (3 * 24 * 60 * 60)
+            old_iso = datetime.fromtimestamp(old_timestamp).astimezone().isoformat(timespec="seconds")
+            job = {
+                "id": "e" * 32,
+                "pncp_link": "https://pncp.gov.br/app/editais/45780087000103/2026/43",
+                "selected_item_keys": ["1"],
+                "status": "ready",
+                "stage": "concluido",
+                "progress": 100,
+                "stages": [],
+                "created_at": old_iso,
+                "updated_at": old_iso,
+                "result": {},
+                "error": "",
+            }
+            catalog_output = output_dir / "catalogo_goldflex_antigo.pdf"
+            unrelated_output = output_dir / "Proposta_Final_antiga.docx"
+            catalog_output.write_bytes(b"catalog")
+            unrelated_output.write_bytes(b"proposal")
+            os.utime(catalog_output, (old_timestamp, old_timestamp))
+            os.utime(unrelated_output, (old_timestamp, old_timestamp))
+            jobs = {job["id"]: dict(job)}
+            persisted_ids = {job["id"]}
+            server.INITIALIZED_DATABASES.pop(database_key, None)
+            try:
+                with (
+                    patch.object(server, "DATABASE_PATH", database_path),
+                    patch.object(server, "DATA_DIR", root),
+                    patch.object(server, "OUTPUT_DIR", output_dir),
+                    patch.object(server, "UPLOAD_DIR", root / "uploads"),
+                    patch.object(server, "PREVIEW_DIR", root / "previews"),
+                    patch.object(server, "CATALOG_GENERATOR_JOBS", jobs),
+                    patch.object(server, "CATALOG_GENERATOR_PERSISTED_IDS", persisted_ids),
+                    patch.object(server, "CATALOG_GENERATOR_LAST_CLEANUP", 0.0),
+                    patch.object(server, "CATALOG_GENERATOR_JOB_RETENTION_HOURS", 24),
+                    patch.object(server, "CATALOG_GENERATOR_OUTPUT_RETENTION_DAYS", 1),
+                ):
+                    server.persist_catalog_generator_job(job)
+                    removed = server.cleanup_catalog_generator_state(
+                        force=True,
+                        current_time=timestamp,
+                    )
+
+                self.assertEqual(removed, {"jobs": 1, "files": 1})
+                self.assertFalse(catalog_output.exists())
+                self.assertTrue(unrelated_output.exists())
+                self.assertNotIn(job["id"], jobs)
+            finally:
+                server.INITIALIZED_DATABASES.pop(database_key, None)
 
 
 class ItemExtractionRegressionTests(unittest.TestCase):
@@ -1164,6 +1266,37 @@ class CatalogGenerationTests(unittest.TestCase):
             self.assertEqual(set(exports), {"docx", "pdf", "xlsx", "csv", "json"})
             self.assertTrue(all((Path(temp_dir) / entry["filename"]).stat().st_size for entry in exports.values()))
 
+    def test_block7_applies_docx_template_and_replaces_catalog_marker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template_path = root / "modelo_catalogo.docx"
+            template = Document()
+            for style_name in ("Title", "Heading 1", "Heading 2", "List Bullet"):
+                style = template.styles[style_name]
+                style._element.getparent().remove(style._element)
+            template.sections[0].left_margin = Mm(27)
+            template.sections[0].header.paragraphs[0].text = "IDENTIDADE DO MODELO"
+            template.add_paragraph("Capa personalizada")
+            template.add_paragraph("{CATALOGO}")
+            template.add_paragraph("Conteúdo posterior do modelo")
+            template.save(template_path)
+
+            exports = catalog_generator.export_catalog(
+                root,
+                {"objeto": "Aquisição de cadeiras"},
+                [],
+                "b" * 32,
+                template_path=template_path,
+            )
+
+            generated = Document(root / exports["docx"]["filename"])
+            paragraphs = [paragraph.text for paragraph in generated.paragraphs]
+            self.assertEqual(generated.sections[0].header.paragraphs[0].text, "IDENTIDADE DO MODELO")
+            self.assertAlmostEqual(generated.sections[0].left_margin.mm, 27, places=1)
+            self.assertNotIn("{CATALOGO}", paragraphs)
+            self.assertLess(paragraphs.index("Capa personalizada"), paragraphs.index("Catálogo técnico Goldflex"))
+            self.assertLess(paragraphs.index("Catálogo técnico Goldflex"), paragraphs.index("Conteúdo posterior do modelo"))
+
     def test_block7_revalidates_edited_required_fields(self):
         items = catalog_generator.normalize_items(
             [make_item("1", "Cadeira giratória", quantidade="12")],
@@ -1274,25 +1407,56 @@ class CatalogGenerationTests(unittest.TestCase):
 
     def test_catalog_job_validates_selection_before_starting_a_worker(self):
         link = "https://pncp.gov.br/app/editais/45780087000103/2026/43"
-        with patch.object(server.threading, "Thread") as worker:
+        with patch.object(server.CATALOG_GENERATOR_EXECUTOR, "submit") as submit:
             for selection in ([], "1", [""], [None], ["1/"]):
                 with self.subTest(selection=selection), self.assertRaises(ValueError):
                     server.create_catalog_generator_job({
                         "pncp_link": link, "selected_item_keys": selection,
                     })
-            worker.assert_not_called()
+            submit.assert_not_called()
 
     def test_catalog_job_passes_normalized_selection_to_worker(self):
         link = "https://pncp.gov.br/app/editais/45780087000103/2026/43"
         with (
             patch.dict(server.CATALOG_GENERATOR_JOBS, {}, clear=True),
-            patch.object(server.threading, "Thread") as worker,
+            patch.object(server, "CATALOG_GENERATOR_PERSISTED_IDS", set()),
+            patch.object(server, "cleanup_catalog_generator_state"),
+            patch.object(server, "persist_catalog_generator_job") as persist,
+            patch.object(server.CATALOG_GENERATOR_EXECUTOR, "submit") as submit,
         ):
             job = server.create_catalog_generator_job({
                 "pncp_link": link, "selected_item_keys": ["01/02", "1/2", "3"],
             })
             self.assertEqual(job["selected_item_keys"], ["1/2", "3"])
-            self.assertEqual(worker.call_args.kwargs["args"], (job["id"], link, ["1/2", "3"]))
+            submit.assert_called_once_with(
+                server.run_catalog_generator_job,
+                job["id"],
+                link,
+                ["1/2", "3"],
+            )
+            persist.assert_called_once()
+
+    def test_catalog_job_rejects_requests_when_the_bounded_queue_is_full(self):
+        link = "https://pncp.gov.br/app/editais/45780087000103/2026/43"
+        active_jobs = {
+            f"{index:032x}": {"id": f"{index:032x}", "status": "queued"}
+            for index in range(server.CATALOG_GENERATOR_MAX_ACTIVE)
+        }
+        with (
+            patch.object(server, "CATALOG_GENERATOR_JOBS", active_jobs),
+            patch.object(server, "CATALOG_GENERATOR_PERSISTED_IDS", set()),
+            patch.object(server, "cleanup_catalog_generator_state"),
+            patch.object(server, "persist_catalog_generator_job") as persist,
+            patch.object(server.CATALOG_GENERATOR_EXECUTOR, "submit") as submit,
+            self.assertRaisesRegex(ValueError, "fila.*cheia"),
+        ):
+            server.create_catalog_generator_job({
+                "pncp_link": link,
+                "selected_item_keys": ["1"],
+            })
+
+        persist.assert_not_called()
+        submit.assert_not_called()
 
     def test_catalog_selection_filters_document_items_and_preserves_distinct_lots(self):
         job_id = "c" * 32
@@ -2679,6 +2843,36 @@ class PncpSearchPaginationTests(unittest.TestCase):
 
 
 class OpportunityDetailTests(unittest.TestCase):
+    def test_failed_document_enrichment_is_not_retried_until_cache_expires(self):
+        opportunity_id = "f" * 32
+        detail = {
+            "opportunity": {
+                "id": opportunity_id,
+                "source_cnpj": "00394700000108",
+                "year": 2026,
+                "sequence": 250,
+            },
+            "items": [],
+            "documents": [],
+        }
+        repository = SimpleNamespace(
+            get_opportunity=lambda *_args: detail,
+            create_run=lambda *_args, **_kwargs: "run-1",
+            finish_run=lambda *_args, **_kwargs: None,
+        )
+        with (
+            patch.dict(server.DETAIL_DOCUMENT_FAILURE_CACHE, {}, clear=True),
+            patch.object(server, "etl_repository", return_value=repository),
+            patch.object(server, "PNCPConnector") as connector,
+        ):
+            connector.return_value.fetch_documents.side_effect = RuntimeError("PNCP indisponível")
+            with self.assertRaisesRegex(RuntimeError, "PNCP indisponível"):
+                server.enrich_detail_documents(opportunity_id, detail)
+            cached = server.enrich_detail_documents(opportunity_id, detail)
+
+        self.assertIs(cached, detail)
+        connector.return_value.fetch_documents.assert_called_once()
+
     def test_detail_uses_local_record_without_waiting_for_remote_metadata(self):
         local = {"opportunity": {"id": "c" * 32}, "items": [{}], "documents": []}
         expected = {"itens": [{"numero": "1", "descricao": "Item local"}]}

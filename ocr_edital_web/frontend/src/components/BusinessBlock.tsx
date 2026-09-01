@@ -1504,6 +1504,7 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
         title="Adicionar oportunidade"
         busy={importBusy}
         onClose={() => setImportOpen(false)}
+        className="business-import-modal"
       >
         <div className="business-import-form">
           <p>Informe o link público da contratação. Os dados serão consultados diretamente na API oficial do PNCP.</p>

@@ -74,6 +74,145 @@ class ETLRepository:
             connection.execute(
                 "ALTER TABLE opportunity_items ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0"
             )
+        classification_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(opportunity_object_classifications)"
+            ).fetchall()
+        }
+        classification_changed = False
+        if "matches_material" not in classification_columns:
+            connection.execute(
+                """
+                ALTER TABLE opportunity_object_classifications
+                ADD COLUMN matches_material INTEGER NOT NULL DEFAULT 0
+                CHECK (matches_material IN (0, 1))
+                """
+            )
+            classification_changed = True
+        if "matches_service" not in classification_columns:
+            connection.execute(
+                """
+                ALTER TABLE opportunity_object_classifications
+                ADD COLUMN matches_service INTEGER NOT NULL DEFAULT 0
+                CHECK (matches_service IN (0, 1))
+                """
+            )
+            classification_changed = True
+        if classification_changed:
+            connection.execute(
+                """
+                UPDATE opportunity_object_classifications
+                SET
+                    matches_material = CASE WHEN (
+                        opportunity_type = 'material'
+                        OR has_material = 1
+                        OR (
+                            opportunity_type = 'unclassified'
+                            AND has_material = 0
+                            AND has_service = 0
+                        )
+                    ) THEN 1 ELSE 0 END,
+                    matches_service = CASE WHEN (
+                        opportunity_type = 'servico'
+                        OR has_service = 1
+                        OR (
+                            opportunity_type = 'unclassified'
+                            AND has_material = 0
+                            AND has_service = 0
+                        )
+                    ) THEN 1 ELSE 0 END
+                """
+            )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_opportunity_object_matches_material
+            ON opportunity_object_classifications(matches_material, opportunity_id)
+            WHERE matches_material = 1
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_opportunity_object_matches_service
+            ON opportunity_object_classifications(matches_service, opportunity_id)
+            WHERE matches_service = 1
+            """
+        )
+        opportunity_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(opportunities)").fetchall()
+        }
+        opportunity_matches_changed = False
+        if "object_matches_material" not in opportunity_columns:
+            connection.execute(
+                """
+                ALTER TABLE opportunities
+                ADD COLUMN object_matches_material INTEGER NOT NULL DEFAULT 1
+                CHECK (object_matches_material IN (0, 1))
+                """
+            )
+            opportunity_matches_changed = True
+        if "object_matches_service" not in opportunity_columns:
+            connection.execute(
+                """
+                ALTER TABLE opportunities
+                ADD COLUMN object_matches_service INTEGER NOT NULL DEFAULT 1
+                CHECK (object_matches_service IN (0, 1))
+                """
+            )
+            opportunity_matches_changed = True
+        if opportunity_matches_changed:
+            update_trigger = connection.execute(
+                """
+                SELECT sql FROM sqlite_master
+                WHERE type = 'trigger' AND name = 'opportunities_search_au'
+                """
+            ).fetchone()
+            connection.execute("DROP TRIGGER IF EXISTS opportunities_search_au")
+            try:
+                connection.execute(
+                    """
+                    UPDATE opportunities
+                    SET
+                        object_matches_material = COALESCE((
+                            SELECT matches_material
+                            FROM opportunity_object_classifications classification
+                            WHERE classification.opportunity_id = opportunities.id
+                        ), 1),
+                        object_matches_service = COALESCE((
+                            SELECT matches_service
+                            FROM opportunity_object_classifications classification
+                            WHERE classification.opportunity_id = opportunities.id
+                        ), 1)
+                    """
+                )
+            finally:
+                if update_trigger and update_trigger["sql"]:
+                    connection.execute(update_trigger["sql"])
+        for object_type in ("material", "service"):
+            column = f"object_matches_{object_type}"
+            for suffix, date_column in (
+                ("published", "published_at"),
+                ("proposal_start", "proposal_start_at"),
+                ("proposal_end", "proposal_end_at"),
+            ):
+                connection.execute(
+                    f"""
+                    CREATE INDEX IF NOT EXISTS idx_opportunities_{object_type}_{suffix}
+                    ON opportunities(
+                        {column}, {date_column}, radar_status, modality_code, uf
+                    )
+                    """
+                )
+            connection.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS idx_opportunities_{object_type}_missing_end_published
+                ON opportunities(
+                    {column}, published_at, radar_status, modality_code, uf
+                )
+                WHERE proposal_end_at IS NULL OR proposal_end_at = ''
+                """
+            )
 
     def create_run(
         self,
@@ -197,6 +336,8 @@ class ETLRepository:
                     self._update_opportunity(connection, opportunity_id, opportunity, record_hash, now)
                     if replace_children:
                         self._replace_children(connection, opportunity_id, opportunity, now)
+                    else:
+                        self._refresh_object_classification(connection, opportunity_id, now)
                     outcome = "updated"
             if not canonical_skip:
                 self._upsert_match(connection, opportunity_id, match, now)
@@ -468,17 +609,12 @@ class ETLRepository:
                 where.append(f"({' OR '.join(alternatives)})")
         object_type = str(filters.get("object_type") or "").lower()
         if object_type in {"material", "servico"}:
-            object_text = "COALESCE(o.title, '') || ' ' || COALESCE(o.description, '')"
-            item_text = "COALESCE(oi.title, '') || ' ' || COALESCE(oi.description, '')"
-            where.append(
-                f"(classify_object_text({object_text}) = ? "
-                "OR EXISTS (SELECT 1 FROM opportunity_items oi "
-                f"WHERE oi.opportunity_id = o.id AND classify_object_text({item_text}) = ?) "
-                f"OR (classify_object_text({object_text}) = '' "
-                "AND NOT EXISTS (SELECT 1 FROM opportunity_items oi "
-                f"WHERE oi.opportunity_id = o.id AND classify_object_text({item_text}) <> '')))"
+            match_column = (
+                "object_matches_material"
+                if object_type == "material"
+                else "object_matches_service"
             )
-            params.extend([object_type, object_type])
+            where.append(f"o.{match_column} = 1")
         if filters.get("q"):
             query = f"%{filters['q']}%"
             where.append(
@@ -500,17 +636,25 @@ class ETLRepository:
             f"o.{date_column} {date_direction}, o.published_at DESC"
         )
         bounded_date_index = None
+        object_index_type = (
+            "material" if object_type == "material"
+            else "service" if object_type == "servico"
+            else ""
+        )
         bounded_date_filters = {
             "publication": (
-                "idx_opportunities_published_at",
+                f"idx_opportunities_{object_index_type}_published"
+                if object_index_type else "idx_opportunities_published_at",
                 filters.get("published_from") or filters.get("published_to"),
             ),
             "opening": (
-                "idx_opportunities_proposal_start",
+                f"idx_opportunities_{object_index_type}_proposal_start"
+                if object_index_type else "idx_opportunities_proposal_start",
                 filters.get("proposal_start_from") or filters.get("proposal_start_to"),
             ),
             "closing": (
-                "idx_opportunities_proposal_end",
+                f"idx_opportunities_{object_index_type}_proposal_end"
+                if object_index_type else "idx_opportunities_proposal_end",
                 proposal_from or proposal_to,
             ),
         }
@@ -543,14 +687,20 @@ class ETLRepository:
                 (
                     SELECT o.id, o.proposal_start_at, o.proposal_end_at, o.published_at
                     FROM opportunities o
-                    INDEXED BY idx_opportunities_proposal_end
+                    INDEXED BY {
+                        f'idx_opportunities_{object_index_type}_proposal_end'
+                        if object_index_type else 'idx_opportunities_proposal_end'
+                    }
                     WHERE {common_prefix}
                       o.proposal_end_at IS NOT NULL AND o.proposal_end_at <> ''
                       AND o.proposal_end_at >= ? AND o.proposal_end_at <= ?
                     UNION ALL
                     SELECT o.id, o.proposal_start_at, o.proposal_end_at, o.published_at
                     FROM opportunities o
-                    INDEXED BY idx_opportunities_missing_end_published
+                    INDEXED BY {
+                        f'idx_opportunities_{object_index_type}_missing_end_published'
+                        if object_index_type else 'idx_opportunities_missing_end_published'
+                    }
                     WHERE {common_prefix}
                       (o.proposal_end_at IS NULL OR o.proposal_end_at = '')
                       AND o.published_at >= ? AND o.published_at <= ?
@@ -1029,10 +1179,7 @@ class ETLRepository:
                 (opportunity_id,),
             )
             self._insert_items(connection, opportunity_id, items, now)
-            connection.execute(
-                "UPDATE opportunities SET updated_at = ? WHERE id = ?",
-                (now, opportunity_id),
-            )
+            self._refresh_object_classification(connection, opportunity_id, now)
         return len(items)
 
     def merge_opportunity_items(
@@ -1107,10 +1254,7 @@ class ETLRepository:
                         ),
                     )
                     item_count += 1
-                connection.execute(
-                    "UPDATE opportunities SET updated_at = ? WHERE id = ?",
-                    (now, opportunity_id),
-                )
+                self._refresh_object_classification(connection, opportunity_id, now)
         return {"opportunities": len(clean_batches), "items": item_count}
 
     def opportunity_has_items(self, opportunity_id: str) -> bool:
@@ -1175,10 +1319,7 @@ class ETLRepository:
                     (opportunity_id,),
                 )
                 self._insert_items(connection, opportunity_id, items, now)
-                connection.execute(
-                    "UPDATE opportunities SET updated_at = ? WHERE id = ?",
-                    (now, opportunity_id),
-                )
+                self._refresh_object_classification(connection, opportunity_id, now)
                 connection.execute(
                     """
                     INSERT INTO source_records (
@@ -1313,6 +1454,7 @@ class ETLRepository:
         connection.execute("DELETE FROM opportunity_items WHERE opportunity_id = ?", (opportunity_id,))
         connection.execute("DELETE FROM opportunity_documents WHERE opportunity_id = ?", (opportunity_id,))
         ETLRepository._insert_items(connection, opportunity_id, opportunity.items, now)
+        ETLRepository._refresh_object_classification(connection, opportunity_id, now)
         for document in opportunity.documents:
             connection.execute(
                 """
@@ -1335,11 +1477,6 @@ class ETLRepository:
                     now,
                 ),
             )
-        # The opportunity trigger refreshes the FTS index once after the whole batch.
-        connection.execute(
-            "UPDATE opportunities SET updated_at = updated_at WHERE id = ?",
-            (opportunity_id,),
-        )
 
     @staticmethod
     def _insert_items(
@@ -1379,6 +1516,85 @@ class ETLRepository:
                     now,
                 ),
             )
+
+    @staticmethod
+    def _refresh_object_classification(
+        connection: sqlite3.Connection,
+        opportunity_id: str,
+        now: str,
+    ) -> None:
+        opportunity = connection.execute(
+            "SELECT title, description FROM opportunities WHERE id = ?",
+            (opportunity_id,),
+        ).fetchone()
+        if opportunity is None:
+            return
+        opportunity_type = classify_object_text(
+            f"{opportunity['title'] or ''} {opportunity['description'] or ''}"
+        ) or "unclassified"
+        has_material = 0
+        has_service = 0
+        for item in connection.execute(
+            "SELECT title, description FROM opportunity_items WHERE opportunity_id = ?",
+            (opportunity_id,),
+        ):
+            item_type = classify_object_text(
+                f"{item['title'] or ''} {item['description'] or ''}"
+            )
+            has_material = max(has_material, int(item_type == "material"))
+            has_service = max(has_service, int(item_type == "servico"))
+            if has_material and has_service:
+                break
+        matches_material = int(
+            opportunity_type == "material"
+            or has_material
+            or (
+                opportunity_type == "unclassified"
+                and not has_material
+                and not has_service
+            )
+        )
+        matches_service = int(
+            opportunity_type == "servico"
+            or has_service
+            or (
+                opportunity_type == "unclassified"
+                and not has_material
+                and not has_service
+            )
+        )
+        connection.execute(
+            """
+            INSERT INTO opportunity_object_classifications (
+                opportunity_id, opportunity_type, has_material, has_service,
+                matches_material, matches_service, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(opportunity_id) DO UPDATE SET
+                opportunity_type = excluded.opportunity_type,
+                has_material = excluded.has_material,
+                has_service = excluded.has_service,
+                matches_material = excluded.matches_material,
+                matches_service = excluded.matches_service,
+                updated_at = excluded.updated_at
+            """,
+            (
+                opportunity_id,
+                opportunity_type,
+                has_material,
+                has_service,
+                matches_material,
+                matches_service,
+                now,
+            ),
+        )
+        connection.execute(
+            """
+            UPDATE opportunities
+            SET object_matches_material = ?, object_matches_service = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (matches_material, matches_service, now, opportunity_id),
+        )
 
     @staticmethod
     def _upsert_match(

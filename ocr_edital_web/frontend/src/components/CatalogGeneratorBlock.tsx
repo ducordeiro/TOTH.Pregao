@@ -1,13 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, BookOpenCheck, Check, Download, ExternalLink, FileArchive, LoaderCircle, Play, Scale } from "lucide-react";
-import { createCatalogGeneratorJob, exportGeneratedCatalog, getCatalogGeneratorJob } from "../api";
-import type { CatalogExportFile, CatalogGeneratorJob, GeneratedCatalogItem, OpportunityItemSelection } from "../types";
+import { AlertTriangle, Check, Download, ExternalLink, FileArchive, LoaderCircle, Play, Upload } from "lucide-react";
+import { createCatalogGeneratorJob, createTemplate, exportGeneratedCatalog, getCatalogGeneratorJob } from "../api";
+import type { CatalogExportFile, CatalogGeneratorJob, GeneratedCatalogItem, OpportunityItemSelection, Template } from "../types";
 import { opportunityItemKey, selectionForLink } from "../opportunitySelection";
+import { validateTemplateFile } from "../utils";
 
 interface CatalogGeneratorBlockProps {
   pncpLink: string;
   onPncpLinkChange: (value: string) => void;
   itemSelection?: OpportunityItemSelection | null;
+  templates: Template[];
+  selectedTemplateId: string;
+  onSelectedTemplateChange: (id: string) => void;
+  onTemplateCreated: (template: Template) => void;
 }
 
 const humanizeCatalogStatus = (value: string) => value.replaceAll("_", " ");
@@ -18,16 +23,30 @@ const catalogExportLabel = (kind: string) => {
   return "Auditoria " + kind.toUpperCase();
 };
 
-export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelection }: CatalogGeneratorBlockProps) {
+export function CatalogGeneratorBlock({
+  pncpLink,
+  onPncpLinkChange,
+  itemSelection,
+  templates,
+  selectedTemplateId,
+  onSelectedTemplateChange,
+  onTemplateCreated,
+}: CatalogGeneratorBlockProps) {
+  const templateInputRef = useRef<HTMLInputElement>(null);
   const [job, setJob] = useState<CatalogGeneratorJob | null>(null);
   const [items, setItems] = useState<GeneratedCatalogItem[]>([]);
   const [exports, setExports] = useState<Record<string, CatalogExportFile>>({});
   const [error, setError] = useState("");
   const [exporting, setExporting] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [uploadingTemplate, setUploadingTemplate] = useState(false);
   const requestVersion = useRef(0);
   const exportVersion = useRef(0);
   const selection = selectionForLink(itemSelection, pncpLink);
+  const selectedTemplate = templates.find((template) => template.id === selectedTemplateId);
+  const selectedTemplateVersion = selectedTemplate
+    ? `${selectedTemplate.id}:${selectedTemplate.size}:${selectedTemplate.updated_at}`
+    : "";
 
   useEffect(() => {
     requestVersion.current += 1;
@@ -38,7 +57,7 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelectio
     setError("");
     setStarting(false);
     setExporting(false);
-  }, [pncpLink, itemSelection]);
+  }, [pncpLink, itemSelection, selectedTemplateVersion]);
 
   useEffect(() => {
     if (!job || !["queued", "processing"].includes(job.status)) return;
@@ -68,6 +87,10 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelectio
 
   const start = async () => {
     if (starting) return;
+    if (!selectedTemplateId) {
+      setError("Selecione ou anexe um template Word para gerar o catálogo.");
+      return;
+    }
     const version = ++requestVersion.current;
     exportVersion.current += 1;
     setStarting(true);
@@ -80,6 +103,7 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelectio
       const created = await createCatalogGeneratorJob(
         pncpLink,
         selection?.items.map(opportunityItemKey),
+        selectedTemplateId,
       );
       if (version === requestVersion.current) setJob(created);
     } catch (reason) {
@@ -122,6 +146,25 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelectio
         analise_desatualizada: invalidatesAnalysis || updated.analise_desatualizada,
       };
     }));
+  };
+
+  const uploadTemplate = async (file: File) => {
+    const validationError = validateTemplateFile(file);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    setUploadingTemplate(true);
+    setError("");
+    try {
+      const template = await createTemplate(file);
+      onTemplateCreated(template);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Não foi possível anexar o template.");
+    } finally {
+      setUploadingTemplate(false);
+      if (templateInputRef.current) templateInputRef.current.value = "";
+    }
   };
 
   const runExport = async () => {
@@ -190,6 +233,48 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelectio
             <Play size={17} aria-hidden="true" /> {starting ? "Iniciando..." : selection ? "Processar seleção" : "Processar edital"}
           </button>
         </div>
+        <div className="catalog-generator-template-row">
+          <label htmlFor="catalog-generator-template">Template Word</label>
+          <div className="catalog-generator-template-controls">
+            <select
+              id="catalog-generator-template"
+              value={selectedTemplateId}
+              onChange={(event) => onSelectedTemplateChange(event.target.value)}
+            >
+              {!templates.length && <option value="">Nenhum template cadastrado</option>}
+              {templates.map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.display_name || template.name}
+                </option>
+              ))}
+            </select>
+            {selectedTemplate && (
+              <a className="button button-secondary" href={selectedTemplate.download_url} target="_blank" rel="noreferrer">
+                <ExternalLink size={16} aria-hidden="true" /> Abrir template
+              </a>
+            )}
+            <button
+              className="button button-secondary"
+              type="button"
+              disabled={uploadingTemplate}
+              onClick={() => templateInputRef.current?.click()}
+            >
+              {uploadingTemplate ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />}
+              {uploadingTemplate ? "Anexando..." : "Anexar .docx"}
+            </button>
+            <input
+              ref={templateInputRef}
+              type="file"
+              accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              hidden
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void uploadTemplate(file);
+              }}
+            />
+          </div>
+          <small>Use o marcador {"{CATALOGO}"} no modelo para definir o ponto de inserção. Sem ele, o catálogo será acrescentado ao final.</small>
+        </div>
       </form>
 
       {selection && (
@@ -237,26 +322,6 @@ export function CatalogGeneratorBlock({ pncpLink, onPncpLinkChange, itemSelectio
             <div><span>Modalidade</span><strong>{String(result.metadata.modalidade || "Não informada")}</strong><small>{String(result.metadata.situacao || "Situação não informada")}</small></div>
             <div><span>Itens</span><strong>{items.length}</strong><small>{currentValidation.incompletos} pendência(s)</small></div>
             <div><span>Repertório estruturado</span><strong>{result.repertoire.structured_models} modelos</strong><small>{currentCatalogMetrics.modelos} localizado(s) nesta análise</small></div>
-          </section>
-
-          <section className="catalog-generator-policy" aria-label="Padrão técnico do catálogo">
-            <div className="catalog-generator-policy-heading">
-              <BookOpenCheck size={19} />
-              <div><h2>Padrão técnico Goldflex</h2><p>Catálogo editorial e auditoria da oportunidade são documentos independentes.</p></div>
-            </div>
-            <div className="catalog-generator-policy-grid">
-              <div><span>Formato</span><strong>{result.catalog_policy.page_size} vertical</strong></div>
-              <div><span>Publicação</span><strong>Somente dados evidenciados</strong></div>
-              <div><span>Base analisada</span><strong>{result.repertoire.source_documents} documentos</strong></div>
-              <div><span>Liberação</span><strong>Revisão humana obrigatória</strong></div>
-            </div>
-            <p className="catalog-generator-policy-note">{result.repertoire.scope_note}</p>
-          </section>
-
-          <section className="catalog-generator-object">
-            <div><Scale size={18} /><strong>Objeto usado somente na auditoria de aderência</strong></div>
-            <p>{String(result.metadata.objeto || "Não informado pelo PNCP.")}</p>
-            <a href={String(result.metadata.link_pncp)} target="_blank" rel="noreferrer">Abrir fonte oficial <ExternalLink size={14} /></a>
           </section>
 
           {(currentWarnings.length > 0 || result.documents.length > 0) && (

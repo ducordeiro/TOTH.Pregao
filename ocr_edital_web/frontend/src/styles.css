@@ -5057,8 +5057,17 @@ input[type="checkbox"] {
 
 .business-import-form p {
   margin: 0;
-  color: #a7b5ba;
+  color: #566574;
   line-height: 1.5;
+}
+
+.business-import-modal .modal-body {
+  background: #fff;
+  color: #172638;
+}
+
+.business-import-modal .business-import-form label {
+  color: #263849;
 }
 
 .business-import-actions {
@@ -7062,6 +7071,28 @@ textarea:focus-visible,
   gap: 14px;
 }
 
+.catalog-generator-template-row {
+  display: grid;
+  gap: 7px;
+}
+
+.catalog-generator-template-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.catalog-generator-template-controls .button {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.catalog-generator-template-row small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .catalog-generator-policy-heading {
   display: flex;
   align-items: flex-start;
@@ -7205,6 +7236,7 @@ textarea:focus-visible,
 
 @media (max-width: 620px) {
   .catalog-generator-link-row { grid-template-columns: 1fr; }
+  .catalog-generator-template-controls { grid-template-columns: 1fr; }
   .catalog-generator-summary { grid-template-columns: 1fr; }
   .catalog-generator-summary > div { border-right: 0; border-bottom: 1px solid var(--line); }
   .catalog-generator-policy-grid { grid-template-columns: 1fr; }
