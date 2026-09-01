@@ -5,6 +5,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from etl import ComprasGovMapper, ETLRepository, ETLSyncService, PNCPMapper, SyncRequest
@@ -278,6 +279,55 @@ class EtlSmokeTests(unittest.TestCase):
         self.assertEqual(first_item["granularity"], "lote_item")
         self.assertEqual(first_item["confidence"], 1.0)
 
+    def test_item_fetch_failure_does_not_delete_previously_indexed_items(self):
+        self.sync()
+        self.connector.description = "Aquisicao de cadeiras atualizada"
+
+        with patch.object(
+            self.connector,
+            "iter_items",
+            side_effect=ConnectorError("temporary item endpoint failure"),
+        ):
+            result = self.sync()
+
+        detail = self.repository.get_opportunity_by_pncp_identity(
+            "12345678000199", 2026, 1
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(len(detail["items"]), 2)
+        self.assertEqual(len(detail["documents"]), 1)
+
+    def test_empty_item_response_does_not_delete_previously_indexed_items(self):
+        self.sync()
+        self.connector.description = "Aquisicao de cadeiras sem retorno de itens"
+
+        with patch.object(self.connector, "iter_items", return_value=iter(())):
+            result = self.sync()
+
+        detail = self.repository.get_opportunity_by_pncp_identity(
+            "12345678000199", 2026, 1
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(len(detail["items"]), 2)
+
+    def test_document_fetch_failure_does_not_delete_previously_indexed_documents(self):
+        self.sync()
+        self.connector.description = "Aquisicao de cadeiras revisada"
+
+        with patch.object(
+            self.connector,
+            "fetch_documents",
+            side_effect=ConnectorError("temporary document endpoint failure"),
+        ):
+            result = self.sync()
+
+        detail = self.repository.get_opportunity_by_pncp_identity(
+            "12345678000199", 2026, 1
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(len(detail["items"]), 2)
+        self.assertEqual(len(detail["documents"]), 1)
+
     def test_unchanged_hash_is_skipped_but_raw_audit_is_preserved(self):
         self.sync()
         second = self.sync()
@@ -305,6 +355,26 @@ class EtlSmokeTests(unittest.TestCase):
 
         self.assertEqual(without_accent["total"], 1)
         self.assertEqual(with_accent["total"], 1)
+
+    def test_pncp_search_term_is_kept_in_the_local_search_index(self):
+        self.sync()
+        opportunity_id = self.repository.list_opportunities({"limit": 1})["items"][0]["id"]
+
+        added = self.repository.add_opportunity_search_terms(
+            opportunity_id,
+            ["evidencia externa"],
+        )
+        repeated = self.repository.add_opportunity_search_terms(
+            opportunity_id,
+            ["evidencia externa"],
+        )
+        self.connector.description = "Descricao oficial atualizada"
+        self.sync()
+
+        result = self.repository.list_opportunities({"keywords": ["evidencia externa"]})
+        self.assertTrue(added)
+        self.assertFalse(repeated)
+        self.assertEqual(result["total"], 1)
 
     def test_keyword_filter_does_not_match_inside_another_word(self):
         self.connector.description = "Aquisição de roçadeira profissional"
@@ -643,6 +713,78 @@ class EtlSmokeTests(unittest.TestCase):
         self.assertEqual(len(repeated["arquivos"]), 1)
         self.assertEqual(len(repeated["itens"]), 2)
         self.assertEqual(self.counts()["source_records"], 2)
+
+    def test_internal_detail_can_defer_missing_remote_data(self):
+        import server
+
+        listing_service = ETLSyncService(self.repository, self.connector, PNCPMapper())
+        listing_service.sync(SyncRequest(
+            endpoint="proposta",
+            filters={"dataFinal": "20260806", "codigoModalidadeContratacao": 6},
+            fetch_details=False,
+            max_pages=1,
+            max_records=1,
+        ))
+        opportunity_id = self.repository.list_opportunities()["items"][0]["id"]
+        server.DETAIL_ITEM_FAILURE_CACHE.clear()
+        server.DETAIL_DOCUMENT_FAILURE_CACHE.clear()
+
+        with (
+            patch.object(server, "DATABASE_PATH", self.database_path),
+            patch.object(server, "ALLOW_DETAIL_DOCUMENT_ON_DEMAND", True),
+            patch.object(server, "ALLOW_DETAIL_ITEMS_ON_DEMAND", True),
+            patch.object(server, "schedule_detail_enrichment", return_value=True) as schedule,
+            patch.object(
+                server,
+                "PNCPConnector",
+                side_effect=AssertionError("PNCP must not block the fast response"),
+            ),
+        ):
+            detail = server.internal_opportunity_detail(
+                opportunity_id,
+                defer_enrichment=True,
+            )
+
+        self.assertEqual(detail["itens"], [])
+        self.assertEqual(detail["arquivos"], [])
+        self.assertTrue(detail["enriquecimento_pendente"])
+        self.assertIn("segundo plano", detail["aviso_enriquecimento"])
+        self.assertEqual(len(schedule.call_args.args[1]), 2)
+
+    def test_internal_detail_fast_read_does_not_start_remote_work(self):
+        import server
+
+        listing_service = ETLSyncService(self.repository, self.connector, PNCPMapper())
+        listing_service.sync(SyncRequest(
+            endpoint="proposta",
+            filters={"dataFinal": "20260806", "codigoModalidadeContratacao": 6},
+            fetch_details=False,
+            max_pages=1,
+            max_records=1,
+        ))
+        opportunity_id = self.repository.list_opportunities()["items"][0]["id"]
+        server.DETAIL_ITEM_FAILURE_CACHE.clear()
+        server.DETAIL_DOCUMENT_FAILURE_CACHE.clear()
+
+        with (
+            patch.object(server, "DATABASE_PATH", self.database_path),
+            patch.object(server, "ALLOW_DETAIL_DOCUMENT_ON_DEMAND", True),
+            patch.object(server, "ALLOW_DETAIL_ITEMS_ON_DEMAND", True),
+            patch.object(
+                server,
+                "schedule_detail_enrichment",
+                side_effect=AssertionError("fast read must not schedule remote work"),
+            ),
+        ):
+            detail = server.internal_opportunity_detail(
+                opportunity_id,
+                defer_enrichment=True,
+                schedule_deferred=False,
+            )
+
+        self.assertFalse(detail["enriquecimento_pendente"])
+        self.assertTrue(detail["enriquecimento_disponivel"])
+        self.assertIn("disponível", detail["aviso_enriquecimento"])
 
     def test_bloco2_enriches_one_missing_opportunity_and_reuses_sqlite(self):
         import server
@@ -1427,6 +1569,127 @@ class Bloco2ItemFlowTests(unittest.TestCase):
 
 
 class BatchItemEnrichmentTests(unittest.TestCase):
+    def test_batch_lock_rejects_a_second_process(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pid_path = Path(temp_dir) / "items.pid"
+            with enrich_missing_pncp_items._exclusive_process(pid_path):
+                self.assertEqual(
+                    pid_path.read_text(encoding="utf-8"),
+                    str(enrich_missing_pncp_items.os.getpid()),
+                )
+                with self.assertRaises(SystemExit):
+                    with enrich_missing_pncp_items._exclusive_process(pid_path):
+                        self.fail("a duplicate process acquired the same lock")
+
+            self.assertFalse(pid_path.exists())
+
+    def test_batch_runner_processes_a_large_queue_in_bounded_chunks(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = ETLRepository(Path(temp_dir) / "etl.sqlite3")
+            repository.initialize()
+            with repository.connect() as connection, connection:
+                for sequence in range(1, 6):
+                    connection.execute(
+                        """
+                        INSERT INTO opportunities (
+                            id, external_key, source, source_cnpj, year, sequence,
+                            title, published_at, proposal_start_at, proposal_end_at,
+                            detail_url, record_hash, created_at, updated_at
+                        ) VALUES (?, ?, 'pncp', '12345678000199', 2026, ?, ?,
+                                  '2026-08-10T09:00:00', '2026-08-20T09:00:00',
+                                  '2026-09-20T18:00:00', ?, 'hash',
+                                  '2026-08-10T09:00:00', '2026-08-10T09:00:00')
+                        """,
+                        (
+                            f"opportunity-{sequence}",
+                            f"12345678000199-1-{sequence:06d}/2026",
+                            sequence,
+                            f"Opportunity {sequence}",
+                            f"https://pncp.test/{sequence}",
+                        ),
+                    )
+
+            class Connector:
+                def __init__(self):
+                    self.calls = []
+
+                def iter_items(self, cnpj, year, sequence, max_pages):
+                    self.calls.append((cnpj, year, sequence, max_pages))
+                    payload = [{
+                        "numeroItem": 1,
+                        "descricao": f"Item da oportunidade {sequence}",
+                        "quantidade": 1,
+                        "unidadeMedida": "UN",
+                    }]
+                    yield PageResult(
+                        records=payload,
+                        page_number=1,
+                        total_pages=1,
+                        request_url=f"https://pncp.test/{sequence}/itens",
+                        raw_payload={"data": payload},
+                    )
+
+            connector = Connector()
+            args = SimpleNamespace(
+                date_from="2026-08-01",
+                date_to="2026-08-31",
+                as_of="2026-08-24",
+                scope="publication",
+                source="all",
+                limit=None,
+                batch_size=2,
+                dry_run=False,
+                workers=1,
+                request_delay=0,
+                retry_failures_after_hours=12,
+                item_max_pages=20,
+                item_page_size=50,
+                timeout=5,
+                retries=0,
+                retry_backoff=0,
+                between_delay=0,
+            )
+
+            before = enrich_missing_pncp_items._summarize_missing(
+                repository,
+                args.date_from,
+                scope=args.scope,
+                source=args.source,
+                date_to=args.date_to,
+                as_of=args.as_of,
+                retry_failures_after_hours=args.retry_failures_after_hours,
+            )
+            with (
+                patch.object(
+                    enrich_missing_pncp_items,
+                    "PNCPConnector",
+                    return_value=connector,
+                ),
+                patch("builtins.print"),
+            ):
+                result = enrich_missing_pncp_items._run_enrichment(
+                    args, repository, None
+                )
+            after = enrich_missing_pncp_items._summarize_missing(
+                repository,
+                args.date_from,
+                scope=args.scope,
+                source=args.source,
+                date_to=args.date_to,
+                as_of=args.as_of,
+                retry_failures_after_hours=args.retry_failures_after_hours,
+            )
+            with repository.connect() as connection:
+                item_count = connection.execute(
+                    "SELECT COUNT(*) FROM opportunity_items"
+                ).fetchone()[0]
+
+        self.assertEqual(before["total"], 5)
+        self.assertEqual(result, 0)
+        self.assertEqual(len(connector.calls), 5)
+        self.assertEqual(item_count, 5)
+        self.assertEqual(after["total"], 0)
+
     def test_missing_item_batch_prioritizes_open_then_future_opportunities(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repository = ETLRepository(Path(temp_dir) / "etl.sqlite3")

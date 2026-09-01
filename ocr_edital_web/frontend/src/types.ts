@@ -266,6 +266,8 @@ export interface OpportunityDetail {
     itens: string;
   };
   aviso_enriquecimento?: string;
+  enriquecimento_pendente?: boolean;
+  enriquecimento_disponivel?: boolean;
 }
 
 export interface OpportunityAnswer {

@@ -120,7 +120,9 @@ class ETLSyncService:
                     raw_payload=raw_composite,
                     opportunity=opportunity,
                     match=match,
-                    replace_children=_has_child_payload(raw_record, items, documents),
+                    replace_children=False,
+                    replace_items=_has_item_payload(raw_record, items),
+                    replace_documents=_has_document_payload(raw_record, documents),
                 )
             counters[outcome] += 1
         except Exception as exc:
@@ -169,6 +171,11 @@ class ETLSyncService:
                     items.extend(item_page.records)
                     item_pages.append(item_page.raw_payload)
                 raw_composite["items"] = item_pages
+                if not items:
+                    raw_composite["enrichment_errors"].append(
+                        "items: source returned no items"
+                    )
+                    items = None
             except Exception as exc:
                 raw_composite["enrichment_errors"].append(f"items: {exc}")
                 items = None
@@ -264,12 +271,11 @@ def _extract_records(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _has_child_payload(
+def _has_item_payload(
     raw_record: dict[str, Any],
     items: list[dict[str, Any]] | None,
-    documents: list[dict[str, Any]] | None,
 ) -> bool:
-    if items is not None or documents is not None:
+    if items is not None:
         return True
     return any(
         key in raw_record
@@ -277,6 +283,19 @@ def _has_child_payload(
             "itens",
             "items",
             "listaItens",
+        )
+    )
+
+
+def _has_document_payload(
+    raw_record: dict[str, Any],
+    documents: list[dict[str, Any]] | None,
+) -> bool:
+    if documents is not None:
+        return True
+    return any(
+        key in raw_record
+        for key in (
             "documentos",
             "arquivos",
             "anexos",

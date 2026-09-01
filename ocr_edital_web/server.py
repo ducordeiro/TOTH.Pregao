@@ -150,13 +150,23 @@ PNCP_SEARCH_JOBS = {}
 CATALOG_GENERATOR_JOBS = {}
 CATALOG_GENERATOR_PERSISTED_IDS = set()
 DETAIL_DOCUMENT_FAILURE_CACHE = {}
+DETAIL_ITEM_FAILURE_CACHE = {}
 SEARCH_CACHE_TTL = 300
+PNCP_SEARCH_RUNNING_JOB_TTL = 30 * 60
+PNCP_SEARCH_MAX_PAGES_PER_PARTITION = 20
+PNCP_BROAD_REFRESH_MAX_PAGES = 12
 SOURCE_CACHE = {}
 EXTRACTED_ITEMS_CACHE = {}
 IDENTIFICATION_CACHE = {}
 BLOCO2_ENRICHMENT_LOCKS = {}
 BLOCO2_ENRICHMENT_LOCKS_GUARD = threading.Lock()
 DETAIL_DOCUMENT_ENRICHMENT_LOCK = threading.Lock()
+DETAIL_ENRICHMENT_JOBS = set()
+DETAIL_ENRICHMENT_JOBS_LOCK = threading.Lock()
+DETAIL_ENRICHMENT_EXECUTOR = ThreadPoolExecutor(
+    max_workers=4,
+    thread_name_prefix="detail-enrichment",
+)
 CATALOG_TEXT_CACHE = {}
 CATALOG_DRAFT_CACHE = {}
 BUSINESS_FILE_CACHE = {}
@@ -4242,16 +4252,13 @@ def build_docx(
 ):
     table_paragraph_index = None
     if template_path and template_path.exists():
-        if (
-            mini_box_alignments
-            and mini_box_order is None
-            and document_block_order is None
-        ):
-            mini_box_order = [
-                node["id"]
-                for node in inspect_docx_structure(template_path)["nodes"]
-                if node["type"] == "MINI_BOX"
-            ]
+        template_mini_box_order = [
+            node["id"]
+            for node in inspect_docx_structure(template_path)["nodes"]
+            if node["type"] == "MINI_BOX"
+        ]
+        if mini_box_order is None and document_block_order is None:
+            mini_box_order = template_mini_box_order
         if document_block_order is not None:
             layout = resolve_document_block_layout(template_path, document_block_order)
             resolved_mini_box_order = list(layout.mini_box_order)
@@ -4264,12 +4271,13 @@ def build_docx(
             table_paragraph_index = layout.table_paragraph_index
         with TEMPLATE_LOCK:
             shutil.copyfile(template_path, output_path)
-        if mini_box_order is not None:
+        if template_mini_box_order:
             rebuild_docx_with_mini_box_order(
                 output_path,
                 output_path,
                 mini_box_order,
                 mini_box_alignments,
+                include_markers=False,
             )
         doc = Document(str(output_path))
     else:
@@ -5584,18 +5592,28 @@ def reconcile_pncp_search_rows(rows, request_url, filters):
     for raw_row in rows:
         counters["fetched"] += 1
         try:
-            cached_items = cached_search_row_items(raw_row) if filters.get("keywords") else []
-            opportunity = mapper.map(raw_row, items=cached_items or None)
+            matched_search_terms = raw_row.get("_matched_search_terms") or []
+            source_row = {
+                key: value
+                for key, value in raw_row.items()
+                if not key.startswith("_")
+            }
+            cached_items = cached_search_row_items(source_row) if filters.get("keywords") else []
+            opportunity = mapper.map(source_row, items=cached_items or None)
             match = classifier.classify(opportunity, {})
             outcome, opportunity_id = repository.persist_record(
                 run_id=run_id,
                 source_endpoint="api/search",
                 request_url=request_url,
-                raw_payload=raw_row,
+                raw_payload=source_row,
                 opportunity=opportunity,
                 match=match,
                 replace_children=False,
             )
+            if matched_search_terms:
+                add_search_terms = getattr(repository, "add_opportunity_search_terms", None)
+                if add_search_terms is not None:
+                    add_search_terms(opportunity_id, matched_search_terms)
             if cached_items and outcome != "inserted":
                 repository.replace_opportunity_items(opportunity_id, opportunity.items)
             counters[outcome] += 1
@@ -5607,7 +5625,11 @@ def reconcile_pncp_search_rows(rows, request_url, filters):
                     source="pncp",
                     source_endpoint="api/search",
                     request_url=request_url,
-                    raw_payload=raw_row,
+                    raw_payload={
+                        key: value
+                        for key, value in raw_row.items()
+                        if not key.startswith("_")
+                    },
                     error_message=f"{type(exc).__name__}: {exc}",
                 )
             except Exception:
@@ -5667,7 +5689,10 @@ def search_pncp_app_editais(params, data_inicial, data_final):
     aggregate_cache_hit = consolidated is not None
 
     if consolidated is None:
-        partition_ufs = selected_ufs or BRAZILIAN_UFS
+        # The PNCP search endpoint already supports a nationwide query. Splitting
+        # an unfiltered search into 27 UF requests returns the same coverage while
+        # multiplying network traffic and the chance of partial failures.
+        partition_ufs = selected_ufs or ("",)
         partitions = tuple(
             (search_term, partition_uf)
             for search_term in search_terms
@@ -5678,7 +5703,8 @@ def search_pncp_app_editais(params, data_inicial, data_final):
             query = dict(base_query)
             if search_term:
                 query["q"] = search_term
-            query["ufs"] = partition_uf
+            if partition_uf:
+                query["ufs"] = partition_uf
             query["pagina"] = page
             url = f"{PNCP_SEARCH_URL}?{urlencode(query)}"
             try:
@@ -5720,6 +5746,7 @@ def search_pncp_app_editais(params, data_inicial, data_final):
                     urls_by_page[page_key] = url
 
         partition_pages = {}
+        source_truncated = False
         source_total = 0
         for search_term, partition_uf in partitions:
             payload = payloads.get((search_term, partition_uf, 1), {})
@@ -5730,10 +5757,26 @@ def search_pncp_app_editais(params, data_inicial, data_final):
             except (TypeError, ValueError):
                 partition_total = len(payload.get("items", []))
             source_total += partition_total
-            partition_pages[(search_term, partition_uf)] = (
+            available_pages = (
                 max(1, (partition_total + source_page_size - 1) // source_page_size)
                 if partition_total else 1
             )
+            is_broad_national_refresh = not any((
+                search_term,
+                selected_ufs,
+                modalidade,
+                purchase_number,
+                uasg,
+                object_type,
+            ))
+            page_limit = (
+                PNCP_BROAD_REFRESH_MAX_PAGES
+                if is_broad_national_refresh
+                else PNCP_SEARCH_MAX_PAGES_PER_PARTITION
+            )
+            if available_pages > page_limit:
+                source_truncated = True
+            partition_pages[(search_term, partition_uf)] = min(available_pages, page_limit)
 
         remaining_keys = [
             (search_term, partition_uf, page)
@@ -5812,17 +5855,24 @@ def search_pncp_app_editais(params, data_inicial, data_final):
                 row_key = search_row_unique_key(row)
                 candidates_by_term[search_term].setdefault(row_key, row)
 
-        filtered_rows = []
-        seen = set()
+        rows_by_key = {}
         for search_term, candidates in candidates_by_term.items():
-            for row in filter_rows_by_complete_search_term(
-                candidates.values(), search_term
-            ):
+            # A row returned by /api/search?q=... has already matched the PNCP
+            # search index. Re-querying every item's API and document here both
+            # discarded valid rows on transient failures and made one search fan
+            # out into hundreds of requests.
+            for row in candidates.values():
                 row_key = search_row_unique_key(row)
-                if row_key in seen:
-                    continue
-                seen.add(row_key)
-                filtered_rows.append(row)
+                matched_term = compact(search_term)
+                existing = rows_by_key.get(row_key)
+                if existing is None:
+                    existing = dict(row)
+                    existing["_matched_search_terms"] = []
+                    rows_by_key[row_key] = existing
+                if matched_term and matched_term not in existing["_matched_search_terms"]:
+                    existing["_matched_search_terms"].append(matched_term)
+
+        filtered_rows = list(rows_by_key.values())
 
         filtered_rows.sort(
             key=lambda row: str(
@@ -5841,6 +5891,7 @@ def search_pncp_app_editais(params, data_inicial, data_final):
             and len(payloads) == source_pages
             and not rate_limited
             and not timed_out
+            and not source_truncated
         )
         reconciliation = None
         if reconcile_requested:
@@ -5885,6 +5936,7 @@ def search_pncp_app_editais(params, data_inicial, data_final):
             "rate_limited": rate_limited,
             "timed_out": timed_out,
             "failed_pages": failed_pages,
+            "truncated": source_truncated,
             "complete": complete,
             "page_cache_hit": page_cache_hit,
             "reconciliation": reconciliation,
@@ -5916,6 +5968,7 @@ def search_pncp_app_editais(params, data_inicial, data_final):
         "rate_limited": consolidated["rate_limited"],
         "timed_out": consolidated["timed_out"],
         "failed_pages": consolidated["failed_pages"],
+        "truncated": consolidated.get("truncated", False),
         "complete": consolidated["complete"],
         "dataInicial": data_inicial,
         "dataFinal": data_final,
@@ -6097,9 +6150,7 @@ def sync_pncp_opportunity_endpoints(params, data_inicial, data_final):
         cached["cache_hit"] = True
         return cached
 
-    endpoint_specs = [
-        ("proposta", {"dataFinal": data_final or today}),
-    ]
+    endpoint_specs = []
     if publication_start <= publication_end:
         modalities = [int(selected_modality)] if selected_modality else list(PNCP_MODALITY_IDS)
         endpoint_specs.extend([
@@ -6114,8 +6165,15 @@ def sync_pncp_opportunity_endpoints(params, data_inicial, data_final):
                 "modality_codes": modalities,
             }),
         ])
+    proposal_spec = ("proposta", {"dataFinal": data_final or today})
+    if date_field == "publicacao":
+        endpoint_specs.append(proposal_spec)
+    else:
+        endpoint_specs.insert(0, proposal_spec)
     if selected_modality:
-        endpoint_specs[0][1]["codigoModalidadeContratacao"] = int(selected_modality)
+        for endpoint, endpoint_filters in endpoint_specs:
+            if endpoint == "proposta":
+                endpoint_filters["codigoModalidadeContratacao"] = int(selected_modality)
 
     endpoint_results_by_name = {
         endpoint: {
@@ -6204,26 +6262,24 @@ def search_pncp_open_bids(params):
         raise ValueError("Data inicial nao pode ser maior que a data final.")
     if date_range_days(data_inicial, data_final) > 30:
         raise ValueError("O periodo maximo e de 30 dias corridos.")
-    result = search_pncp_app_editais(params, data_inicial, data_final)
     reconcile_requested = str(params.get("reconciliar") or "").strip().lower() in {
         "1", "true", "yes", "sim",
     }
-    if not reconcile_requested:
-        return result
-
-    app_summary = result.get("reconciliation")
-    official_summary = sync_pncp_opportunity_endpoints(params, data_inicial, data_final)
-    result["reconciliation"] = combined_reconciliation_summary(
-        app_summary, official_summary
-    )
-    result["reconciliation"]["endpoints"] = [
-        {
+    result = search_pncp_app_editais(params, data_inicial, data_final)
+    if reconcile_requested:
+        app_summary = result.get("reconciliation") or {
+            "status": "success",
+            "fetched": 0,
+            "inserted": 0,
+            "updated": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+        app_summary["endpoints"] = [{
             "name": "api/search",
-            "status": (app_summary or {}).get("status", "success"),
-        },
-        *official_summary.get("endpoints", []),
-    ]
-    result["complete"] = bool(result.get("complete")) and official_summary["status"] == "success"
+            "status": app_summary.get("status", "success"),
+        }]
+        result["reconciliation"] = app_summary
     return result
 
 
@@ -6243,6 +6299,7 @@ def pncp_search_job_key(params):
             "uasg",
             "ordenacao",
             "reconciliar",
+            "tamanhoPagina",
         )
     }
     filters["palavraChave"] = split_search_keywords(filters["palavraChave"])
@@ -6267,6 +6324,7 @@ def quick_pncp_search_preview(params):
         raise ValueError("Tipo do objeto invalido.")
     purchase_number = compact(params.get("numeroCompra"))
     uasg = re.sub(r"\D", "", compact(params.get("uasg")))
+    page_size = bounded_int(params.get("tamanhoPagina"), 50, 1, 100)
     base_query = {
         "tipos_documento": "edital",
         "status": "recebendo_proposta",
@@ -6336,7 +6394,7 @@ def quick_pncp_search_preview(params):
             if not row_matches_opportunity_type(row, object_type):
                 continue
             candidates.append(row)
-        for row in filter_opportunity_rows_by_search_term(candidates, search_term):
+        for row in candidates:
             row_key = search_row_unique_key(row)
             if row_key in seen:
                 continue
@@ -6351,13 +6409,13 @@ def quick_pncp_search_preview(params):
         ),
         reverse=True,
     )
-    results = [map_search_item(row) for row in rows[:10]]
+    results = [map_search_item(row) for row in rows[:page_size]]
     return {
         "results": results,
         "total": len(results),
         "source_total": source_total,
         "pagina": 1,
-        "tamanhoPagina": 10,
+        "tamanhoPagina": page_size,
         "total_pages": 1 if results else 0,
         "has_previous": False,
         "has_next": False,
@@ -6379,58 +6437,72 @@ def quick_pncp_search_preview(params):
 
 
 def search_pncp_open_bids_fast(params):
+    data_inicial = optional_yyyymmdd(params.get("dataInicial"))
+    data_final = optional_yyyymmdd(params.get("dataFinal"))
+    if data_inicial and data_final and data_inicial > data_final:
+        raise ValueError("Data inicial nao pode ser maior que a data final.")
+    if date_range_days(data_inicial, data_final) > 30:
+        raise ValueError("O periodo maximo e de 30 dias corridos.")
+    parse_search_date_field(params.get("campoData"))
+    object_type = str(params.get("tipoObjeto") or "").strip().lower()
+    if object_type not in {"", "material", "servico"}:
+        raise ValueError("Tipo do objeto invalido.")
+    if len(compact(params.get("numeroCompra"))) > 80:
+        raise ValueError("Número da compra excede 80 caracteres.")
+    if len(re.sub(r"\D", "", compact(params.get("uasg")))) > 20:
+        raise ValueError("UASG excede 20 dígitos.")
+
     job_key = pncp_search_job_key(params)
+    page_size = bounded_int(params.get("tamanhoPagina"), 50, 1, 100)
+    pending = {
+        "results": [],
+        "total": 0,
+        "source_total": 0,
+        "pagina": 1,
+        "tamanhoPagina": page_size,
+        "total_pages": 0,
+        "complete": False,
+        "searching": True,
+        "source": "api/search",
+        "rate_limited": False,
+        "timed_out": False,
+    }
     now = time.time()
     with PNCP_SEARCH_JOB_LOCK:
-        expired = [
-            key for key, job in PNCP_SEARCH_JOBS.items()
-            if now - job["created_at"] >= SEARCH_CACHE_TTL
-        ]
+        expired = []
+        for key, existing_job in PNCP_SEARCH_JOBS.items():
+            reference_time = existing_job.get("completed_at") or existing_job["created_at"]
+            ttl = (
+                SEARCH_CACHE_TTL
+                if existing_job.get("status") == "complete"
+                else PNCP_SEARCH_RUNNING_JOB_TTL
+            )
+            if now - reference_time >= ttl:
+                expired.append(key)
         for key in expired:
             PNCP_SEARCH_JOBS.pop(key, None)
         job = PNCP_SEARCH_JOBS.get(job_key)
         if job and job["status"] == "complete":
-            if job["result"].get("complete"):
-                result = search_pncp_open_bids(params)
-            else:
-                result = copy.deepcopy(job["result"])
+            result = copy.deepcopy(job["result"])
             result["searching"] = False
             return result
         if job:
-            return copy.deepcopy(job.get("preview") or {
-                "results": [],
-                "total": 0,
-                "pagina": 1,
-                "tamanhoPagina": 10,
-                "total_pages": 0,
-                "complete": False,
-                "searching": True,
-            })
+            return copy.deepcopy(job.get("preview") or pending)
         PNCP_SEARCH_JOBS[job_key] = {
             "created_at": now,
-            "status": "starting",
-            "preview": None,
+            "status": "running",
+            "preview": copy.deepcopy(pending),
             "result": None,
         }
-
-    try:
-        preview = quick_pncp_search_preview(params)
-    except Exception:
-        with PNCP_SEARCH_JOB_LOCK:
-            PNCP_SEARCH_JOBS.pop(job_key, None)
-        raise
-    with PNCP_SEARCH_JOB_LOCK:
-        PNCP_SEARCH_JOBS[job_key]["preview"] = copy.deepcopy(preview)
-        PNCP_SEARCH_JOBS[job_key]["status"] = "running"
 
     def complete_search():
         try:
             full_params = dict(params)
             full_params["pagina"] = "1"
-            full_params["tamanhoPagina"] = "10"
+            full_params["tamanhoPagina"] = str(page_size)
             result = search_pncp_open_bids(full_params)
         except Exception as exc:
-            result = copy.deepcopy(preview)
+            result = copy.deepcopy(pending)
             result.update({
                 "complete": False,
                 "searching": False,
@@ -6441,9 +6513,10 @@ def search_pncp_open_bids_fast(params):
             if job:
                 job["status"] = "complete"
                 job["result"] = result
+                job["completed_at"] = time.time()
 
     threading.Thread(target=complete_search, daemon=True).start()
-    return preview
+    return pending
 
 
 PUBLIC_PNCP_FIELDS = (
@@ -10395,7 +10468,57 @@ def enrich_detail_documents(opportunity_id, current_detail):
     return etl_repository().get_opportunity(opportunity_id) or current_detail
 
 
-def internal_opportunity_detail(opportunity_id):
+def _run_deferred_detail_enrichment(opportunity_id, tasks):
+    try:
+        for label, function, arguments in tasks:
+            try:
+                function(*arguments)
+                if label == "Itens oficiais pendentes":
+                    cache_discard(DETAIL_ITEM_FAILURE_CACHE, opportunity_id)
+            except Exception as exc:
+                if label == "Itens oficiais pendentes":
+                    cache_set(
+                        DETAIL_ITEM_FAILURE_CACHE,
+                        opportunity_id,
+                        str(exc) or "O PNCP não respondeu à consulta de itens oficiais.",
+                    )
+                LOGGER.warning(
+                    "Enriquecimento assíncrono do detalhamento falhou (%s, %s): %s",
+                    opportunity_id,
+                    label,
+                    exc,
+                )
+    finally:
+        with DETAIL_ENRICHMENT_JOBS_LOCK:
+            DETAIL_ENRICHMENT_JOBS.discard(opportunity_id)
+
+
+def schedule_detail_enrichment(opportunity_id, tasks):
+    if not tasks:
+        return False
+    with DETAIL_ENRICHMENT_JOBS_LOCK:
+        if opportunity_id in DETAIL_ENRICHMENT_JOBS:
+            return True
+        DETAIL_ENRICHMENT_JOBS.add(opportunity_id)
+    try:
+        DETAIL_ENRICHMENT_EXECUTOR.submit(
+            _run_deferred_detail_enrichment,
+            opportunity_id,
+            tuple(tasks),
+        )
+    except Exception:
+        with DETAIL_ENRICHMENT_JOBS_LOCK:
+            DETAIL_ENRICHMENT_JOBS.discard(opportunity_id)
+        raise
+    return True
+
+
+def internal_opportunity_detail(
+    opportunity_id,
+    *,
+    defer_enrichment=False,
+    schedule_deferred=True,
+):
     detail = etl_repository().get_opportunity(opportunity_id)
     if detail is None:
         raise FileNotFoundError("Oportunidade nao localizada no radar interno.")
@@ -10406,9 +10529,20 @@ def internal_opportunity_detail(opportunity_id):
     sequence = row.get("sequence")
     has_pncp_identity = bool(cnpj and year and sequence)
     enrichment_tasks = []
+    enrichment_pending = False
+    enrichment_available = False
 
     if not detail["items"]:
-        if ALLOW_DETAIL_ITEMS_ON_DEMAND and has_pncp_identity:
+        cached_item_failure = cache_get(
+            DETAIL_ITEM_FAILURE_CACHE,
+            opportunity_id,
+            DOCUMENT_CACHE_TTL,
+        ) if defer_enrichment else None
+        if cached_item_failure:
+            enrichment_messages.append(
+                f"Itens oficiais pendentes: {cached_item_failure}"
+            )
+        elif ALLOW_DETAIL_ITEMS_ON_DEMAND and has_pncp_identity:
             enrichment_tasks.append(
                 ("Itens oficiais pendentes", enrich_opportunity_items, (cnpj, year, sequence))
             )
@@ -10445,7 +10579,23 @@ def internal_opportunity_detail(opportunity_id):
         else:
             enrichment_messages.append("Arquivos oficiais ainda nao carregados no banco local.")
 
-    if enrichment_tasks:
+    if enrichment_tasks and defer_enrichment:
+        enrichment_available = True
+        if schedule_deferred:
+            enrichment_pending = schedule_detail_enrichment(opportunity_id, enrichment_tasks)
+        else:
+            with DETAIL_ENRICHMENT_JOBS_LOCK:
+                enrichment_pending = opportunity_id in DETAIL_ENRICHMENT_JOBS
+        status_text = (
+            "atualização em segundo plano."
+            if enrichment_pending
+            else "atualização disponível em segundo plano."
+        )
+        enrichment_messages.extend(
+            f"{label}: {status_text}"
+            for label, _function, _arguments in enrichment_tasks
+        )
+    elif enrichment_tasks:
         with ThreadPoolExecutor(max_workers=len(enrichment_tasks)) as executor:
             pending = [
                 (label, executor.submit(function, *arguments))
@@ -10522,6 +10672,8 @@ def internal_opportunity_detail(opportunity_id):
             "itens": "Auditoria ETL do PNCP",
         },
         "aviso_enriquecimento": detail.get("enrichment_error", ""),
+        "enriquecimento_pendente": enrichment_pending,
+        "enriquecimento_disponivel": enrichment_available,
     }
 
 
@@ -11088,7 +11240,23 @@ class App(BaseHTTPRequestHandler):
         )
         if internal_detail_match:
             try:
-                json_response(self, 200, internal_opportunity_detail(internal_detail_match.group(1)))
+                detail_query = parse_qs(urlparse(self.path).query)
+                defer_enrichment = str(
+                    (detail_query.get("rapido") or detail_query.get("deferir") or [""])[0]
+                ).strip().lower() in {"1", "true", "yes", "sim"}
+                started_at = time.perf_counter()
+                payload = internal_opportunity_detail(
+                    internal_detail_match.group(1),
+                    defer_enrichment=defer_enrichment,
+                    schedule_deferred=not defer_enrichment,
+                )
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                json_response(
+                    self,
+                    200,
+                    payload,
+                    {"Server-Timing": f"opportunity-detail;dur={elapsed_ms:.1f}"},
+                )
             except FileNotFoundError as exc:
                 json_response(self, 404, {"error": str(exc)})
             except Exception:
@@ -11323,6 +11491,29 @@ class App(BaseHTTPRequestHandler):
                 json_response(self, 422, {"error": str(exc)})
             except Exception as exc:
                 json_response(self, 502, {"error": str(exc) or "Nao foi possivel sincronizar o PNCP."})
+            return
+        internal_enrichment_match = re.fullmatch(
+            r"/(?:api/)?internal/opportunities/([a-f0-9]{32})/enrich",
+            request_path,
+        )
+        if internal_enrichment_match:
+            try:
+                payload = internal_opportunity_detail(
+                    internal_enrichment_match.group(1),
+                    defer_enrichment=True,
+                    schedule_deferred=True,
+                )
+                json_response(self, 202, {
+                    "id": internal_enrichment_match.group(1),
+                    "scheduled": bool(payload.get("enriquecimento_pendente")),
+                    "available": bool(payload.get("enriquecimento_disponivel")),
+                })
+            except FileNotFoundError as exc:
+                json_response(self, 404, {"error": str(exc)})
+            except Exception as exc:
+                json_response(self, 502, {
+                    "error": str(exc) or "Nao foi possivel agendar o enriquecimento.",
+                })
             return
         internal_ignore_match = re.fullmatch(
             r"/(?:api/)?internal/opportunities/([a-f0-9]{32})/ignore",

@@ -39,6 +39,7 @@ import {
   normalizeMoney,
   normalizePncpUrl,
   parseMoneyToCents,
+  sanitizeMoneyInput,
   validateTemplateFile,
 } from "../utils";
 import { StatusMessage } from "./StatusMessage";
@@ -259,9 +260,10 @@ export function ProposalBlock({
   };
 
   const updateUnitValue = (key: string, value: string) => {
+    const numericValue = sanitizeMoneyInput(value);
     resetProcessedTemplateState();
-    setUnitValues((current) => ({ ...current, [key]: value }));
-    if (value.trim()) {
+    setUnitValues((current) => ({ ...current, [key]: numericValue }));
+    if (numericValue) {
       setSelectedKeys((current) => new Set(current).add(key));
     }
   };
@@ -830,9 +832,14 @@ export function ProposalBlock({
                     <td>
                       <input
                         className="money-input"
+                        inputMode="decimal"
                         value={item.valor_unitario}
                         onChange={(event) =>
-                          updateProcessedItem(index, "valor_unitario", event.target.value)
+                          updateProcessedItem(
+                            index,
+                            "valor_unitario",
+                            sanitizeMoneyInput(event.target.value),
+                          )
                         }
                         onBlur={() => {
                           const normalized = normalizeMoney(item.valor_unitario);

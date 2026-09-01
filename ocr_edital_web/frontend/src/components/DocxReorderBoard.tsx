@@ -126,8 +126,11 @@ function SortableDocumentBlock({
     isDragging,
   } = useSortable({ id, disabled });
   const style: CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
+    // Sortable transforms may include scale when cards span different grid tracks.
+    // Translation-only movement keeps the dragged card's dimensions unchanged.
+    transform: CSS.Translate.toString(transform),
+    transition: isDragging ? "none" : transition,
+    willChange: isDragging ? "transform" : undefined,
   };
 
   return (
@@ -358,6 +361,8 @@ export function DocxReorderBoard({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [tableDocked, setTableDocked] = useState(true);
   const [announcement, setAnnouncement] = useState("");
+  const previewFrameRef = useRef<number | null>(null);
+  const queuedPreviewRef = useRef<{ order: string[]; nodeId: string } | null>(null);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 160, tolerance: 6 } }),
@@ -366,7 +371,12 @@ export function DocxReorderBoard({
   const tableBlock = structure.generated_table_block;
   const tableId = tableBlock.id;
   const displayedOrder = previewOrder || blockOrder;
+  // Keep the physical sortable grid stable while dnd-kit animates its positions.
+  // The lightweight replica still follows displayedOrder in real time.
   const pageOrder = tableDocked
+    ? blockOrder.filter((nodeId) => nodeId !== tableId)
+    : blockOrder;
+  const displayedPageOrder = tableDocked
     ? displayedOrder.filter((nodeId) => nodeId !== tableId)
     : displayedOrder;
   const miniBoxes = useMemo(() => miniBoxNodes(nodes), [nodes]);
@@ -398,12 +408,23 @@ export function DocxReorderBoard({
     || hasAlignmentChanges;
 
   useEffect(() => {
+    if (previewFrameRef.current !== null) {
+      window.cancelAnimationFrame(previewFrameRef.current);
+      previewFrameRef.current = null;
+    }
+    queuedPreviewRef.current = null;
     setPreviewOrder(null);
     previewOrderRef.current = null;
     setActiveId(null);
     setTableDocked(true);
     setAnnouncement("");
   }, [structure.document_signature]);
+
+  useEffect(() => () => {
+    if (previewFrameRef.current !== null) {
+      window.cancelAnimationFrame(previewFrameRef.current);
+    }
+  }, []);
 
   const commitOrder = (nextOrder: string[], message: string) => {
     onOrderChange(nextOrder);
@@ -445,12 +466,28 @@ export function DocxReorderBoard({
       return;
     }
     const candidate = reorderDocumentBlocks(blockOrder, draggingId, overId);
-    setPreviewOrder(candidate);
+    if (ordersMatch(candidate, previewOrderRef.current || blockOrder)) return;
+
     previewOrderRef.current = candidate;
-    announcePosition(candidate, draggingId);
+    queuedPreviewRef.current = { order: candidate, nodeId: draggingId };
+    if (previewFrameRef.current !== null) return;
+
+    previewFrameRef.current = window.requestAnimationFrame(() => {
+      previewFrameRef.current = null;
+      const queuedPreview = queuedPreviewRef.current;
+      queuedPreviewRef.current = null;
+      if (!queuedPreview) return;
+      setPreviewOrder(queuedPreview.order);
+      announcePosition(queuedPreview.order, queuedPreview.nodeId);
+    });
   };
 
   const clearDragState = () => {
+    if (previewFrameRef.current !== null) {
+      window.cancelAnimationFrame(previewFrameRef.current);
+      previewFrameRef.current = null;
+    }
+    queuedPreviewRef.current = null;
     setActiveId(null);
     setPreviewOrder(null);
     previewOrderRef.current = null;
@@ -613,8 +650,8 @@ export function DocxReorderBoard({
                       content={generated ? tableBlock.content : node?.content || ""}
                       generated={generated}
                       tone={tonesById.get(nodeId) || 1}
-                      position={index + 1}
-                      total={pageOrder.length}
+                      position={displayedPageOrder.indexOf(nodeId) + 1 || index + 1}
+                      total={displayedPageOrder.length}
                       disabled={disabled}
                       alignment={generated
                         ? "center"

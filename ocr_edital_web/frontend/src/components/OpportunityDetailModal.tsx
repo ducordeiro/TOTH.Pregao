@@ -14,6 +14,7 @@ import {
   convertOpportunityToBusiness,
   getOpportunityDetail,
   importBusiness,
+  requestOpportunityEnrichment,
 } from "../api";
 import type {
   Bid,
@@ -33,6 +34,9 @@ interface OpportunityDetailModalProps {
   onGenerateProposal: (selection: OpportunityItemSelection) => void;
   onGenerateCatalog: (selection: OpportunityItemSelection) => void;
 }
+
+const DETAIL_REFRESH_INTERVAL_MS = 1_000;
+const DETAIL_REFRESH_MAX_ATTEMPTS = 12;
 
 function formatCurrency(value: number | string | null) {
   if (value === null || value === "") return "Não informado";
@@ -76,6 +80,8 @@ export function OpportunityDetailModal({
   useEffect(() => {
     if (!bid) return;
     let cancelled = false;
+    let enrichmentRequested = false;
+    let refreshTimer: number | undefined;
     setDetail(null);
     setMessage(null);
     setLoading(true);
@@ -85,23 +91,41 @@ export function OpportunityDetailModal({
     setOpenItems(new Set());
     setQuestion("");
     setAnswer(null);
-    getOpportunityDetail(bid)
-      .then((payload) => {
-        if (!cancelled) setDetail(payload);
-      })
-      .catch((error) => {
-        if (!cancelled) {
+    const loadDetail = async (attempt: number) => {
+      try {
+        const payload = await getOpportunityDetail(bid);
+        if (cancelled) return;
+        setDetail(payload);
+        if (attempt === 0) setLoading(false);
+        if (payload.enriquecimento_disponivel && !enrichmentRequested && bid.id) {
+          enrichmentRequested = true;
+          await requestOpportunityEnrichment(bid.id);
+          if (cancelled) return;
+          refreshTimer = window.setTimeout(
+            () => void loadDetail(attempt + 1),
+            DETAIL_REFRESH_INTERVAL_MS,
+          );
+        } else if (payload.enriquecimento_pendente && attempt < DETAIL_REFRESH_MAX_ATTEMPTS) {
+          refreshTimer = window.setTimeout(
+            () => void loadDetail(attempt + 1),
+            DETAIL_REFRESH_INTERVAL_MS,
+          );
+        }
+      } catch (error) {
+        if (!cancelled && attempt === 0) {
           setMessage({
             kind: "error",
             text: error instanceof Error ? error.message : "Não foi possível carregar a oportunidade.",
           });
         }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      } finally {
+        if (!cancelled && attempt === 0) setLoading(false);
+      }
+    };
+    void loadDetail(0);
     return () => {
       cancelled = true;
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
     };
   }, [bid]);
 
@@ -195,7 +219,7 @@ export function OpportunityDetailModal({
       wide
       className="opportunity-modal"
     >
-      {loading ? <div className="opportunity-loading">Carregando dados oficiais do PNCP...</div> : null}
+      {loading ? <div className="opportunity-loading">Carregando detalhamento da oportunidade...</div> : null}
       <StatusMessage message={message} />
       {opportunity && detail ? (
         <div className="opportunity-detail">

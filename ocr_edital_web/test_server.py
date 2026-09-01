@@ -2360,6 +2360,7 @@ class PncpSearchPaginationTests(unittest.TestCase):
     def test_search_reconciliation_preserves_existing_items_and_documents(self):
         persisted = []
         finished = []
+        indexed_terms = []
         repository = SimpleNamespace(
             initialize=lambda: None,
             create_run=lambda *_args: "run-1",
@@ -2368,6 +2369,9 @@ class PncpSearchPaginationTests(unittest.TestCase):
             ),
             save_failed_source_record=lambda **_kwargs: None,
             finish_run=lambda run_id, **kwargs: finished.append((run_id, kwargs)),
+            add_opportunity_search_terms=lambda opportunity_id, terms: indexed_terms.append(
+                (opportunity_id, terms)
+            ),
         )
         row = {
             "id": "pncp-search-1",
@@ -2379,6 +2383,7 @@ class PncpSearchPaginationTests(unittest.TestCase):
             "description": "Aquisicao de cadeiras",
             "uf": "SP",
             "data_fim_vigencia": "2026-08-30T10:00:00",
+            "_matched_search_terms": ["cadeira"],
         }
 
         with patch.object(server, "etl_repository", return_value=repository):
@@ -2391,7 +2396,9 @@ class PncpSearchPaginationTests(unittest.TestCase):
         self.assertEqual(result["inserted"], 1)
         self.assertEqual(result["failed"], 0)
         self.assertFalse(persisted[0]["replace_children"])
+        self.assertNotIn("_matched_search_terms", persisted[0]["raw_payload"])
         self.assertEqual(persisted[0]["opportunity"].sequence, 77)
+        self.assertEqual(indexed_terms, [("opportunity-1", ["cadeira"])])
         self.assertEqual(finished[0][1]["status"], "success")
 
     def test_search_reconciliation_persists_items_used_by_keyword_filter(self):
@@ -2434,7 +2441,7 @@ class PncpSearchPaginationTests(unittest.TestCase):
         self.assertEqual(persisted[0]["opportunity"].items[0].title, "Monitor")
         server.SEARCH_ITEM_CACHE.clear()
 
-    def test_full_online_search_reconciles_when_requested(self):
+    def test_full_online_search_reconciles_without_starting_full_etl(self):
         row = {
             "id": "pncp-search-2",
             "orgao_cnpj": "12345678000199",
@@ -2455,20 +2462,6 @@ class PncpSearchPaginationTests(unittest.TestCase):
             "skipped": 0,
             "failed": 0,
         }
-        official_summary = {
-            "status": "success",
-            "fetched": 0,
-            "inserted": 0,
-            "updated": 0,
-            "skipped": 0,
-            "failed": 0,
-            "run_ids": [],
-            "endpoints": [
-                {"name": "proposta", "status": "success"},
-                {"name": "publicacao", "status": "success"},
-                {"name": "atualizacao", "status": "success"},
-            ],
-        }
         server.PNCP_RESULT_CACHE.clear()
         with (
             patch.object(server, "request_json", return_value={"items": [row], "total": 1}),
@@ -2480,8 +2473,7 @@ class PncpSearchPaginationTests(unittest.TestCase):
             patch.object(
                 server,
                 "sync_pncp_opportunity_endpoints",
-                return_value=official_summary,
-            ),
+            ) as official_sync,
         ):
             response = server.search_pncp_open_bids({
                 "dataInicial": "20260801",
@@ -2493,10 +2485,11 @@ class PncpSearchPaginationTests(unittest.TestCase):
             })
 
         reconcile.assert_called_once()
+        official_sync.assert_not_called()
         self.assertEqual(response["reconciliation"]["inserted"], 1)
         self.assertEqual(
             {endpoint["name"] for endpoint in response["reconciliation"]["endpoints"]},
-            {"api/search", "proposta", "publicacao", "atualizacao"},
+            {"api/search"},
         )
         self.assertTrue(response["complete"])
         server.PNCP_RESULT_CACHE.clear()
@@ -2669,6 +2662,66 @@ class PncpSearchPaginationTests(unittest.TestCase):
         self.assertEqual({row["uf"] for row in response["results"]}, {"SP", "RJ"})
         server.PNCP_RESULT_CACHE.clear()
 
+    def test_search_without_uf_uses_one_nationwide_partition(self):
+        row = {
+            "id": "national-result",
+            "orgao_cnpj": "12345678000199",
+            "ano": "2026",
+            "numero_sequencial": "81",
+            "orgao_nome": "Orgao nacional",
+            "title": "Edital 81",
+            "description": "Aquisicao de mobiliario",
+            "uf": "SP",
+            "data_fim_vigencia": "2026-08-20T10:00:00",
+        }
+
+        server.PNCP_RESULT_CACHE.clear()
+        with patch.object(
+            server,
+            "request_json",
+            return_value={"items": [row], "total": 1},
+        ) as request:
+            response = server.search_pncp_open_bids({
+                "dataInicial": "20260801",
+                "dataFinal": "20260830",
+                "palavraChave": "mobiliario",
+            })
+
+        self.assertEqual(response["total"], 1)
+        self.assertEqual(request.call_count, 1)
+        self.assertNotIn("ufs", parse_qs(urlparse(request.call_args.args[0]).query))
+        server.PNCP_RESULT_CACHE.clear()
+
+    def test_keyword_result_from_pncp_is_not_discarded_by_item_failures(self):
+        row = {
+            "id": "source-index-match",
+            "orgao_cnpj": "12345678000199",
+            "ano": "2026",
+            "numero_sequencial": "82",
+            "orgao_nome": "Orgao nacional",
+            "title": "Edital 82",
+            "description": "Aquisicao de equipamentos",
+            "uf": "SP",
+            "data_fim_vigencia": "2026-08-20T10:00:00",
+        }
+
+        server.PNCP_RESULT_CACHE.clear()
+        with (
+            patch.object(server, "request_json", return_value={"items": [row], "total": 1}),
+            patch.object(server, "list_pncp_items") as items,
+            patch.object(server, "get_search_row_document_items") as documents,
+        ):
+            response = server.search_pncp_open_bids({
+                "dataInicial": "20260801",
+                "dataFinal": "20260830",
+                "palavraChave": "cadeira",
+            })
+
+        self.assertEqual(response["total"], 1)
+        items.assert_not_called()
+        documents.assert_not_called()
+        server.PNCP_RESULT_CACHE.clear()
+
     def test_quick_preview_queries_each_selected_uf(self):
         def fake_request(url, timeout=12):
             uf = parse_qs(urlparse(url).query)["ufs"][0]
@@ -2692,6 +2745,7 @@ class PncpSearchPaginationTests(unittest.TestCase):
                 "dataInicial": "20260801",
                 "dataFinal": "20260830",
                 "uf": "SP,RJ",
+                "tamanhoPagina": "50",
             })
 
         requested_ufs = {
@@ -2700,6 +2754,7 @@ class PncpSearchPaginationTests(unittest.TestCase):
         }
         self.assertEqual(requested_ufs, {"SP", "RJ"})
         self.assertEqual({row["uf"] for row in response["results"]}, {"SP", "RJ"})
+        self.assertEqual(response["tamanhoPagina"], 50)
 
     def test_invalid_object_type_is_rejected_before_requesting_pncp(self):
         with patch.object(server, "request_json") as request:
@@ -2723,33 +2778,27 @@ class PncpSearchPaginationTests(unittest.TestCase):
 
         request.assert_not_called()
 
-    def test_fast_search_returns_preview_then_completed_result(self):
-        preview = {
-            "results": [{"processo": "preview"}],
-            "total": 1,
-            "pagina": 1,
-            "tamanhoPagina": 10,
-            "total_pages": 1,
-            "complete": False,
-            "searching": True,
-        }
+    def test_fast_search_returns_immediately_then_completed_result(self):
         complete = {
             "results": [{"processo": "complete"}],
             "total": 120,
             "pagina": 1,
-            "tamanhoPagina": 10,
-            "total_pages": 12,
+            "tamanhoPagina": 50,
+            "total_pages": 3,
             "complete": True,
         }
         params = {
             "dataInicial": "20260725",
             "dataFinal": "20260823",
             "codigoModalidadeContratacao": "6",
+            "tamanhoPagina": "50",
         }
         server.PNCP_SEARCH_JOBS.clear()
         with (
-            patch.object(server, "quick_pncp_search_preview", return_value=preview),
-            patch.object(server, "search_pncp_open_bids", return_value=complete),
+            patch.object(server, "quick_pncp_search_preview") as quick_preview,
+            patch.object(
+                server, "search_pncp_open_bids", return_value=complete
+            ) as complete_search,
         ):
             first = server.search_pncp_open_bids_fast(params)
             for _ in range(50):
@@ -2761,9 +2810,25 @@ class PncpSearchPaginationTests(unittest.TestCase):
             second = server.search_pncp_open_bids_fast(params)
 
         self.assertTrue(first["searching"])
+        self.assertEqual(first["results"], [])
         self.assertFalse(second["searching"])
         self.assertEqual(second["total"], 120)
+        self.assertEqual(second["tamanhoPagina"], 50)
+        quick_preview.assert_not_called()
+        complete_search.assert_called_once()
         server.PNCP_SEARCH_JOBS.clear()
+
+    def test_fast_search_cache_separates_requested_page_sizes(self):
+        base = {
+            "dataInicial": "20260801",
+            "dataFinal": "20260830",
+            "campoData": "publicacao",
+        }
+
+        page_ten = server.pncp_search_job_key({**base, "tamanhoPagina": "10"})
+        page_fifty = server.pncp_search_job_key({**base, "tamanhoPagina": "50"})
+
+        self.assertNotEqual(page_ten, page_fifty)
 
     def test_search_returns_full_requested_page_and_pagination_metadata(self):
         rows = [
@@ -2839,6 +2904,34 @@ class PncpSearchPaginationTests(unittest.TestCase):
         self.assertEqual(response["pages_checked"], 2)
         self.assertTrue(response["complete"])
         self.assertEqual(len(response["results"]), 50)
+        server.PNCP_RESULT_CACHE.clear()
+
+    def test_broad_national_refresh_has_a_bounded_page_count(self):
+        row = {
+            "orgao_cnpj": "12345678000199",
+            "ano": "2026",
+            "numero_sequencial": "1",
+            "orgao_nome": "Orgao",
+            "title": "Edital",
+            "description": "Aquisicao de mobiliario",
+            "data_fim_vigencia": "2026-08-01T10:00:00",
+        }
+        source_total = 500 * (server.PNCP_BROAD_REFRESH_MAX_PAGES + 5)
+
+        server.PNCP_RESULT_CACHE.clear()
+        with patch.object(
+            server,
+            "request_json",
+            return_value={"items": [row], "total": source_total},
+        ) as request:
+            response = server.search_pncp_open_bids({
+                "dataInicial": "20260725",
+                "dataFinal": "20260823",
+            })
+
+        self.assertEqual(request.call_count, server.PNCP_BROAD_REFRESH_MAX_PAGES)
+        self.assertTrue(response["truncated"])
+        self.assertFalse(response["complete"])
         server.PNCP_RESULT_CACHE.clear()
 
 

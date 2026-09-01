@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState } from "react";
-import { ArrowRight, ChevronLeft, ChevronRight, Search, Trash2 } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronLeft, ChevronRight, Search, SlidersHorizontal, Trash2 } from "lucide-react";
 import { searchBids, searchOnlineBids } from "../api";
 import {
   ONLINE_SEARCH_MAX_POLLS,
   ONLINE_SEARCH_POLL_MS,
+  SEARCH_PAGE_SIZE,
   shouldDeferOnlinePolling,
   toggleOrderedValue,
 } from "../searchControls";
@@ -27,7 +28,6 @@ function defaultDates() {
   return { start: localIsoDate(start), end: localIsoDate(end) };
 }
 
-const PAGE_SIZE = 10;
 type SearchDateField = "publicacao" | "abertura" | "encerramento";
 
 const DATE_FIELD_OPTIONS: Array<{ value: SearchDateField; label: string; column: string }> = [
@@ -49,7 +49,7 @@ function mergeBidPages(localResults: Bid[], onlineResults: Bid[]) {
   for (const bid of [...onlineResults, ...localResults]) {
     merged.set(bidIdentity(bid), bid);
   }
-  return [...merged.values()].slice(0, PAGE_SIZE);
+  return [...merged.values()].slice(0, SEARCH_PAGE_SIZE);
 }
 
 const BRAZILIAN_UFS = [
@@ -104,6 +104,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
   const [message, setMessage] = useState<UiMessage | null>(null);
   const [busy, setBusy] = useState(false);
   const [selectedBid, setSelectedBid] = useState<Bid | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const clear = () => {
     searchRequestRef.current += 1;
@@ -124,6 +125,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
     setTotalPages(0);
     setSearchingAll(false);
     setBusy(false);
+    setFiltersOpen(false);
     setMessage({ kind: "info", text: "Filtros limpos." });
   };
 
@@ -174,7 +176,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
         numeroCompra: purchaseNumber.trim(),
         uasg: uasg.trim(),
         pagina: String(targetPage),
-        tamanhoPagina: String(PAGE_SIZE),
+        tamanhoPagina: String(SEARCH_PAGE_SIZE),
         rapido: "1",
       });
       const applyLocalPayload = (payload: SearchResponse) => {
@@ -182,7 +184,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
         const nextPage = payload.pagina || targetPage;
         const nextTotal = payload.total || 0;
         const nextTotalPages =
-          payload.total_pages ?? (nextTotal ? Math.ceil(nextTotal / PAGE_SIZE) : 0);
+          payload.total_pages ?? (nextTotal ? Math.ceil(nextTotal / SEARCH_PAGE_SIZE) : 0);
         setResults(nextResults);
         setPage(nextPage);
         setTotal(nextTotal);
@@ -217,8 +219,8 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
       }
 
       if (targetPage !== 1 && localAvailable) {
-        const pageStart = (targetPage - 1) * PAGE_SIZE;
-        const pageCount = Math.max(0, Math.min(PAGE_SIZE, initialTotal - pageStart));
+        const pageStart = (targetPage - 1) * SEARCH_PAGE_SIZE;
+        const pageCount = Math.max(0, Math.min(SEARCH_PAGE_SIZE, initialTotal - pageStart));
         setSearchingAll(false);
         setMessage({
           kind: pageCount ? "success" : "warning",
@@ -261,6 +263,16 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
           await new Promise((resolve) => window.setTimeout(resolve, ONLINE_SEARCH_POLL_MS));
           if (requestId !== searchRequestRef.current) return;
           onlinePayload = await searchOnlineBids(reconciliationParams);
+          if (localAvailable && (poll + 1) % 3 === 0) {
+            const progressivePayload = await searchBids(params);
+            if (requestId !== searchRequestRef.current) return;
+            applyLocalPayload(progressivePayload);
+            const progressiveTotal = progressivePayload.total || 0;
+            setMessage({
+              kind: "info",
+              text: `Exibindo ${progressiveTotal.toLocaleString("pt-BR")} edital(is) da base interna enquanto a atualização do PNCP continua...`,
+            });
+          }
         }
         if (requestId !== searchRequestRef.current) return;
         if (onlinePayload.searching) {
@@ -350,131 +362,147 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
       </div>
 
       <form className="search-form" onSubmit={submit}>
-        <div className="period-field">
-          <span className="field-label">Data pesquisada</span>
-          <div className="date-field-segmented" role="group" aria-label="Campo de data da pesquisa">
-            {DATE_FIELD_OPTIONS.map((option) => (
-              <button
-                className={dateField === option.value ? "is-active" : ""}
-                type="button"
-                key={option.value}
-                aria-pressed={dateField === option.value}
-                onClick={() => setDateField(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
+        <div className="search-primary-row">
+          <div className="keyword-field">
+            <span className="field-label">Palavras-chave</span>
+            <KeywordTagInput
+              terms={keywords}
+              draft={keywordDraft}
+              onTermsChange={setKeywords}
+              onDraftChange={setKeywordDraft}
+            />
+            <small>Separe cada referência com ponto e vírgula (;).</small>
           </div>
-          <span className="field-label">Período de {selectedDateOption.label.toLocaleLowerCase("pt-BR")}</span>
-          <DateRangePicker
-            startDate={startDate}
-            endDate={endDate}
-            onChange={(start, end) => {
-              setStartDate(start);
-              setEndDate(end);
-            }}
-          />
-          <small>Selecione um período de até 30 dias.</small>
-          {dateField === "encerramento" ? (
-            <label className="period-missing-date-option">
-              <input
-                type="checkbox"
-                checked={includeMissingEndDate}
-                onChange={(event) => setIncludeMissingEndDate(event.target.checked)}
-              />
-              Incluir publicadas no período sem data de encerramento
-            </label>
-          ) : null}
-        </div>
-        <div className="uf-field">
-          <span className="field-label">UF</span>
-          <div className="uf-option-row" role="group" aria-label="Selecionar UFs da oportunidade">
+          <div className="form-actions search-primary-actions">
             <button
-              className={`uf-option-button is-all${ufs.length === 0 ? " is-active" : ""}`}
+              className={`button button-secondary search-filter-toggle${filtersOpen ? " is-active" : ""}`}
               type="button"
-              aria-pressed={ufs.length === 0}
-              onClick={() => setUfs([])}
+              aria-expanded={filtersOpen}
+              aria-controls="search-advanced-filters"
+              onClick={() => setFiltersOpen((current) => !current)}
             >
-              Todas
+              <SlidersHorizontal size={17} />
+              Filtros
+              <ChevronDown className="search-filter-chevron" size={16} />
             </button>
-            {BRAZILIAN_UFS.map(([code, name]) => {
-              const selected = ufs.includes(code);
-              return (
-                <button
-                  className={`uf-option-button${selected ? " is-active" : ""}`}
-                  type="button"
-                  key={code}
-                  title={name}
-                  aria-label={`${name} (${code})`}
-                  aria-pressed={selected}
-                  onClick={() => {
-                    setUfs((current) => toggleOrderedValue(
-                      current,
-                      code,
-                      BRAZILIAN_UFS.map(([ufCode]) => ufCode),
-                    ));
-                  }}
-                >
-                  {code}
-                </button>
-              );
-            })}
+            <button className="button button-primary" type="submit" disabled={busy}>
+              <Search size={17} />
+              {busy ? "Consultando..." : "Buscar contratações"}
+            </button>
+            <button className="button button-secondary" type="button" disabled={busy} onClick={clear}>
+              <Trash2 size={17} />
+              Limpar
+            </button>
           </div>
         </div>
-        <div className="keyword-field">
-          <span className="field-label">Palavras-chave</span>
-          <KeywordTagInput
-            terms={keywords}
-            draft={keywordDraft}
-            onTermsChange={setKeywords}
-            onDraftChange={setKeywordDraft}
-          />
-          <small>Separe cada referência com ponto e vírgula (;).</small>
-        </div>
-        <label>
-          Tipo do objeto
-          <select value={objectType} onChange={(e) => setObjectType(e.target.value)}>
-            <option value="">Materiais e serviços</option>
-            <option value="material">Materiais</option>
-            <option value="servico">Serviços</option>
-          </select>
-        </label>
-        <label>
-          Modalidade
-          <select value={modality} onChange={(e) => setModality(e.target.value)}>
-            <option value="">Todas</option>
-            <option value="6">Pregão eletrônico</option>
-            <option value="8">Dispensa eletrônica</option>
-          </select>
-        </label>
-        <label>
-          Número da compra
-          <input
-            value={purchaseNumber}
-            maxLength={80}
-            placeholder="Ex.: 90010/2026"
-            onChange={(event) => setPurchaseNumber(event.target.value)}
-          />
-        </label>
-        <label>
-          UASG
-          <input
-            value={uasg}
-            inputMode="numeric"
-            maxLength={20}
-            placeholder="Ex.: 123456"
-            onChange={(event) => setUasg(event.target.value.replace(/\D/g, ""))}
-          />
-        </label>
-        <div className="form-actions">
-          <button className="button button-primary" type="submit" disabled={busy}>
-            <Search size={17} />
-            {busy ? "Consultando..." : "Buscar contratações"}
-          </button>
-          <button className="button button-secondary" type="button" disabled={busy} onClick={clear}>
-            <Trash2 size={17} />
-            Limpar
-          </button>
+
+        <div id="search-advanced-filters" className="search-advanced-filters" hidden={!filtersOpen}>
+          <div className="period-field">
+            <span className="field-label">Data pesquisada</span>
+            <div className="date-field-segmented" role="group" aria-label="Campo de data da pesquisa">
+              {DATE_FIELD_OPTIONS.map((option) => (
+                <button
+                  className={dateField === option.value ? "is-active" : ""}
+                  type="button"
+                  key={option.value}
+                  aria-pressed={dateField === option.value}
+                  onClick={() => setDateField(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <span className="field-label">Período de {selectedDateOption.label.toLocaleLowerCase("pt-BR")}</span>
+            <DateRangePicker
+              startDate={startDate}
+              endDate={endDate}
+              onChange={(start, end) => {
+                setStartDate(start);
+                setEndDate(end);
+              }}
+            />
+            <small>Selecione um período de até 30 dias.</small>
+            {dateField === "encerramento" ? (
+              <label className="period-missing-date-option">
+                <input
+                  type="checkbox"
+                  checked={includeMissingEndDate}
+                  onChange={(event) => setIncludeMissingEndDate(event.target.checked)}
+                />
+                Incluir publicadas no período sem data de encerramento
+              </label>
+            ) : null}
+          </div>
+          <div className="uf-field">
+            <span className="field-label">UF</span>
+            <div className="uf-option-row" role="group" aria-label="Selecionar UFs da oportunidade">
+              <button
+                className={`uf-option-button is-all${ufs.length === 0 ? " is-active" : ""}`}
+                type="button"
+                aria-pressed={ufs.length === 0}
+                onClick={() => setUfs([])}
+              >
+                Todas
+              </button>
+              {BRAZILIAN_UFS.map(([code, name]) => {
+                const selected = ufs.includes(code);
+                return (
+                  <button
+                    className={`uf-option-button${selected ? " is-active" : ""}`}
+                    type="button"
+                    key={code}
+                    title={name}
+                    aria-label={`${name} (${code})`}
+                    aria-pressed={selected}
+                    onClick={() => {
+                      setUfs((current) => toggleOrderedValue(
+                        current,
+                        code,
+                        BRAZILIAN_UFS.map(([ufCode]) => ufCode),
+                      ));
+                    }}
+                  >
+                    {code}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <label>
+            Tipo do objeto
+            <select value={objectType} onChange={(e) => setObjectType(e.target.value)}>
+              <option value="">Materiais e serviços</option>
+              <option value="material">Materiais</option>
+              <option value="servico">Serviços</option>
+            </select>
+          </label>
+          <label>
+            Modalidade
+            <select value={modality} onChange={(e) => setModality(e.target.value)}>
+              <option value="">Todas</option>
+              <option value="6">Pregão eletrônico</option>
+              <option value="8">Dispensa eletrônica</option>
+            </select>
+          </label>
+          <label>
+            Número da compra
+            <input
+              value={purchaseNumber}
+              maxLength={80}
+              placeholder="Ex.: 90010/2026"
+              onChange={(event) => setPurchaseNumber(event.target.value)}
+            />
+          </label>
+          <label>
+            UASG
+            <input
+              value={uasg}
+              inputMode="numeric"
+              maxLength={20}
+              placeholder="Ex.: 123456"
+              onChange={(event) => setUasg(event.target.value.replace(/\D/g, ""))}
+            />
+          </label>
         </div>
       </form>
 

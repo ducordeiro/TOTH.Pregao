@@ -2,12 +2,14 @@ import type { SearchResponse } from "./types";
 
 export const ONLINE_SEARCH_MAX_POLLS = 60;
 export const ONLINE_SEARCH_POLL_MS = 1_000;
+export const SEARCH_PAGE_SIZE = 50;
 
 export function shouldDeferOnlinePolling(
-  payload: Pick<SearchResponse, "results" | "rate_limited" | "timed_out">,
+  payload: Pick<SearchResponse, "results" | "rate_limited" | "searching" | "timed_out">,
   localAvailable: boolean,
 ) {
   return localAvailable
+    && payload.searching === false
     && !payload.results?.length
     && Boolean(payload.timed_out || payload.rate_limited);
 }

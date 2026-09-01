@@ -5,6 +5,7 @@ import {
   normalizePncpUrl,
   normalizeMoney,
   parseMoneyToCents,
+  sanitizeMoneyInput,
 } from "./utils";
 
 describe("money utilities", () => {
@@ -19,6 +20,11 @@ describe("money utilities", () => {
 
   it("rejects negative values", () => {
     expect(parseMoneyToCents("-1,00")).toBeNull();
+  });
+
+  it("removes letters and currency symbols from monetary input", () => {
+    expect(sanitizeMoneyInput("abcR$ 1.250,90xyz")).toBe("1.250,90");
+    expect(sanitizeMoneyInput("10 reais")).toBe("10");
   });
 });
 

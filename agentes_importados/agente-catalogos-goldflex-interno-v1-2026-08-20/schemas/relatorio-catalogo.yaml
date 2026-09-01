@@ -1,0 +1,33 @@
+schema: catalogo-tecnico.v1
+case:
+  id: ""
+  source_pdf: ""
+  reference_model: ""
+  version: ""
+  reviewed_at: ""
+  reviewer: ""
+visual_review:
+  page_count: null
+  legibility: ""
+  model_comparison:
+    confirmed_matches: []
+    deviations: []
+    pending: []
+products:
+  - product_id: ""
+    name_as_printed: ""
+    family: "cadeira_de_escritorio"
+    variant: ""
+    evidence_status: "confirmado | visual_indicado | nao_comprovado | ausente | a_confirmar"
+    evidence: [{page: null, region: "", excerpt_or_description: ""}]
+    normalized:
+      basic: {code: "", name: "", category: "", status: ""}
+      intermediate: {dimensions: {}, upholstery_or_shell: "", materials: [], finishes: [], components: []}
+      complete: {mechanisms: [], adjustments: [], options: [], load_rating: "", warranty: "", packaging: ""}
+    conflicts: []
+    missing_or_to_confirm: []
+final_review:
+  result: "aprovado | aprovado_com_pendencias | reprovado"
+  blockers: []
+  confirmations: []
+  notes: ""

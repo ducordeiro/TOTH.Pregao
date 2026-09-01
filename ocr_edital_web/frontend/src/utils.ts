@@ -69,6 +69,10 @@ export function normalizeMoney(value: string): string | null {
   return cents === null ? null : formatCents(cents);
 }
 
+export function sanitizeMoneyInput(value: string): string {
+  return String(value || "").replace(/[^\d.,]/g, "");
+}
+
 function parseDecimal(value: string | number | null): { coefficient: bigint; scale: number } | null {
   const normalized = String(value ?? "").trim().replace(/\./g, "").replace(",", ".");
   if (!/^\d+(?:\.\d+)?$/.test(normalized)) return null;

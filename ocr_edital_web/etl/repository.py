@@ -142,6 +142,64 @@ class ETLRepository:
             row["name"]
             for row in connection.execute("PRAGMA table_info(opportunities)").fetchall()
         }
+        if "search_aliases" not in opportunity_columns:
+            connection.execute(
+                "ALTER TABLE opportunities ADD COLUMN search_aliases TEXT NOT NULL DEFAULT ''"
+            )
+            opportunity_columns.add("search_aliases")
+        search_triggers = {
+            row["name"]: row["sql"] or ""
+            for row in connection.execute(
+                """
+                SELECT name, sql FROM sqlite_master
+                WHERE type = 'trigger'
+                  AND name IN ('opportunities_search_ai', 'opportunities_search_au')
+                """
+            ).fetchall()
+        }
+        if any(
+            "search_aliases" not in search_triggers.get(trigger_name, "")
+            for trigger_name in ("opportunities_search_ai", "opportunities_search_au")
+        ):
+            connection.executescript(
+                """
+                DROP TRIGGER IF EXISTS opportunities_search_ai;
+                DROP TRIGGER IF EXISTS opportunities_search_au;
+
+                CREATE TRIGGER opportunities_search_ai AFTER INSERT ON opportunities BEGIN
+                  INSERT OR REPLACE INTO opportunity_search(rowid, opportunity_id, content)
+                  VALUES (
+                    NEW.rowid,
+                    NEW.id,
+                    TRIM(
+                      COALESCE(NEW.title, '') || ' ' || COALESCE(NEW.description, '') || ' ' ||
+                      COALESCE(NEW.buyer_name, '') || ' ' || COALESCE(NEW.city, '') || ' ' ||
+                      COALESCE(NEW.modality, '') || ' ' || COALESCE(NEW.process_number, '') || ' ' ||
+                      COALESCE(NEW.pncp_control_number, '') || ' ' || COALESCE(NEW.uasg, '') || ' ' ||
+                      COALESCE(NEW.status, '') || ' ' || COALESCE(NEW.search_aliases, '')
+                    )
+                  );
+                END;
+
+                CREATE TRIGGER opportunities_search_au AFTER UPDATE ON opportunities BEGIN
+                  DELETE FROM opportunity_search WHERE rowid = OLD.rowid;
+                  INSERT INTO opportunity_search(rowid, opportunity_id, content)
+                  SELECT
+                    o.rowid,
+                    o.id,
+                    TRIM(
+                      COALESCE(o.title, '') || ' ' || COALESCE(o.description, '') || ' ' ||
+                      COALESCE(o.buyer_name, '') || ' ' || COALESCE(o.city, '') || ' ' ||
+                      COALESCE(o.modality, '') || ' ' || COALESCE(o.process_number, '') || ' ' ||
+                      COALESCE(o.pncp_control_number, '') || ' ' || COALESCE(o.uasg, '') || ' ' ||
+                      COALESCE(o.status, '') || ' ' || COALESCE(o.search_aliases, '') || ' ' ||
+                      COALESCE((SELECT GROUP_CONCAT(COALESCE(oi.source_item_id, '') || ' ' || COALESCE(oi.lot_number, '') || ' ' || COALESCE(oi.item_number, '') || ' ' || COALESCE(oi.title, '') || ' ' || COALESCE(oi.description, '') || ' ' || COALESCE(oi.technical_object, '') || ' ' || COALESCE(oi.unit, '') || ' ' || COALESCE(oi.status, ''), ' ') FROM opportunity_items oi WHERE oi.opportunity_id = o.id), '') || ' ' ||
+                      COALESCE((SELECT GROUP_CONCAT(COALESCE(od.document_type, '') || ' ' || COALESCE(od.title, '') || ' ' || COALESCE(od.filename, ''), ' ') FROM opportunity_documents od WHERE od.opportunity_id = o.id), '')
+                    )
+                  FROM opportunities o WHERE o.id = NEW.id;
+                END;
+                """
+            )
         opportunity_matches_changed = False
         if "object_matches_material" not in opportunity_columns:
             connection.execute(
@@ -308,7 +366,13 @@ class ETLRepository:
         opportunity: NormalizedOpportunity,
         match: MatchResult,
         replace_children: bool = True,
+        replace_items: bool | None = None,
+        replace_documents: bool | None = None,
     ) -> tuple[str, str]:
+        should_replace_items = replace_children if replace_items is None else replace_items
+        should_replace_documents = (
+            replace_children if replace_documents is None else replace_documents
+        )
         normalized = _normalized_payload(opportunity)
         normalized_json = _json(normalized)
         record_hash = _hash_text(normalized_json)
@@ -334,9 +398,13 @@ class ETLRepository:
                     outcome = "skipped"
                 else:
                     self._update_opportunity(connection, opportunity_id, opportunity, record_hash, now)
-                    if replace_children:
-                        self._replace_children(connection, opportunity_id, opportunity, now)
-                    else:
+                    if should_replace_items:
+                        self._replace_items(connection, opportunity_id, opportunity.items, now)
+                    if should_replace_documents:
+                        self._replace_documents(
+                            connection, opportunity_id, opportunity.documents, now
+                        )
+                    if not should_replace_items:
                         self._refresh_object_classification(connection, opportunity_id, now)
                     outcome = "updated"
             if not canonical_skip:
@@ -393,6 +461,50 @@ class ETLRepository:
                     ),
                 )
         return outcome, opportunity_id
+
+    def add_opportunity_search_terms(
+        self,
+        opportunity_id: str,
+        search_terms: list[str] | tuple[str, ...],
+    ) -> bool:
+        cleaned_terms = []
+        seen = set()
+        for value in search_terms:
+            term = " ".join(str(value or "").split()).strip()
+            folded = fold_search_text(term)
+            if not folded or folded in seen:
+                continue
+            seen.add(folded)
+            cleaned_terms.append(term[:120])
+        if not cleaned_terms:
+            return False
+
+        with self.connect() as connection, connection:
+            row = connection.execute(
+                "SELECT search_aliases FROM opportunities WHERE id = ?",
+                (opportunity_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            existing_terms = [
+                value.strip()
+                for value in str(row["search_aliases"] or "").splitlines()
+                if value.strip()
+            ]
+            existing_folded = {fold_search_text(value) for value in existing_terms}
+            additions = [
+                value
+                for value in cleaned_terms
+                if fold_search_text(value) not in existing_folded
+            ]
+            if not additions:
+                return False
+            aliases = "\n".join([*existing_terms, *additions])[:4000]
+            connection.execute(
+                "UPDATE opportunities SET search_aliases = ? WHERE id = ?",
+                (aliases, opportunity_id),
+            )
+        return True
 
     def save_failed_source_record(
         self,
@@ -578,6 +690,7 @@ class ETLRepository:
                     "COALESCE(o.pncp_control_number, '')",
                     "COALESCE(o.uasg, '')",
                     "COALESCE(o.status, '')",
+                    "COALESCE(o.search_aliases, '')",
                 ))
                 item_search_text = " || ' ' || ".join((
                     "COALESCE(oi.source_item_id, '')",
@@ -1451,11 +1564,33 @@ class ETLRepository:
         opportunity: NormalizedOpportunity,
         now: str,
     ) -> None:
+        ETLRepository._replace_items(
+            connection, opportunity_id, opportunity.items, now
+        )
+        ETLRepository._replace_documents(
+            connection, opportunity_id, opportunity.documents, now
+        )
+
+    @staticmethod
+    def _replace_items(
+        connection: sqlite3.Connection,
+        opportunity_id: str,
+        items: list[OpportunityItem],
+        now: str,
+    ) -> None:
         connection.execute("DELETE FROM opportunity_items WHERE opportunity_id = ?", (opportunity_id,))
-        connection.execute("DELETE FROM opportunity_documents WHERE opportunity_id = ?", (opportunity_id,))
-        ETLRepository._insert_items(connection, opportunity_id, opportunity.items, now)
+        ETLRepository._insert_items(connection, opportunity_id, items, now)
         ETLRepository._refresh_object_classification(connection, opportunity_id, now)
-        for document in opportunity.documents:
+
+    @staticmethod
+    def _replace_documents(
+        connection: sqlite3.Connection,
+        opportunity_id: str,
+        documents: list[OpportunityDocument],
+        now: str,
+    ) -> None:
+        connection.execute("DELETE FROM opportunity_documents WHERE opportunity_id = ?", (opportunity_id,))
+        for document in documents:
             connection.execute(
                 """
                 INSERT INTO opportunity_documents (

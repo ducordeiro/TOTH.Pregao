@@ -111,6 +111,32 @@ class DocxStructureTests(unittest.TestCase):
         self.assertEqual(rebuilt_image, original_image)
         self.assertEqual(rebuilt_relationships, original_relationships)
 
+    def test_rebuild_can_omit_only_the_structural_markers(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = self.create_marker_template(root)
+            output = root / "sem_marcadores.docx"
+            structure = inspect_docx_structure(source)
+            mini_boxes = [node for node in structure["nodes"] if node["type"] == "MINI_BOX"]
+
+            rebuild_docx_with_mini_box_order(
+                source,
+                output,
+                [node["id"] for node in mini_boxes],
+                include_markers=False,
+            )
+            rebuilt = Document(output)
+
+        self.assertEqual(
+            paragraph_text(rebuilt.paragraphs[0]),
+            "Prefixo Alpha {interno} entre Beta sufixo",
+        )
+        self.assertEqual(rebuilt.tables[0].cell(0, 0).text, "Antes Tabela depois")
+        self.assertEqual(
+            rebuilt.sections[0].header.paragraphs[0].text,
+            "Topo Cabecalho fixo",
+        )
+
     def test_rebuild_keeps_individual_alignment_with_the_moved_mini_box(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -300,7 +326,7 @@ class ProposalDocxIntegrationTests(unittest.TestCase):
 
         self.assertEqual(
             generated.paragraphs[0].text,
-            "Fixo {Segundo} entre {Primeiro} final",
+            "Fixo Segundo entre Primeiro final",
         )
         self.assertEqual(len(generated.tables), 1)
         self.assertEqual(generated.tables[0].rows[1].cells[3].text, "Item de teste")
@@ -340,11 +366,25 @@ class ProposalDocxIntegrationTests(unittest.TestCase):
             first_blocks = [child.tag.rsplit("}", 1)[-1] for child in body_children[:3]]
 
         self.assertEqual(first_blocks, ["p", "tbl", "p"])
-        self.assertEqual(generated.paragraphs[0].text, "Antes {Segundo}")
-        self.assertEqual(generated.paragraphs[1].text, "Depois {Primeiro}")
+        self.assertEqual(generated.paragraphs[0].text, "Antes Segundo")
+        self.assertEqual(generated.paragraphs[1].text, "Depois Primeiro")
         self.assertEqual(generated.paragraphs[0].alignment, WD_ALIGN_PARAGRAPH.LEFT)
         self.assertEqual(generated.paragraphs[1].alignment, WD_ALIGN_PARAGRAPH.CENTER)
         self.assertEqual(generated.tables[0].rows[1].cells[3].text, "Item de teste")
+
+    def test_build_docx_removes_markers_without_an_explicit_reorder(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template = self.create_template(root)
+            output = root / "saida_sem_reordenacao.docx"
+
+            server.build_docx([self.proposal_item()], template, output)
+            generated = Document(output)
+
+        self.assertEqual(
+            generated.paragraphs[0].text,
+            "Fixo Primeiro entre Segundo final",
+        )
 
     def test_build_docx_applies_the_requested_proposal_column_widths(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -1,0 +1,46 @@
+{
+  "versao": "3.0",
+  "finalidade": "Controlar a criação de catálogos Goldflex a partir de modelos já aprovados.",
+  "modelo_editorial_aprovado": "Mocho Ergonômico Bipartido — Estância Velha — versão 4",
+  "fonte_visual_principal": "Modelos de catalogos/catalogos de pedidos/dados extraidos/dados extraidos versao 3/catalogo-goldflex-mocho-ergonomico-bipartido-estancia-velha-v4.docx",
+  "fonte_tecnica_obrigatoria": ["laudo-tecnico-consolidado.md", "PDF do catálogo avaliado"],
+  "regras": {
+    "preservar_layout_aprovado": true,
+    "alterar_pdf_original": false,
+    "inventar_especificacao": false,
+    "publicar_instrucao_interna_de_producao": false,
+    "marcar_campo_sem_evidencia": true,
+    "registrar_fonte_e_pagina": true,
+    "tolerancia_medidas_percentual": 5,
+    "medida_maior_que_edital_pode_ser_configuracao": true,
+    "confirmar_configuracao_ofertada": true,
+    "bracos_sao_acessorio_configuravel": true,
+    "garantia_aceita_conforme_pedido": true,
+    "catalogos_genericos_por_modelo": true,
+    "proibir_catalogo_especifico_para_pedido": true,
+    "fabricante_padrao": "GOLDFLEX INDUSTRIA E COMERCIO DE MOVEIS E EQUIPAMENTOS LTDA CNPJ 33.661.439/0001-14"
+  },
+  "status_evidencia": [
+    "comprovado_no_catalogo",
+    "comprovado_no_laudo",
+    "confirmado_pelo_fabricante",
+    "configuracao_a_confirmar",
+    "nao_evidenciado",
+    "conflitante"
+  ],
+  "campos_minimos_catalogo": [
+    "identificacao_do_modelo",
+    "categoria_construtiva",
+    "tipo_de_movimento",
+    "assento",
+    "encosto",
+    "bracos_ou_prancheta",
+    "estrutura_e_base",
+    "materiais_e_revestimentos",
+    "acabamentos",
+    "medidas_e_tolerancias",
+    "capacidade_normas_e_laudos",
+    "fonte_da_informacao",
+    "pendencias_de_confirmacao"
+  ]
+}

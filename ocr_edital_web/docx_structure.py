@@ -438,6 +438,7 @@ def _rewrite_part(
     slots: list[MiniBoxSlot],
     replacement_contents: dict[str, str | None],
     replacement_alignments: dict[str, str] | None = None,
+    include_markers: bool = True,
 ) -> bytes:
     root = _parse_xml(data)
     paragraphs = root.xpath(".//w:p", namespaces=NAMESPACES)
@@ -463,11 +464,14 @@ def _rewrite_part(
                 _set_paragraph_text_alignment(paragraph, selected_alignments.pop())
         for slot in sorted(paragraph_slots, key=lambda item: item.start, reverse=True):
             replacement_content = replacement_contents[slot.id]
+            replacement = replacement_content
+            if replacement_content is not None and include_markers:
+                replacement = "{" + replacement_content + "}"
             _replace_text_range(
                 paragraph,
                 slot.start,
                 slot.end,
-                "{" + replacement_content + "}" if replacement_content is not None else "",
+                replacement or "",
             )
 
     return etree.tostring(
@@ -483,6 +487,7 @@ def rebuild_docx_with_mini_box_order(
     target_path: Path,
     ordered_ids: object,
     alignments: object = None,
+    include_markers: bool = True,
 ) -> None:
     source_path = Path(source_path)
     target_path = Path(target_path)
@@ -528,6 +533,7 @@ def rebuild_docx_with_mini_box_order(
                             slots_by_part[entry.filename],
                             replacement_contents,
                             replacement_alignments,
+                            include_markers,
                         )
                     target_archive.writestr(entry, data)
         os.replace(temporary_path, target_path)

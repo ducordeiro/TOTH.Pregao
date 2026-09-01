@@ -164,7 +164,7 @@ export async function syncPncpOpportunities(
 
 export async function getOpportunityDetail(bid: Bid): Promise<OpportunityDetail> {
   if (bid.id) {
-    const response = await fetch(`/internal/opportunities/${encodeURIComponent(bid.id)}`);
+    const response = await fetch(`/internal/opportunities/${encodeURIComponent(bid.id)}?rapido=1`);
     return parseJson<OpportunityDetail>(response);
   }
   const params = new URLSearchParams({
@@ -187,6 +187,14 @@ export async function getOpportunityDetail(bid: Bid): Promise<OpportunityDetail>
   });
   const response = await fetch(`/api/oportunidades/detalhe?${params.toString()}`);
   return parseJson<OpportunityDetail>(response);
+}
+
+export async function requestOpportunityEnrichment(opportunityId: string): Promise<void> {
+  const response = await fetch(
+    `/internal/opportunities/${encodeURIComponent(opportunityId)}/enrich`,
+    { method: "POST" },
+  );
+  await parseJson<{ id: string; scheduled: boolean }>(response);
 }
 
 export async function convertOpportunityToBusiness(

@@ -21,9 +21,16 @@ venv/
 
 # Node e caches pesados
 node_modules/
+.pnpm-store/
 .vite/
 coverage/
 *.tsbuildinfo
+
+# Dados e artefatos gerados em tempo de execucao
+ocr_edital_web/data/
+ocr_edital_web/logs/
+ocr_edital_web/outputs/
+ocr_edital_web/uploads/
 
 # Temporarios e logs locais
 ocr_edital_web/tmp/
