@@ -9,7 +9,9 @@ from docx import Document
 import catalog_generator
 from catalog_rules import (
     analyze_catalog_item,
+    apply_user_catalog_repertoire,
     catalog_policy_summary,
+    catalog_repertoire_key,
     catalog_summary,
     repertoire_summary,
 )
@@ -63,6 +65,9 @@ class CatalogRulesTests(unittest.TestCase):
             if criterion["criterio"] == "Norma técnica"
         )
         self.assertEqual(norm["estado"], "evidenciado_na_referencia")
+        self.assertEqual(item["observacao_repertorio"]["status"], "evidencia_completa")
+        self.assertTrue(item["observacao_repertorio"]["evidencias"])
+        self.assertEqual(item["observacao_repertorio"]["faltantes"], [])
 
     def test_dimension_below_express_minimum_blocks_catalog_without_hidden_tolerance(self):
         description = (
@@ -84,6 +89,10 @@ class CatalogRulesTests(unittest.TestCase):
         self.assertEqual(dimension["diferencas_absolutas_mm"][0], -20)
         self.assertIsNone(dimension["tolerancia_percentual"])
         self.assertEqual(item["status_catalogo"], "bloqueado_por_divergencia")
+        self.assertEqual(item["observacao_repertorio"]["status"], "evidencia_parcial")
+        self.assertTrue(
+            any("Dimensão" in entry for entry in item["observacao_repertorio"]["faltantes"])
+        )
 
     def test_unknown_product_does_not_promote_opportunity_text_to_catalog_claim(self):
         analyzed = analyze_catalog_item({
@@ -99,7 +108,78 @@ class CatalogRulesTests(unittest.TestCase):
         self.assertIsNone(analyzed["modelo_referencia"])
         self.assertEqual(analyzed["caracteristicas_catalogo"], [])
         self.assertEqual(analyzed["status_catalogo"], "bloqueado_sem_modelo")
+        self.assertEqual(analyzed["observacao_repertorio"]["status"], "sem_repertorio")
         self.assertEqual(catalog_summary([analyzed])["status_liberacao"], "bloqueado_sem_modelo")
+
+    def test_user_repertoire_applies_numeric_ruler_without_automatic_approval(self):
+        item = analyze_catalog_item({
+            "produto": "Peça X especial",
+            "descricao": "Peça X com tamanho de 5 cm",
+            "especificacao_tecnica": "Tamanho exigido: 5 cm",
+            "criterios_aceitacao": "",
+            "observacoes": "",
+            "categoria": "Componentes",
+            "subcategoria": "Peças",
+        })
+        repertoire = {
+            "id": "a" * 32,
+            "item_key": catalog_repertoire_key(item),
+            "produto_nome": "Peça X Goldflex",
+            "cobertura_completa": True,
+            "parametros": [{
+                "id": "b" * 32,
+                "componente": "Peça X",
+                "atributo": "Tamanho",
+                "comparacao": "intervalo",
+                "valor_requerido": 5,
+                "valor_minimo": 3,
+                "valor_maximo": 6,
+                "unidade": "cm",
+                "evidencia": "Ficha técnica interna FT-001",
+            }],
+        }
+
+        analyzed = apply_user_catalog_repertoire(item, repertoire)
+
+        self.assertEqual(analyzed["observacao_repertorio"]["status"], "evidencia_completa")
+        self.assertEqual(analyzed["observacao_repertorio"]["faltantes"], [])
+        self.assertEqual(analyzed["analise_aderencia"]["resultado"], "referencia_identificada")
+        self.assertFalse(analyzed["analise_aderencia"]["declaracao_atendimento_automatica"])
+        self.assertEqual(analyzed["status_catalogo"], "rascunho_para_revisao")
+
+    def test_user_repertoire_lists_divergence_and_incomplete_coverage(self):
+        item = analyze_catalog_item({
+            "produto": "Peça X especial",
+            "descricao": "Peça X com tamanho de 8 cm",
+            "especificacao_tecnica": "Tamanho exigido: 8 cm",
+            "criterios_aceitacao": "",
+            "observacoes": "",
+            "categoria": "Componentes",
+            "subcategoria": "Peças",
+        })
+        repertoire = {
+            "id": "c" * 32,
+            "produto_nome": "Peça X Goldflex",
+            "cobertura_completa": False,
+            "parametros": [{
+                "id": "d" * 32,
+                "componente": "Peça X",
+                "atributo": "Tamanho",
+                "comparacao": "intervalo",
+                "valor_requerido": 8,
+                "valor_minimo": 3,
+                "valor_maximo": 6,
+                "unidade": "cm",
+                "evidencia": "Ficha técnica interna FT-001",
+            }],
+        }
+
+        analyzed = apply_user_catalog_repertoire(item, repertoire)
+
+        self.assertEqual(analyzed["observacao_repertorio"]["status"], "evidencia_parcial")
+        self.assertEqual(analyzed["status_catalogo"], "bloqueado_por_divergencia")
+        self.assertTrue(any("8 cm" in entry for entry in analyzed["observacao_repertorio"]["faltantes"]))
+        self.assertTrue(any("marcado como parcial" in entry for entry in analyzed["observacao_repertorio"]["faltantes"]))
 
     def test_export_separates_generic_portrait_catalog_from_opportunity_audit(self):
         sentinel = "REQUISITO_SENTINELA_NAO_PUBLICAR"

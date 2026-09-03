@@ -7,8 +7,8 @@ import {
   CheckSquare2,
   ChevronRight,
   ClipboardList,
-  ExternalLink,
   Eye,
+  ExternalLink,
   FileArchive,
   FileText,
   Filter,
@@ -995,10 +995,9 @@ function BusinessDetailModal({
 
 interface BusinessBlockProps {
   responsibles: Responsible[];
-  onOpenClassifications: () => void;
 }
 
-export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessBlockProps) {
+export function BusinessBlock({ responsibles }: BusinessBlockProps) {
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1399,16 +1398,6 @@ export function BusinessBlock({ responsibles, onOpenClassifications }: BusinessB
                     <p>{stage.description}</p>
                   </div>
                   <span>{stageBusinesses.length}</span>
-                  {stage.id === "classificacao" ? (
-                    <button
-                      className="business-classification-button"
-                      type="button"
-                      onClick={onOpenClassifications}
-                      aria-label="Visualizar classificações por portal"
-                    >
-                      <Eye size={15} /> Visualizar classificações
-                    </button>
-                  ) : null}
                 </header>
                 <div className="business-column-scroll">
                   {stageBusinesses.length ? stageBusinesses.map((business) => (

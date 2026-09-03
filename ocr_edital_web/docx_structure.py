@@ -198,6 +198,7 @@ def _analyze_docx(path: Path) -> DocxAnalysis:
                                     ),
                                     "type": "FIXED_TEXT",
                                     "content": text[cursor:start],
+                                    "source_part": part_name,
                                 }
                             )
                             fixed_index += 1
@@ -217,6 +218,7 @@ def _analyze_docx(path: Path) -> DocxAnalysis:
                                 "content": content,
                                 "order": order,
                                 "text_align": text_align,
+                                "source_part": part_name,
                             }
                         )
                         slots.append(
@@ -247,6 +249,7 @@ def _analyze_docx(path: Path) -> DocxAnalysis:
                                 ),
                                 "type": "FIXED_TEXT",
                                 "content": text[cursor:],
+                                "source_part": part_name,
                             }
                         )
     except zipfile.BadZipFile as exc:

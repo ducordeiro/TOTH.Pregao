@@ -139,6 +139,7 @@ export interface BaseDocumentNode {
   id: string;
   type: NodeType;
   content: string;
+  source_part?: string;
 }
 
 export interface MiniBoxNode extends BaseDocumentNode {
@@ -439,6 +440,50 @@ export interface CatalogFitAnalysis {
   declaracao_atendimento_automatica: false;
 }
 
+export interface CatalogEvidenceObservation {
+  status: "sem_repertorio" | "evidencia_completa" | "evidencia_parcial";
+  titulo: string;
+  descricao: string;
+  evidencias: string[];
+  faltantes: string[];
+  fonte: string;
+}
+
+export interface CatalogTechnicalParameter {
+  id: string;
+  componente: string;
+  atributo: string;
+  comparacao: "intervalo" | "igual" | "contem";
+  valor_requerido?: number;
+  valor_minimo?: number;
+  valor_maximo?: number;
+  unidade?: string;
+  valor_requerido_texto?: string;
+  valor_atendido_texto?: string;
+  evidencia: string;
+}
+
+export interface CatalogUserRepertoire {
+  id: string;
+  item_key: string;
+  produto_nome: string;
+  cobertura_completa: boolean;
+  parametros: CatalogTechnicalParameter[];
+  criado_em: string;
+  atualizado_em: string;
+}
+
+export interface CatalogTechnicalRepertoireInput {
+  produto_nome: string;
+  cobertura_completa: boolean;
+  parametros: Array<Partial<CatalogTechnicalParameter> & {
+    componente: string;
+    atributo: string;
+    comparacao: CatalogTechnicalParameter["comparacao"];
+    evidencia: string;
+  }>;
+}
+
 export interface CatalogTechnicalSummary {
   items_analisados: number;
   items_com_modelo: number;
@@ -495,6 +540,8 @@ export interface GeneratedCatalogItem {
   modelo_referencia: CatalogModelReference | null;
   caracteristicas_catalogo: string[];
   analise_aderencia: CatalogFitAnalysis;
+  observacao_repertorio: CatalogEvidenceObservation;
+  repertorio_usuario?: CatalogUserRepertoire;
   status_catalogo: "bloqueado_sem_modelo" | "bloqueado_por_divergencia" | "rascunho_para_revisao";
   analise_desatualizada: boolean;
 }
@@ -516,6 +563,7 @@ export interface CatalogGeneratorJob {
   pncp_link: string;
   template_id?: string;
   template_name?: string;
+  template_source?: "managed" | "upload";
   status: "queued" | "processing" | "ready" | "failed";
   stage: string;
   progress: number;

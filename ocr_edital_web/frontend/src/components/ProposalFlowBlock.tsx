@@ -249,7 +249,7 @@ export function ProposalFlowBlock({ onBack, active = true }: ProposalFlowBlockPr
     <section className="workspace-section proposal-flow" aria-labelledby="flow-heading">
       <div className="section-heading flow-heading">
         <div>
-          <span className="section-kicker">Bloco 04 - Classificacao</span>
+          <span className="section-kicker">Bloco 05 - Classificacao</span>
           <h2 id="flow-heading">Classificacoes por portal</h2>
           <p>Kanban por portal, com historico de movimentacao e persistencia local.</p>
         </div>

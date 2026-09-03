@@ -1,30 +1,33 @@
 import { useCallback, useEffect, useState } from "react";
 import { listResponsibles, listTemplates } from "./api";
-import { CatalogBlock } from "./components/CatalogBlock";
 import { CatalogGeneratorBlock } from "./components/CatalogGeneratorBlock";
 import { BusinessBlock } from "./components/BusinessBlock";
 import { ProposalBlock } from "./components/ProposalBlock";
-import { ProjectStructureBlock } from "./components/ProjectStructureBlock";
-import { ProposalFlowBlock } from "./components/ProposalFlowBlock";
 import { ResponsibleManagerModal } from "./components/ResponsibleManagerModal";
 import { SearchBlock } from "./components/SearchBlock";
 import { Sidebar, type ActiveBlock } from "./components/Sidebar";
 import { TemplateManagerModal } from "./components/TemplateManagerModal";
+import {
+  automaticSelectionId,
+  loadProposalPreferences,
+  saveProposalPreferences,
+} from "./proposalPreferences";
 import type { OpportunityItemSelection, Responsible, Template, UiMessage } from "./types";
-import { CLASSIFICATION_HASH, opensClassifications } from "./classificationNavigation";
 
 export default function App() {
-  const classificationHash = opensClassifications(window.location.hash);
-  const [activeBlock, setActiveBlock] = useState<ActiveBlock>(classificationHash ? "business" : "search");
-  const [classificationOpen, setClassificationOpen] = useState(classificationHash);
+  const [activeBlock, setActiveBlock] = useState<ActiveBlock>("search");
   const [pncpLink, setPncpLink] = useState("");
   const [proposalSelection, setProposalSelection] = useState<OpportunityItemSelection | null>(null);
   const [catalogSelection, setCatalogSelection] = useState<OpportunityItemSelection | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [responsibles, setResponsibles] = useState<Responsible[]>([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [selectedTemplateId, setSelectedTemplateId] = useState(
+    () => loadProposalPreferences().templateId,
+  );
   const [selectedCatalogTemplateId, setSelectedCatalogTemplateId] = useState("");
-  const [selectedResponsibleId, setSelectedResponsibleId] = useState("");
+  const [selectedResponsibleId, setSelectedResponsibleId] = useState(
+    () => loadProposalPreferences().responsibleId,
+  );
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [responsibleModalOpen, setResponsibleModalOpen] = useState(false);
   const [catalogMessage, setCatalogMessage] = useState<UiMessage | null>(null);
@@ -33,10 +36,8 @@ export default function App() {
     (updated: Template[], preferredId = "") => {
       setTemplates(updated);
       setSelectedTemplateId((current) => {
-        const desired = preferredId || current;
-        return updated.some((template) => template.id === desired)
-          ? desired
-          : updated[0]?.id || "";
+        const lastUsed = loadProposalPreferences().templateId;
+        return automaticSelectionId(updated, current, lastUsed, preferredId);
       });
       setSelectedCatalogTemplateId((current) =>
         updated.some((template) => template.id === current)
@@ -51,10 +52,8 @@ export default function App() {
     (updated: Responsible[], preferredId = "") => {
       setResponsibles(updated);
       setSelectedResponsibleId((current) => {
-        const desired = preferredId || current;
-        return updated.some((responsible) => responsible.id === desired)
-          ? desired
-          : updated[0]?.id || "";
+        const lastUsed = loadProposalPreferences().responsibleId;
+        return automaticSelectionId(updated, current, lastUsed, preferredId);
       });
     },
     [],
@@ -83,16 +82,12 @@ export default function App() {
   }, [applyResponsibles, applyTemplates]);
 
   const selectBlock = (block: ActiveBlock) => {
-    setClassificationOpen(false);
-    if (opensClassifications(window.location.hash)) history.replaceState(null, "", window.location.pathname);
     setActiveBlock(block);
     window.requestAnimationFrame(() => {
       const workspaceId = {
         search: "search-workspace",
         proposal: "proposal-workspace",
-        catalog: "catalog-workspace",
         business: "business-workspace",
-        structure: "structure-workspace",
         catalogGenerator: "catalog-generator-workspace",
       }[block];
       document.getElementById(workspaceId)
@@ -105,6 +100,10 @@ export default function App() {
     setProposalSelection(null);
     setCatalogSelection(null);
   };
+
+  const rememberProposalUsage = useCallback((templateId: string, responsibleId: string) => {
+    saveProposalPreferences({ templateId, responsibleId });
+  }, []);
 
   const headerByBlock: Record<ActiveBlock, {
     eyebrow: string;
@@ -121,20 +120,10 @@ export default function App() {
       title: "Gerar proposta",
       description: "Consulte o edital, selecione os itens e gere o documento Word.",
     },
-    catalog: {
-      eyebrow: "Documentos técnicos",
-      title: "Catálogo técnico",
-      description: "Estruture os dados do produto e gere os arquivos da licitação.",
-    },
     business: {
       eyebrow: "Gestão comercial",
       title: "Negócios",
       description: "Acompanhe oportunidades e decisões em cada etapa da licitação.",
-    },
-    structure: {
-      eyebrow: "Estrutura operacional",
-      title: "Estrutura do projeto",
-      description: "Organize etapas, responsáveis e entregáveis antes da entrega final.",
     },
     catalogGenerator: {
       eyebrow: "Automação documental",
@@ -142,9 +131,7 @@ export default function App() {
       description: "Transforme os dados oficiais do edital em um catálogo revisável e rastreável.",
     },
   };
-  const header = activeBlock === "business" && classificationOpen
-    ? { eyebrow: "Negócios · Classificação", title: "Classificações", description: "Organize propostas por portal e posição." }
-    : headerByBlock[activeBlock];
+  const header = headerByBlock[activeBlock];
 
   return (
     <div className={`app-shell is-${activeBlock}-active`}>
@@ -198,40 +185,13 @@ export default function App() {
               selectedResponsibleId={selectedResponsibleId}
               onSelectedTemplateChange={setSelectedTemplateId}
               onSelectedResponsibleChange={setSelectedResponsibleId}
+              onProposalSettingsUsed={rememberProposalUsage}
               onOpenTemplates={() => setTemplateModalOpen(true)}
               onOpenResponsibles={() => setResponsibleModalOpen(true)}
             />
           </div>
-          <div id="catalog-workspace" hidden={activeBlock !== "catalog"}>
-            <CatalogBlock
-              pncpLink={pncpLink}
-              onPncpLinkChange={changePncpLink}
-            />
-          </div>
           <div id="business-workspace" hidden={activeBlock !== "business"}>
-            <div hidden={classificationOpen}>
-              <BusinessBlock
-                responsibles={responsibles}
-                onOpenClassifications={() => {
-                  setClassificationOpen(true);
-                  history.replaceState(null, "", CLASSIFICATION_HASH);
-                  window.scrollTo({ top: 0, behavior: "smooth" });
-                }}
-              />
-            </div>
-            <div hidden={!classificationOpen}>
-              <ProposalFlowBlock
-                active={classificationOpen}
-                onBack={() => {
-                  setClassificationOpen(false);
-                  history.replaceState(null, "", window.location.pathname);
-                  window.requestAnimationFrame(() => document.getElementById("business-workspace")?.scrollIntoView({ block: "start" }));
-                }}
-              />
-            </div>
-          </div>
-          <div id="structure-workspace" hidden={activeBlock !== "structure"}>
-            <ProjectStructureBlock />
+            <BusinessBlock responsibles={responsibles} />
           </div>
           <div id="catalog-generator-workspace" hidden={activeBlock !== "catalogGenerator"}>
             <CatalogGeneratorBlock
@@ -241,13 +201,6 @@ export default function App() {
               templates={templates}
               selectedTemplateId={selectedCatalogTemplateId}
               onSelectedTemplateChange={setSelectedCatalogTemplateId}
-              onTemplateCreated={(template) => {
-                setTemplates((current) => [
-                  ...current.filter((entry) => entry.id !== template.id),
-                  template,
-                ]);
-                setSelectedCatalogTemplateId(template.id);
-              }}
             />
           </div>
         </main>

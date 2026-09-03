@@ -6,6 +6,15 @@ import type {
 
 export type ReplicaDocumentBlock = DocumentNode | GeneratedTableBlock;
 
+export function withoutTemplateHeader(
+  blocks: ReplicaDocumentBlock[],
+): ReplicaDocumentBlock[] {
+  return blocks.filter((block) => (
+    block.type === "GENERATED_TABLE"
+    || !block.source_part?.startsWith("word/header")
+  ));
+}
+
 export function miniBoxNodes(nodes: DocumentNode[]): MiniBoxNode[] {
   return nodes
     .filter((node): node is MiniBoxNode => node.type === "MINI_BOX")
@@ -65,7 +74,9 @@ export function createReplicaDocumentBlocks(
       tableInserted = true;
     }
     const miniBox = orderedMiniBoxes[miniBoxSlot];
-    if (miniBox) replica.push(miniBox);
+    if (miniBox) {
+      replica.push({ ...miniBox, source_part: node.source_part });
+    }
     miniBoxSlot += 1;
   }
   if (!tableInserted) replica.push(generatedTable);

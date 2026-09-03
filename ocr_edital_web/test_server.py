@@ -5,6 +5,7 @@ import unittest
 import time
 import tempfile
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
@@ -113,6 +114,103 @@ class RequestBoundaryTests(unittest.TestCase):
     def test_internal_search_rejects_unknown_date_field(self):
         with self.assertRaisesRegex(ValueError, "Campo de data"):
             server.internal_opportunities_response({"campoData": "assinatura"})
+
+    def test_internal_search_cache_reuses_results_and_tracks_database_changes(self):
+        query = {
+            "dataInicial": "20260902",
+            "dataFinal": "20261001",
+            "campoData": "encerramento",
+            "palavraChave": "cadeira",
+            "pagina": "1",
+            "tamanhoPagina": "50",
+        }
+        payload = {"results": [{"id": "1"}], "total": 1}
+        server.INTERNAL_OPPORTUNITY_CACHE.clear()
+        try:
+            with (
+                patch.object(
+                    server,
+                    "internal_opportunity_database_revision",
+                    side_effect=[
+                        (("db", 1, 1),),
+                        (("db", 1, 1),),
+                        (("db", 1, 1),),
+                        (("db", 2, 2),),
+                        (("db", 2, 2),),
+                    ],
+                ),
+                patch.object(
+                    server,
+                    "internal_opportunities_response",
+                    return_value=payload,
+                ) as search,
+            ):
+                first, first_hit = server.cached_internal_opportunities_response(query)
+                second, second_hit = server.cached_internal_opportunities_response(query)
+                third, third_hit = server.cached_internal_opportunities_response(query)
+
+            self.assertFalse(first_hit)
+            self.assertTrue(second_hit)
+            self.assertFalse(third_hit)
+            self.assertEqual(first, second)
+            self.assertEqual(third, payload)
+            self.assertEqual(search.call_count, 2)
+        finally:
+            server.INTERNAL_OPPORTUNITY_CACHE.clear()
+
+    def test_internal_search_cache_coalesces_concurrent_identical_queries(self):
+        query = {
+            "dataInicial": "20260902",
+            "dataFinal": "20261001",
+            "campoData": "encerramento",
+            "palavraChave": "mesa",
+            "pagina": "1",
+            "tamanhoPagina": "50",
+        }
+        payload = {"results": [{"id": "1"}], "total": 1}
+        server.INTERNAL_OPPORTUNITY_CACHE.clear()
+        server.INTERNAL_OPPORTUNITY_CACHE_LOCKS.clear()
+
+        def delayed_search(_query):
+            time.sleep(0.05)
+            return payload
+
+        try:
+            with (
+                patch.object(
+                    server,
+                    "internal_opportunity_database_revision",
+                    return_value=(("db", 1, 1),),
+                ),
+                patch.object(
+                    server,
+                    "internal_opportunities_response",
+                    side_effect=delayed_search,
+                ) as search,
+                ThreadPoolExecutor(max_workers=8) as executor,
+            ):
+                responses = list(executor.map(
+                    lambda _index: server.cached_internal_opportunities_response(query),
+                    range(8),
+                ))
+
+            self.assertEqual(search.call_count, 1)
+            self.assertEqual(sum(cache_hit for _response, cache_hit in responses), 7)
+            self.assertTrue(all(response == payload for response, _cache_hit in responses))
+        finally:
+            server.INTERNAL_OPPORTUNITY_CACHE.clear()
+            server.INTERNAL_OPPORTUNITY_CACHE_LOCKS.clear()
+
+    def test_default_internal_search_matches_the_frontend_date_window(self):
+        query = server.default_internal_opportunity_query(
+            datetime(2026, 9, 2, 12, 0, 0).astimezone()
+        )
+
+        self.assertEqual(query["dataInicial"], "20260902")
+        self.assertEqual(query["dataFinal"], "20261001")
+        self.assertEqual(query["campoData"], "encerramento")
+        self.assertEqual(query["incluirSemDataEncerramento"], "1")
+        self.assertEqual(query["tamanhoPagina"], "50")
 
 
 class DatabaseInitializationTests(unittest.TestCase):
@@ -265,6 +363,106 @@ class CatalogJobPersistenceTests(unittest.TestCase):
                 self.assertNotIn(job["id"], jobs)
             finally:
                 server.INITIALIZED_DATABASES.pop(database_key, None)
+
+    def test_catalog_technical_repertoire_is_reused_after_job_cache_reset(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database_path = root / "pncp.sqlite3"
+            database_key = str(database_path.resolve())
+            link = "https://pncp.gov.br/app/editais/45780087000103/2026/43"
+            item = catalog_generator.normalize_items(
+                [make_item("1", "Peça X especial com tamanho de 5 cm")],
+                link,
+            )[0]
+            timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+            job_id = "f" * 32
+            job = {
+                "id": job_id,
+                "pncp_link": link,
+                "selected_item_keys": ["1"],
+                "status": "ready",
+                "stage": "concluido",
+                "progress": 100,
+                "stages": [],
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "result": {
+                    "items": [item],
+                    "validation": catalog_generator.validation_summary([item]),
+                    "catalog_summary": server.catalog_summary([item]),
+                },
+                "error": "",
+            }
+            payload = {
+                "item_id": item["id"],
+                "repertorio": {
+                    "produto_nome": "Peça X Goldflex",
+                    "cobertura_completa": True,
+                    "parametros": [{
+                        "componente": "Peça X",
+                        "atributo": "Tamanho",
+                        "comparacao": "intervalo",
+                        "valor_requerido": 5,
+                        "valor_minimo": 3,
+                        "valor_maximo": 6,
+                        "unidade": "cm",
+                        "evidencia": "Ficha técnica FT-001",
+                    }],
+                },
+            }
+            jobs = {job_id: job}
+            persisted_ids = {job_id}
+            server.INITIALIZED_DATABASES.pop(database_key, None)
+            try:
+                with (
+                    patch.object(server, "DATABASE_PATH", database_path),
+                    patch.object(server, "DATA_DIR", root),
+                    patch.object(server, "OUTPUT_DIR", root / "outputs"),
+                    patch.object(server, "UPLOAD_DIR", root / "uploads"),
+                    patch.object(server, "PREVIEW_DIR", root / "previews"),
+                    patch.object(server, "CATALOG_GENERATOR_JOBS", jobs),
+                    patch.object(server, "CATALOG_GENERATOR_PERSISTED_IDS", persisted_ids),
+                ):
+                    server.persist_catalog_generator_job(job)
+                    updated = server.save_catalog_generator_repertoire(job_id, payload)
+                    jobs.clear()
+                    persisted_ids.clear()
+                    restored = server.catalog_generator_job(job_id)
+                    fresh_item = catalog_generator.normalize_items(
+                        [make_item("1", "Peça X especial com tamanho de 5 cm")],
+                        link,
+                    )[0]
+                    reused = server.saved_catalog_repertoire([fresh_item])[0]
+
+                self.assertEqual(
+                    updated["result"]["items"][0]["observacao_repertorio"]["status"],
+                    "evidencia_completa",
+                )
+                self.assertEqual(
+                    restored["result"]["items"][0]["repertorio_usuario"]["produto_nome"],
+                    "Peça X Goldflex",
+                )
+                self.assertEqual(reused["observacao_repertorio"]["status"], "evidencia_completa")
+                self.assertEqual(reused["repertorio_usuario"]["produto_nome"], "Peça X Goldflex")
+            finally:
+                server.INITIALIZED_DATABASES.pop(database_key, None)
+
+    def test_catalog_technical_repertoire_rejects_inverted_range(self):
+        with self.assertRaisesRegex(ValueError, "limite mínimo"):
+            server.validate_catalog_technical_repertoire({
+                "produto_nome": "Peça X Goldflex",
+                "cobertura_completa": True,
+                "parametros": [{
+                    "componente": "Peça X",
+                    "atributo": "Tamanho",
+                    "comparacao": "intervalo",
+                    "valor_requerido": 5,
+                    "valor_minimo": 7,
+                    "valor_maximo": 3,
+                    "unidade": "cm",
+                    "evidencia": "Ficha técnica FT-001",
+                }],
+            })
 
 
 class ItemExtractionRegressionTests(unittest.TestCase):
@@ -1388,6 +1586,37 @@ class CatalogGenerationTests(unittest.TestCase):
         self.assertEqual(job["result"]["items"][0]["numero"], "3")
         self.assertTrue(any("continuou pelos documentos" in warning for warning in job["result"]["warnings"]))
 
+    def test_block7_distinguishes_document_api_failure_from_empty_file_list(self):
+        failure = {
+            "data": [],
+            "timeout": True,
+            "message": "conexão indisponível",
+        }
+        with (
+            patch.object(server, "request_json", return_value=failure),
+            self.assertRaisesRegex(
+                RuntimeError,
+                "Não foi possível consultar os documentos oficiais no PNCP.*conexão indisponível",
+            ),
+        ):
+            server.catalog_generator_document_candidates(
+                "45780087000103",
+                2026,
+                43,
+            )
+
+    def test_other_blocks_keep_tolerant_document_lookup(self):
+        failure = {
+            "data": [],
+            "rate_limited": True,
+            "message": "limite temporário",
+        }
+        with patch.object(server, "request_json", return_value=failure):
+            self.assertEqual(
+                server.list_pncp_files("45780087000103", 2026, 43),
+                [],
+            )
+
     def test_catalog_specification_accepts_qualifier_added_to_item_title(self):
         item = make_item("2", "Cadeira Caixa Alta Secretaria")
         source_text = (
@@ -1435,6 +1664,66 @@ class CatalogGenerationTests(unittest.TestCase):
                 ["1/2", "3"],
             )
             persist.assert_called_once()
+
+    def test_catalog_job_accepts_one_off_docx_template(self):
+        link = "https://pncp.gov.br/app/editais/45780087000103/2026/43"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template_path = root / "template-catalogo.docx"
+            template = Document()
+            template.add_paragraph("Modelo personalizado")
+            template.add_paragraph("{CATALOGO}")
+            template.save(template_path)
+            field = SimpleNamespace(
+                filename=template_path.name,
+                file=template_path.open("rb"),
+            )
+            try:
+                with (
+                    patch.object(server, "TEMPLATE_DIR", root / "templates"),
+                    patch.object(server, "UPLOAD_DIR", root / "uploads"),
+                    patch.object(server, "OUTPUT_DIR", root / "outputs"),
+                    patch.object(server, "PREVIEW_DIR", root / "previews"),
+                    patch.dict(server.CATALOG_GENERATOR_JOBS, {}, clear=True),
+                    patch.object(server, "CATALOG_GENERATOR_PERSISTED_IDS", set()),
+                    patch.object(server, "cleanup_catalog_generator_state"),
+                    patch.object(server, "persist_catalog_generator_job") as persist,
+                    patch.object(server.CATALOG_GENERATOR_EXECUTOR, "submit") as submit,
+                ):
+                    job = server.create_catalog_generator_job(
+                        {"pncp_link": link, "selected_item_keys": ["1"]},
+                        template_file=field,
+                    )
+                    stored_template = server.resolve_template(job["template_ref"])
+
+                self.assertEqual(job["template_name"], "template-catalogo.docx")
+                self.assertEqual(job["template_source"], "upload")
+                self.assertEqual(job["template_id"], "")
+                self.assertIsNotNone(stored_template)
+                self.assertTrue(stored_template.is_file())
+                persist.assert_called_once()
+                submit.assert_called_once_with(
+                    server.run_catalog_generator_job,
+                    job["id"],
+                    link,
+                    ["1"],
+                )
+            finally:
+                field.file.close()
+
+    def test_catalog_multipart_payload_preserves_selected_items(self):
+        form = {
+            "pncp_link": SimpleNamespace(
+                value="https://pncp.gov.br/app/editais/45780087000103/2026/43"
+            ),
+            "selected_item_keys": SimpleNamespace(value='["2/1", "3"]'),
+            "template_id": SimpleNamespace(value=""),
+        }
+
+        payload = server.catalog_generator_form_payload(form)
+
+        self.assertEqual(payload["selected_item_keys"], ["2/1", "3"])
+        self.assertEqual(payload["template_id"], "")
 
     def test_catalog_job_rejects_requests_when_the_bounded_queue_is_full(self):
         link = "https://pncp.gov.br/app/editais/45780087000103/2026/43"

@@ -60,6 +60,10 @@ class DocxStructureTests(unittest.TestCase):
             ["Alpha {interno}", "Beta", "Tabela", "Cabecalho"],
         )
         self.assertEqual([node["order"] for node in mini_boxes], [0, 1, 2, 3])
+        self.assertEqual(
+            [node["source_part"] for node in mini_boxes],
+            ["word/document.xml", "word/document.xml", "word/document.xml", "word/header1.xml"],
+        )
         self.assertEqual(structure["mini_box_count"], 4)
         self.assertEqual(
             structure["generated_table_block"],

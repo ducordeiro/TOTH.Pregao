@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CLASSIFICATION_HASH, LEGACY_CLASSIFICATION_HASH, opensClassifications } from "./classificationNavigation";
 
 describe("navegação das classificações", () => {
-  it("abre pela nova âncora do Bloco 4", () => {
+  it("abre pela âncora do Bloco 5", () => {
     expect(opensClassifications(CLASSIFICATION_HASH)).toBe(true);
   });
 

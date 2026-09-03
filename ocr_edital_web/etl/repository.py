@@ -782,6 +782,17 @@ class ETLRepository:
             and date_union_bounds is None
         ):
             bounded_date_index = candidate_index
+        unbounded_date_index = (
+            candidate_index
+            if (
+                candidate_index
+                and not has_date_bound
+                and not use_score_order
+                and not fts_query
+                and date_union_bounds is None
+            )
+            else None
+        )
         bounded_date_order = f"o.{date_column} {date_direction}"
         if date_column != "published_at":
             bounded_date_order += ", o.published_at DESC"
@@ -866,6 +877,50 @@ class ETLRepository:
                         """,
                         source_params,
                     ).fetchone()[0])
+                elif unbounded_date_index is not None:
+                    connection.execute("BEGIN")
+                    dated_clause = (
+                        f"{clause} AND o.{date_column} IS NOT NULL AND o.{date_column} <> ''"
+                        if clause
+                        else f"WHERE o.{date_column} IS NOT NULL AND o.{date_column} <> ''"
+                    )
+                    page_rows = connection.execute(
+                        f"""
+                        SELECT o.*
+                        FROM opportunities o INDEXED BY {unbounded_date_index}
+                        {dated_clause}
+                        ORDER BY {bounded_date_order}
+                        LIMIT ? OFFSET ?
+                        """,
+                        source_params + [limit, offset],
+                    ).fetchall()
+                    window_total = int(connection.execute(
+                        f"SELECT COUNT(*) FROM opportunities o {clause}",
+                        source_params,
+                    ).fetchone()[0])
+                    if len(page_rows) < limit:
+                        dated_total = int(connection.execute(
+                            f"SELECT COUNT(*) FROM opportunities o {dated_clause}",
+                            source_params,
+                        ).fetchone()[0])
+                        missing_offset = max(offset - dated_total, 0)
+                        missing_limit = limit - len(page_rows)
+                        missing_clause = (
+                            f"{clause} AND (o.{date_column} IS NULL OR o.{date_column} = '')"
+                            if clause
+                            else f"WHERE o.{date_column} IS NULL OR o.{date_column} = ''"
+                        )
+                        page_rows.extend(connection.execute(
+                            f"""
+                            SELECT o.*
+                            FROM opportunities o
+                            {missing_clause}
+                            ORDER BY CASE WHEN o.{date_column} IS NULL THEN 0 ELSE 1 END,
+                                     o.published_at DESC
+                            LIMIT ? OFFSET ?
+                            """,
+                            source_params + [missing_limit, missing_offset],
+                        ).fetchall())
                 else:
                     page_rows = connection.execute(
                         f"""

@@ -57,7 +57,13 @@ from catalog_generator import (
     prepare_catalog_items,
     validation_summary,
 )
-from catalog_rules import catalog_policy_summary, catalog_summary, repertoire_summary
+from catalog_rules import (
+    apply_user_catalog_repertoire,
+    catalog_policy_summary,
+    catalog_repertoire_key,
+    catalog_summary,
+    repertoire_summary,
+)
 from docx_structure import (
     GENERATED_TABLE_BLOCK_ID,
     inspect_docx_structure,
@@ -142,6 +148,9 @@ ENABLE_PNCP_SEARCH = os.environ.get(
     "1",
 ).strip().lower() in {"1", "true", "yes", "sim"}
 SEARCH_CACHE = {}
+INTERNAL_OPPORTUNITY_CACHE = {}
+INTERNAL_OPPORTUNITY_CACHE_LOCKS = {}
+INTERNAL_OPPORTUNITY_CACHE_LOCKS_GUARD = threading.Lock()
 PNCP_RESULT_CACHE = {}
 PNCP_OPPORTUNITY_SYNC_CACHE = {}
 SEARCH_ITEM_CACHE = {}
@@ -152,6 +161,8 @@ CATALOG_GENERATOR_PERSISTED_IDS = set()
 DETAIL_DOCUMENT_FAILURE_CACHE = {}
 DETAIL_ITEM_FAILURE_CACHE = {}
 SEARCH_CACHE_TTL = 300
+INTERNAL_OPPORTUNITY_CACHE_TTL = 300
+INTERNAL_OPPORTUNITY_CACHE_MAX_ENTRIES = 128
 PNCP_SEARCH_RUNNING_JOB_TTL = 30 * 60
 PNCP_SEARCH_MAX_PAGES_PER_PARTITION = 20
 PNCP_BROAD_REFRESH_MAX_PAGES = 12
@@ -473,6 +484,15 @@ def _initialize_database():
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS catalog_technical_repertoire (
+                item_key TEXT PRIMARY KEY,
+                record_id TEXT NOT NULL UNIQUE,
+                product_name TEXT NOT NULL,
+                payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS app_migrations (
                 chave TEXT PRIMARY KEY,
                 aplicado_em TEXT NOT NULL
@@ -498,6 +518,8 @@ def _initialize_database():
                 ON negocio_itens (negocio_id, ordem, id);
             CREATE INDEX IF NOT EXISTS idx_catalog_generator_jobs_status
                 ON catalog_generator_jobs (status, updated_at);
+            CREATE INDEX IF NOT EXISTS idx_catalog_technical_repertoire_product
+                ON catalog_technical_repertoire (product_name);
             """
         )
         recovery_now = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -1021,9 +1043,10 @@ def cache_get(cache, key, ttl):
         return copy.deepcopy(cached["data"])
 
 
-def cache_set(cache, key, data):
+def cache_set(cache, key, data, maximum_entries=None):
+    limit = maximum_entries or CACHE_MAX_ENTRIES
     with CACHE_LOCK:
-        if key not in cache and len(cache) >= CACHE_MAX_ENTRIES:
+        if key not in cache and len(cache) >= limit:
             oldest_key = min(cache, key=lambda item: cache[item]["created_at"])
             cache.pop(oldest_key, None)
         cache[key] = {"created_at": time.time(), "data": copy.deepcopy(data)}
@@ -1032,6 +1055,29 @@ def cache_set(cache, key, data):
 def cache_discard(cache, key):
     with CACHE_LOCK:
         cache.pop(key, None)
+
+
+@contextmanager
+def internal_opportunity_cache_scope(cache_key):
+    with INTERNAL_OPPORTUNITY_CACHE_LOCKS_GUARD:
+        entry = INTERNAL_OPPORTUNITY_CACHE_LOCKS.get(cache_key)
+        if entry is None:
+            entry = {"lock": threading.Lock(), "users": 0}
+            INTERNAL_OPPORTUNITY_CACHE_LOCKS[cache_key] = entry
+        entry["users"] += 1
+    lock = entry["lock"]
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+        with INTERNAL_OPPORTUNITY_CACHE_LOCKS_GUARD:
+            entry["users"] -= 1
+            if (
+                entry["users"] == 0
+                and INTERNAL_OPPORTUNITY_CACHE_LOCKS.get(cache_key) is entry
+            ):
+                INTERNAL_OPPORTUNITY_CACHE_LOCKS.pop(cache_key, None)
 
 
 @contextmanager
@@ -4415,10 +4461,16 @@ def pncp_app_link(cnpj, ano, sequencial):
     return f"{PNCP_APP_BASE}/{cnpj}/{ano}/{sequencial}"
 
 
-def list_pncp_files(cnpj, ano, sequencial):
+def list_pncp_files(cnpj, ano, sequencial, *, require_complete=False):
     url = f"{PNCP_API_BASE}/pncp/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/arquivos"
     files = request_json(url)
     if isinstance(files, dict):
+        if require_complete and (files.get("timeout") or files.get("rate_limited")):
+            detail = compact(files.get("message"))
+            message = "Não foi possível consultar os documentos oficiais no PNCP."
+            if detail:
+                message = f"{message} Detalhe: {detail}"
+            raise RuntimeError(message)
         files = files.get("data") or files.get("items") or files.get("content") or []
     if not isinstance(files, list):
         return []
@@ -10160,6 +10212,35 @@ def template_upload_field(form):
     return field
 
 
+def catalog_generator_form_payload(form):
+    def field_value(name):
+        field = form[name] if name in form else None
+        if field is None or isinstance(field, list):
+            return ""
+        return compact(getattr(field, "value", ""))
+
+    selected_item_keys = None
+    selected_item_keys_text = field_value("selected_item_keys")
+    if selected_item_keys_text:
+        try:
+            selected_item_keys = json.loads(selected_item_keys_text)
+        except json.JSONDecodeError as exc:
+            raise ValueError("A seleção de itens do catálogo é inválida.") from exc
+    return {
+        "pncp_link": field_value("pncp_link"),
+        "selected_item_keys": selected_item_keys,
+        "template_id": field_value("template_id"),
+    }
+
+
+def parse_catalog_generator_job_request(handler):
+    content_type = handler.headers.get("Content-Type", "").lower()
+    if content_type.startswith("multipart/form-data"):
+        form = parse_template_upload_form(handler)
+        return catalog_generator_form_payload(form), template_upload_field(form)
+    return parse_json_body(handler, MAX_JSON_REQUEST_SIZE), None
+
+
 def template_api_error(handler, exc):
     if isinstance(exc, FileNotFoundError):
         status = 404
@@ -10305,6 +10386,109 @@ def sync_internal_pncp(payload):
         "total_skipped": counters["skipped"],
         "total_failed": counters["failed"],
         "dry_run": bool(payload.get("dry_run", False)),
+    }
+
+
+def internal_opportunity_database_revision():
+    revision = []
+    for path in (DATABASE_PATH, Path(f"{DATABASE_PATH}-wal")):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        revision.append((str(path.resolve()), stat.st_size, stat.st_mtime_ns))
+    return tuple(revision)
+
+
+def internal_opportunity_query_key(query):
+    page = max(int(query.get("pagina") or query.get("page") or 1), 1)
+    page_size = min(
+        max(int(query.get("tamanhoPagina") or query.get("page_size") or 10), 1),
+        100,
+    )
+    date_field = parse_search_date_field(query.get("campoData"))
+    keywords = sorted(
+        norm(term)
+        for term in compact(query.get("palavraChave")).split(";")
+        if norm(term)
+    )
+    ufs = sorted({value.upper() for value in compact(query.get("uf")).split(",") if value})
+    include_missing = str(
+        query.get("incluirSemDataEncerramento") or ""
+    ).strip().lower() in {"1", "true", "yes", "sim"}
+    semantic_query = {
+        "page": page,
+        "page_size": page_size,
+        "date_field": date_field,
+        "date_from": _etl_query_date(query.get("dataInicial")),
+        "date_to": _etl_query_date(query.get("dataFinal"), end_of_day=True),
+        "include_missing": include_missing,
+        "radar_status": sorted(
+            value.strip()
+            for value in compact(
+                query.get("radar_status")
+                or "new,triage,selected,converted_to_proposal"
+            ).split(",")
+            if value.strip()
+        ),
+        "ufs": ufs,
+        "keywords": keywords,
+        "object_type": compact(query.get("tipoObjeto")).lower(),
+        "modality_code": compact(query.get("codigoModalidadeContratacao")),
+        "purchase_number": norm(query.get("numeroCompra")),
+        "uasg": compact(query.get("uasg")).lstrip("0"),
+        "score_min": compact(query.get("score_min")),
+    }
+    return (
+        internal_opportunity_database_revision(),
+        json.dumps(semantic_query, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+    )
+
+
+def cached_internal_opportunities_response(query):
+    cache_key = internal_opportunity_query_key(query)
+    cached = cache_get(
+        INTERNAL_OPPORTUNITY_CACHE,
+        cache_key,
+        INTERNAL_OPPORTUNITY_CACHE_TTL,
+    )
+    if cached is not None:
+        return cached, True
+    with internal_opportunity_cache_scope(cache_key):
+        current_key = internal_opportunity_query_key(query)
+        cached = cache_get(
+            INTERNAL_OPPORTUNITY_CACHE,
+            current_key,
+            INTERNAL_OPPORTUNITY_CACHE_TTL,
+        )
+        if cached is not None:
+            return cached, True
+        payload = internal_opportunities_response(query)
+        cache_set(
+            INTERNAL_OPPORTUNITY_CACHE,
+            current_key,
+            payload,
+            INTERNAL_OPPORTUNITY_CACHE_MAX_ENTRIES,
+        )
+        return payload, False
+
+
+def default_internal_opportunity_query(now=None):
+    start = (now or datetime.now().astimezone()).date()
+    end = start + timedelta(days=29)
+    return {
+        "dataInicial": start.strftime("%Y%m%d"),
+        "dataFinal": end.strftime("%Y%m%d"),
+        "campoData": "encerramento",
+        "incluirSemDataEncerramento": "1",
+        "uf": "",
+        "palavraChave": "",
+        "tipoObjeto": "",
+        "codigoModalidadeContratacao": "",
+        "numeroCompra": "",
+        "uasg": "",
+        "pagina": "1",
+        "tamanhoPagina": "50",
     }
 
 
@@ -10905,7 +11089,10 @@ def catalog_generator_job(job_id):
 def catalog_generator_document_candidates(cnpj, ano, sequencial, maximum=6):
     candidates = []
     errors = []
-    files = sorted(list_pncp_files(cnpj, ano, sequencial), key=pncp_file_score)
+    files = sorted(
+        list_pncp_files(cnpj, ano, sequencial, require_complete=True),
+        key=pncp_file_score,
+    )
     selected_files = files[:maximum]
     if len(files) > len(selected_files):
         errors.append(
@@ -10953,6 +11140,200 @@ def catalog_selection_key(item):
         "item": item.get("item") or item.get("numero") or item.get("numeroItem"),
         "lote": item.get("lote"),
     })
+
+
+def catalog_repertoire_text(value, label, maximum, *, required=True):
+    text = compact(value)
+    if required and not text:
+        raise ValueError(f"Informe {label}.")
+    if len(text) > maximum:
+        raise ValueError(f"{label.capitalize()} excede {maximum} caracteres.")
+    return text
+
+
+def catalog_repertoire_number(value, label):
+    if isinstance(value, bool):
+        raise ValueError(f"{label.capitalize()} deve ser numérico.")
+    try:
+        number = float(str(value).strip().replace(",", "."))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label.capitalize()} deve ser numérico.") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{label.capitalize()} deve ser finito.")
+    return number
+
+
+def validate_catalog_technical_repertoire(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("A régua técnica é inválida.")
+    product_name = catalog_repertoire_text(
+        payload.get("produto_nome"),
+        "o nome do produto ou modelo Goldflex",
+        180,
+    )
+    complete_coverage = payload.get("cobertura_completa")
+    if not isinstance(complete_coverage, bool):
+        raise ValueError("Informe se a régua cobre todos os componentes do item.")
+    parameters = payload.get("parametros")
+    if not isinstance(parameters, list) or not 1 <= len(parameters) <= 30:
+        raise ValueError("Cadastre entre 1 e 30 parâmetros técnicos.")
+
+    validated = []
+    for index, raw in enumerate(parameters, start=1):
+        if not isinstance(raw, dict):
+            raise ValueError(f"O parâmetro {index} é inválido.")
+        comparison = compact(raw.get("comparacao"))
+        if comparison not in {"intervalo", "igual", "contem"}:
+            raise ValueError(f"Selecione a comparação do parâmetro {index}.")
+        parameter = {
+            "id": (
+                compact(raw.get("id"))
+                if re.fullmatch(r"[a-f0-9]{32}", compact(raw.get("id")))
+                else uuid.uuid4().hex
+            ),
+            "componente": catalog_repertoire_text(
+                raw.get("componente"), f"o componente do parâmetro {index}", 120
+            ),
+            "atributo": catalog_repertoire_text(
+                raw.get("atributo"), f"o atributo do parâmetro {index}", 120
+            ),
+            "comparacao": comparison,
+            "evidencia": catalog_repertoire_text(
+                raw.get("evidencia"), f"a evidência do parâmetro {index}", 1000
+            ),
+        }
+        if comparison == "intervalo":
+            required = catalog_repertoire_number(
+                raw.get("valor_requerido"), f"o valor exigido do parâmetro {index}"
+            )
+            minimum = catalog_repertoire_number(
+                raw.get("valor_minimo"), f"o limite mínimo do parâmetro {index}"
+            )
+            maximum = catalog_repertoire_number(
+                raw.get("valor_maximo"), f"o limite máximo do parâmetro {index}"
+            )
+            if minimum > maximum:
+                raise ValueError(
+                    f"O limite mínimo do parâmetro {index} não pode superar o máximo."
+                )
+            parameter.update({
+                "valor_requerido": required,
+                "valor_minimo": minimum,
+                "valor_maximo": maximum,
+                "unidade": catalog_repertoire_text(
+                    raw.get("unidade"), f"a unidade do parâmetro {index}", 24
+                ),
+            })
+        else:
+            parameter.update({
+                "valor_requerido_texto": catalog_repertoire_text(
+                    raw.get("valor_requerido_texto"),
+                    f"o valor exigido do parâmetro {index}",
+                    240,
+                ),
+                "valor_atendido_texto": catalog_repertoire_text(
+                    raw.get("valor_atendido_texto"),
+                    f"o valor atendido pela Goldflex no parâmetro {index}",
+                    240,
+                ),
+            })
+        validated.append(parameter)
+    return {
+        "produto_nome": product_name,
+        "cobertura_completa": complete_coverage,
+        "parametros": validated,
+    }
+
+
+def saved_catalog_repertoire(items):
+    items = list(items or [])
+    if not items:
+        return items
+    keys = [catalog_repertoire_key(item) for item in items]
+    unique_keys = list(dict.fromkeys(keys))
+    init_database()
+    records = {}
+    with DATABASE_LOCK, database_connection() as connection:
+        for start in range(0, len(unique_keys), 400):
+            batch = unique_keys[start:start + 400]
+            placeholders = ",".join("?" for _ in batch)
+            rows = connection.execute(
+                f"SELECT item_key, payload_json FROM catalog_technical_repertoire "
+                f"WHERE item_key IN ({placeholders})",
+                tuple(batch),
+            ).fetchall()
+            for row in rows:
+                try:
+                    record = json.loads(row["payload_json"])
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if isinstance(record, dict):
+                    records[row["item_key"]] = record
+    return [
+        apply_user_catalog_repertoire(item, records[key]) if key in records else item
+        for item, key in zip(items, keys)
+    ]
+
+
+def save_catalog_repertoire(item, payload):
+    validated = validate_catalog_technical_repertoire(payload)
+    item_key = catalog_repertoire_key(item)
+    init_database()
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    with DATABASE_LOCK, database_connection() as connection:
+        existing = connection.execute(
+            "SELECT record_id, created_at FROM catalog_technical_repertoire WHERE item_key = ?",
+            (item_key,),
+        ).fetchone()
+        record = {
+            "id": existing["record_id"] if existing else uuid.uuid4().hex,
+            "item_key": item_key,
+            **validated,
+            "criado_em": existing["created_at"] if existing else now,
+            "atualizado_em": now,
+        }
+        connection.execute(
+            """
+            INSERT INTO catalog_technical_repertoire (
+                item_key, record_id, product_name, payload_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(item_key) DO UPDATE SET
+                product_name = excluded.product_name,
+                payload_json = excluded.payload_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                item_key,
+                record["id"],
+                record["produto_nome"],
+                json.dumps(record, ensure_ascii=False, separators=(",", ":")),
+                record["criado_em"],
+                now,
+            ),
+        )
+    return record
+
+
+def save_catalog_generator_repertoire(job_id, payload):
+    job = catalog_generator_job(job_id)
+    if job.get("status") != "ready" or not job.get("result"):
+        raise ValueError("Aguarde a conclusão da análise antes de cadastrar a régua técnica.")
+    item_id = catalog_repertoire_text((payload or {}).get("item_id"), "o item", 120)
+    items = list(job["result"].get("items") or [])
+    item_index = next(
+        (index for index, item in enumerate(items) if compact(item.get("id")) == item_id),
+        None,
+    )
+    if item_index is None:
+        raise ValueError("O item selecionado não pertence a este processamento.")
+    record = save_catalog_repertoire(items[item_index], (payload or {}).get("repertorio"))
+    items[item_index] = apply_user_catalog_repertoire(items[item_index], record)
+    result = dict(job["result"])
+    result["items"] = items
+    result["validation"] = validation_summary(items)
+    result["catalog_summary"] = catalog_summary(items)
+    update_catalog_generator_job(job_id, result=result)
+    return catalog_generator_job(job_id)
 
 
 def run_catalog_generator_job(job_id, pncp_link, selected_item_keys=None):
@@ -11033,7 +11414,13 @@ def run_catalog_generator_job(job_id, pncp_link, selected_item_keys=None):
                     + ". Atualize o detalhamento e tente novamente."
                 )
             raw_items = [item for item in raw_items if catalog_selection_key(item) in wanted_keys]
-        items = normalize_items(raw_items, official_link, structured.get("source") or "Base estruturada/PNCP")
+        items = saved_catalog_repertoire(
+            normalize_items(
+                raw_items,
+                official_link,
+                structured.get("source") or "Base estruturada/PNCP",
+            )
+        )
         if not items:
             warnings.append(
                 "Nenhum item pôde ser confirmado na base estruturada nem nos documentos disponíveis."
@@ -11076,53 +11463,63 @@ def run_catalog_generator_job(job_id, pncp_link, selected_item_keys=None):
         )
 
 
-def create_catalog_generator_job(payload):
+def create_catalog_generator_job(payload, template_file=None):
     pncp_link = compact((payload or {}).get("pncp_link"))
     parse_pncp_link(pncp_link)
     selected_item_keys = validate_catalog_item_keys((payload or {}).get("selected_item_keys"))
     template_id = compact((payload or {}).get("template_id"))
     template_name = ""
     template_ref = ""
-    if template_id:
+    template_source = ""
+    uploaded_template_path = None
+    if template_file is not None and template_id:
+        raise ValueError("Selecione um template cadastrado ou um arquivo avulso, não ambos.")
+    if template_file is not None:
+        uploaded_template_path, template_name = store_proposal_template_upload(template_file)
+        template_ref = f"upload:{uploaded_template_path.name}"
+        template_source = "upload"
+    elif template_id:
         template_path = template_path_from_name(template_id)
         if not template_path or not template_path.exists():
             raise ValueError("O template selecionado não está disponível.")
         template_name = template_record(template_path)["display_name"]
         template_ref = f"managed:{template_id}"
-    job_id = uuid.uuid4().hex
+        template_source = "managed"
     try:
-        cleanup_catalog_generator_state()
-    except Exception as exc:
-        LOGGER.warning("A limpeza periódica do gerador de catálogo falhou: %s", exc)
-    now = datetime.now().astimezone().isoformat(timespec="seconds")
-    job = {
-        "id": job_id,
-        "pncp_link": pncp_link,
-        "selected_item_keys": selected_item_keys,
-        "template_id": template_id,
-        "template_name": template_name,
-        "template_ref": template_ref,
-        "status": "queued",
-        "stage": "validacao",
-        "progress": 0,
-        "stages": [{"id": key, "label": label} for key, label in CATALOG_GENERATOR_STAGES],
-        "created_at": now,
-        "updated_at": now,
-        "result": None,
-        "error": "",
-    }
-    with CATALOG_GENERATOR_JOB_LOCK:
-        active_jobs = sum(
-            1
-            for current in CATALOG_GENERATOR_JOBS.values()
-            if current.get("status") in {"queued", "processing"}
-        )
-        if active_jobs >= CATALOG_GENERATOR_MAX_ACTIVE:
-            raise ValueError(
-                "A fila do gerador de catálogo está cheia. Aguarde a conclusão de um processamento."
+        job_id = uuid.uuid4().hex
+        try:
+            cleanup_catalog_generator_state()
+        except Exception as exc:
+            LOGGER.warning("A limpeza periódica do gerador de catálogo falhou: %s", exc)
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        job = {
+            "id": job_id,
+            "pncp_link": pncp_link,
+            "selected_item_keys": selected_item_keys,
+            "template_id": template_id,
+            "template_name": template_name,
+            "template_ref": template_ref,
+            "template_source": template_source,
+            "status": "queued",
+            "stage": "validacao",
+            "progress": 0,
+            "stages": [{"id": key, "label": label} for key, label in CATALOG_GENERATOR_STAGES],
+            "created_at": now,
+            "updated_at": now,
+            "result": None,
+            "error": "",
+        }
+        with CATALOG_GENERATOR_JOB_LOCK:
+            active_jobs = sum(
+                1
+                for current in CATALOG_GENERATOR_JOBS.values()
+                if current.get("status") in {"queued", "processing"}
             )
-        CATALOG_GENERATOR_JOBS[job_id] = job
-    try:
+            if active_jobs >= CATALOG_GENERATOR_MAX_ACTIVE:
+                raise ValueError(
+                    "A fila do gerador de catálogo está cheia. Aguarde a conclusão de um processamento."
+                )
+            CATALOG_GENERATOR_JOBS[job_id] = job
         persist_catalog_generator_job(job)
         with CATALOG_GENERATOR_JOB_LOCK:
             CATALOG_GENERATOR_PERSISTED_IDS.add(job_id)
@@ -11132,10 +11529,21 @@ def create_catalog_generator_job(payload):
             pncp_link,
             selected_item_keys,
         )
+    except ValueError:
+        with CATALOG_GENERATOR_JOB_LOCK:
+            if "job_id" in locals():
+                CATALOG_GENERATOR_JOBS.pop(job_id, None)
+                CATALOG_GENERATOR_PERSISTED_IDS.discard(job_id)
+        if uploaded_template_path is not None:
+            uploaded_template_path.unlink(missing_ok=True)
+        raise
     except Exception as exc:
         with CATALOG_GENERATOR_JOB_LOCK:
-            CATALOG_GENERATOR_JOBS.pop(job_id, None)
-            CATALOG_GENERATOR_PERSISTED_IDS.discard(job_id)
+            if "job_id" in locals():
+                CATALOG_GENERATOR_JOBS.pop(job_id, None)
+                CATALOG_GENERATOR_PERSISTED_IDS.discard(job_id)
+        if uploaded_template_path is not None:
+            uploaded_template_path.unlink(missing_ok=True)
         raise RuntimeError("Não foi possível iniciar o processamento do catálogo.") from exc
     return copy.deepcopy(job)
 
@@ -11167,6 +11575,7 @@ def export_catalog_generator_job(job_id, payload):
         "items": prepared_items,
         "template_id": job.get("template_id", ""),
         "template_name": job.get("template_name", ""),
+        "template_source": job.get("template_source", ""),
         "validation": validation_summary(prepared_items),
         "catalog_summary": catalog_summary(prepared_items),
     }
@@ -11221,13 +11630,16 @@ class App(BaseHTTPRequestHandler):
                     for key, values in parse_qs(urlparse(self.path).query).items()
                 }
                 started_at = time.perf_counter()
-                payload = internal_opportunities_response(query)
+                payload, cache_hit = cached_internal_opportunities_response(query)
                 elapsed_ms = (time.perf_counter() - started_at) * 1000
                 json_response(
                     self,
                     200,
                     payload,
-                    {"Server-Timing": f"opportunity-search;dur={elapsed_ms:.1f}"},
+                    {
+                        "Server-Timing": f"opportunity-search;dur={elapsed_ms:.1f}",
+                        "X-Toth-Data-Cache": "hit" if cache_hit else "miss",
+                    },
                 )
             except ValueError as exc:
                 json_response(self, 422, {"error": str(exc)})
@@ -11452,11 +11864,44 @@ class App(BaseHTTPRequestHandler):
         request_path = urlparse(self.path).path
         if request_path == "/catalog-generator/jobs":
             try:
-                json_response(self, 202, create_catalog_generator_job(parse_json_body(self)))
+                payload, template_file = parse_catalog_generator_job_request(self)
+                json_response(
+                    self,
+                    202,
+                    create_catalog_generator_job(payload, template_file=template_file),
+                )
+            except OverflowError as exc:
+                json_response(self, 413, {"error": str(exc)})
             except ValueError as exc:
                 json_response(self, 422, {"error": str(exc) or "Link PNCP inválido."})
             except RuntimeError as exc:
                 json_response(self, 503, {"error": str(exc)})
+            return
+        catalog_repertoire_match = re.fullmatch(
+            r"/catalog-generator/jobs/([a-f0-9]{32})/technical-repertoire",
+            request_path,
+        )
+        if catalog_repertoire_match:
+            try:
+                json_response(
+                    self,
+                    200,
+                    save_catalog_generator_repertoire(
+                        catalog_repertoire_match.group(1),
+                        parse_json_body(self, MAX_JSON_REQUEST_SIZE),
+                    ),
+                )
+            except FileNotFoundError as exc:
+                json_response(self, 404, {"error": str(exc)})
+            except ValueError as exc:
+                json_response(self, 422, {"error": str(exc)})
+            except Exception:
+                LOGGER.exception("Falha ao salvar a régua técnica do Bloco 7")
+                json_response(
+                    self,
+                    500,
+                    {"error": "Não foi possível salvar a régua técnica."},
+                )
             return
         catalog_export_match = re.fullmatch(
             r"/catalog-generator/jobs/([a-f0-9]{32})/export",
@@ -11884,6 +12329,10 @@ def main():
     except Exception as exc:
         LOGGER.warning("A limpeza inicial do gerador de catálogo falhou: %s", exc)
     cleanup_proposal_previews()
+    try:
+        cached_internal_opportunities_response(default_internal_opportunity_query())
+    except Exception as exc:
+        LOGGER.warning("O pré-aquecimento da busca interna falhou: %s", exc)
     server = ThreadingHTTPServer(("127.0.0.1", PORT), App)
     print(f"Aplicação aberta em http://127.0.0.1:{PORT}")
     print("Pressione Ctrl+C para encerrar.")

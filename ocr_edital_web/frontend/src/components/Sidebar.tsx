@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
 import {
-  BookOpen,
   BriefcaseBusiness,
-  ClipboardList,
   FileSearch,
   FileSpreadsheet,
   FileText,
@@ -10,7 +8,7 @@ import {
 } from "lucide-react";
 import tothLogo from "../assets/toth-logo.png";
 
-export type ActiveBlock = "search" | "proposal" | "catalog" | "business" | "structure" | "catalogGenerator";
+export type ActiveBlock = "search" | "proposal" | "business" | "catalogGenerator";
 
 interface SidebarProps {
   active: ActiveBlock;
@@ -130,18 +128,6 @@ export function Sidebar({ active, onChange }: SidebarProps) {
             </span>
           </button>
           <button
-            className={`block-nav-item${active === "catalog" ? " is-active" : ""}`}
-            type="button"
-            onClick={() => onChange("catalog")}
-          >
-            <span className="block-nav-number">03</span>
-            <BookOpen size={18} aria-hidden="true" />
-            <span className="block-nav-copy">
-              <strong>Bloco 3</strong>
-              <small>Catálogo técnico</small>
-            </span>
-          </button>
-          <button
             className={`block-nav-item${active === "business" ? " is-active" : ""}`}
             type="button"
             onClick={() => onChange("business")}
@@ -151,18 +137,6 @@ export function Sidebar({ active, onChange }: SidebarProps) {
             <span className="block-nav-copy">
               <strong>Bloco 4</strong>
               <small>Negócios</small>
-            </span>
-          </button>
-          <button
-            className={`block-nav-item${active === "structure" ? " is-active" : ""}`}
-            type="button"
-            onClick={() => onChange("structure")}
-          >
-            <span className="block-nav-number">05</span>
-            <ClipboardList size={18} aria-hidden="true" />
-            <span className="block-nav-copy">
-              <strong>Bloco 5</strong>
-              <small>Estrutura</small>
             </span>
           </button>
           <button

@@ -5,6 +5,7 @@ import type {
   CatalogGenerateResponse,
   CatalogGeneratorExportResponse,
   CatalogGeneratorJob,
+  CatalogTechnicalRepertoireInput,
   GeneratedCatalogItem,
   CommercialTerms,
   DocxStructureResponse,
@@ -270,7 +271,21 @@ export async function createCatalogGeneratorJob(
   pncpLink: string,
   selectedItemKeys?: string[],
   templateId?: string,
+  templateFile?: File,
 ): Promise<CatalogGeneratorJob> {
+  if (templateFile) {
+    const body = new FormData();
+    body.append("pncp_link", pncpLink);
+    if (selectedItemKeys !== undefined) {
+      body.append("selected_item_keys", JSON.stringify(selectedItemKeys));
+    }
+    body.append("template_file", templateFile, templateFile.name);
+    const response = await fetch("/catalog-generator/jobs", {
+      method: "POST",
+      body,
+    });
+    return parseJson<CatalogGeneratorJob>(response);
+  }
   const response = await fetch("/catalog-generator/jobs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -303,6 +318,22 @@ export async function exportGeneratedCatalog(
 export async function processProposal(body: FormData): Promise<ProcessResponse> {
   const response = await fetch("/process", { method: "POST", body });
   return parseJson<ProcessResponse>(response);
+}
+
+export async function saveCatalogTechnicalRepertoire(
+  jobId: string,
+  itemId: string,
+  repertoire: CatalogTechnicalRepertoireInput,
+): Promise<CatalogGeneratorJob> {
+  const response = await fetch(
+    `/catalog-generator/jobs/${encodeURIComponent(jobId)}/technical-repertoire`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_id: itemId, repertorio: repertoire }),
+    },
+  );
+  return parseJson<CatalogGeneratorJob>(response);
 }
 
 export async function getDocxStructure(templateRef: string): Promise<DocxStructureResponse> {

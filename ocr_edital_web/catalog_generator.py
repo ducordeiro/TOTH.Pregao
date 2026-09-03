@@ -21,7 +21,9 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, 
 
 from catalog_rules import (
     analyze_catalog_item,
+    apply_user_catalog_repertoire,
     build_catalog_entries,
+    catalog_repertoire_key,
     catalog_policy_summary,
     catalog_summary,
     repertoire_summary,
@@ -176,7 +178,15 @@ def sanitize_export_items(items):
         item["numero"] = compact(item["numero"]) or str(index + 1)
         item["fontes"] = raw.get("fontes") if isinstance(raw.get("fontes"), list) else []
         item["conflitos"] = raw.get("conflitos") if isinstance(raw.get("conflitos"), list) else []
-        analyzed = analyze_catalog_item(refresh_validation(item))
+        refreshed = refresh_validation(item)
+        user_repertoire = raw.get("repertorio_usuario")
+        if (
+            isinstance(user_repertoire, dict)
+            and user_repertoire.get("item_key") == catalog_repertoire_key(refreshed)
+        ):
+            analyzed = apply_user_catalog_repertoire(refreshed, user_repertoire)
+        else:
+            analyzed = analyze_catalog_item(refreshed)
         reference = analyzed.get("modelo_referencia") or {}
         fit = analyzed.get("analise_aderencia") or {}
         analyzed["modelo_catalogo"] = reference.get("nome", "")

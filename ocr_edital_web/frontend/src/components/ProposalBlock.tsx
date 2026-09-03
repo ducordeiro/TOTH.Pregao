@@ -56,6 +56,7 @@ interface ProposalBlockProps {
   selectedResponsibleId: string;
   onSelectedTemplateChange: (id: string) => void;
   onSelectedResponsibleChange: (id: string) => void;
+  onProposalSettingsUsed: (templateId: string, responsibleId: string) => void;
   onOpenTemplates: () => void;
   onOpenResponsibles: () => void;
 }
@@ -95,6 +96,7 @@ export function ProposalBlock({
   selectedResponsibleId,
   onSelectedTemplateChange,
   onSelectedResponsibleChange,
+  onProposalSettingsUsed,
   onOpenTemplates,
   onOpenResponsibles,
 }: ProposalBlockProps) {
@@ -323,6 +325,7 @@ export function ProposalBlock({
       if (!selectedItems.length) {
         throw new Error("Os itens selecionados não foram encontrados no documento processado.");
       }
+      onProposalSettingsUsed(customTemplate ? "" : selectedTemplateId, selectedResponsibleId);
       setProcessed({ response, items: selectedItems });
       setDownload(null);
       setDocumentStructure(null);
@@ -543,12 +546,14 @@ export function ProposalBlock({
             <div className="field-with-action">
               <select
                 value={selectedResponsibleId}
-              onChange={(event) => {
+                onChange={(event) => {
                   onSelectedResponsibleChange(event.target.value);
                   invalidateGeneratedDocument();
                 }}
               >
-                {!responsibles.length && <option value="">Nenhum responsável cadastrado</option>}
+                <option value="">
+                  {responsibles.length ? "Selecione um responsável" : "Nenhum responsável cadastrado"}
+                </option>
                 {responsibles.map((responsible) => (
                   <option value={responsible.id} key={responsible.id}>
                     {responsible.nome_completo}
@@ -576,7 +581,9 @@ export function ProposalBlock({
                   onSelectedTemplateChange(event.target.value);
                 }}
               >
-                {!templates.length && <option value="">Nenhum template cadastrado</option>}
+                <option value="">
+                  {templates.length ? "Selecione um template" : "Nenhum template cadastrado"}
+                </option>
                 {templates.map((template) => (
                   <option value={template.id} key={template.id}>
                     {template.display_name || template.name}

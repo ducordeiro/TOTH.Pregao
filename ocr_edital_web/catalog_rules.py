@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import re
 import unicodedata
 
@@ -266,6 +267,20 @@ def normalize_text(value):
     text = unicodedata.normalize("NFKD", str(value or ""))
     text = "".join(character for character in text if not unicodedata.combining(character))
     return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def catalog_repertoire_key(item):
+    identity = "|".join(
+        normalize_text(item.get(field))
+        for field in (
+            "produto",
+            "descricao",
+            "especificacao_tecnica",
+            "categoria",
+            "subcategoria",
+        )
+    )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
 def item_requirement_text(item):
@@ -571,6 +586,181 @@ def unique_strings(values):
     return list(dict.fromkeys(value for value in values if value))
 
 
+def evidence_observation(profile, criteria):
+    if profile is None:
+        return {
+            "status": "sem_repertorio",
+            "titulo": "Não foi encontrado repertório para o item",
+            "descricao": (
+                "Não há dados técnicos cadastrados que permitam validar os componentes "
+                "solicitados pela oportunidade."
+            ),
+            "evidencias": [],
+            "faltantes": [
+                "Cadastre os parâmetros de atendimento e a respectiva evidência técnica."
+            ],
+            "fonte": "",
+        }
+
+    supported_states = {"evidenciado_na_referencia", "potencialmente_atende"}
+    supported = [entry for entry in criteria if entry["estado"] in supported_states]
+    unresolved = [entry for entry in criteria if entry["estado"] not in supported_states]
+    evidence = unique_strings([
+        f"{entry['criterio']}: {entry['requisito']} — {entry['evidencia_repertorio']}"
+        for entry in supported
+    ])
+    missing = unique_strings([
+        f"{entry['criterio']}: {entry['requisito']} — {entry['evidencia_repertorio']}"
+        for entry in unresolved
+    ])
+    if not criteria:
+        missing.append(
+            "Não foi possível decompor todos os componentes técnicos do item para validação."
+        )
+    complete = bool(criteria) and not unresolved
+    return {
+        "status": "evidencia_completa" if complete else "evidencia_parcial",
+        "titulo": (
+            "Foram encontradas evidências para todos os componentes identificados"
+            if complete
+            else "Foram encontradas evidências parciais"
+        ),
+        "descricao": (
+            "O repertório analisado sustenta os requisitos técnicos identificados no item."
+            if complete
+            else "O repertório possui dados úteis, mas ainda não sustenta todos os componentes do item."
+        ),
+        "evidencias": evidence,
+        "faltantes": missing,
+        "fonte": profile["source"],
+    }
+
+
+def _display_number(value):
+    number = float(value)
+    if number.is_integer():
+        return str(int(number))
+    return f"{number:g}".replace(".", ",")
+
+
+def apply_user_catalog_repertoire(item, repertoire):
+    analyzed = dict(item)
+    parameters = [dict(parameter) for parameter in repertoire.get("parametros", [])]
+    criteria = []
+    characteristics = []
+    evidence = []
+    missing = []
+    conflicts = []
+
+    for index, parameter in enumerate(parameters):
+        component = str(parameter.get("componente") or "Componente").strip()
+        attribute = str(parameter.get("atributo") or "Parâmetro").strip()
+        comparison = parameter.get("comparacao")
+        source = str(parameter.get("evidencia") or "").strip()
+        if comparison == "intervalo":
+            required = float(parameter["valor_requerido"])
+            minimum = float(parameter["valor_minimo"])
+            maximum = float(parameter["valor_maximo"])
+            unit = str(parameter.get("unidade") or "").strip()
+            meets = minimum <= required <= maximum
+            requirement = f"{_display_number(required)} {unit}".strip()
+            supported = (
+                f"faixa Goldflex de {_display_number(minimum)} a "
+                f"{_display_number(maximum)} {unit}"
+            ).strip()
+            characteristic = f"{component} — {attribute}: {supported}."
+        else:
+            required = str(parameter.get("valor_requerido_texto") or "").strip()
+            supported_value = str(parameter.get("valor_atendido_texto") or "").strip()
+            normalized_required = normalize_text(required)
+            normalized_supported = normalize_text(supported_value)
+            meets = (
+                normalized_required == normalized_supported
+                if comparison == "igual"
+                else normalized_required in normalized_supported
+            )
+            requirement = required
+            supported = supported_value
+            characteristic = f"{component} — {attribute}: {supported_value}."
+
+        state = "evidenciado_na_referencia" if meets else "divergente"
+        entry = criterion(
+            f"usuario_{index + 1}",
+            f"{component} — {attribute}",
+            requirement,
+            state,
+            f"{supported}. Evidência: {source}",
+            origem="repertorio_usuario",
+            declaracao_atendimento_automatica=False,
+        )
+        criteria.append(entry)
+        characteristics.append(characteristic)
+        if meets:
+            evidence.append(
+                f"{component} — {attribute}: requisito {requirement}; {supported}."
+            )
+        else:
+            detail = (
+                f"{component} — {attribute}: o requisito {requirement} não está dentro "
+                f"do parâmetro cadastrado ({supported})."
+            )
+            missing.append(detail)
+            conflicts.append(entry)
+
+    complete_coverage = bool(repertoire.get("cobertura_completa"))
+    if not complete_coverage:
+        missing.append(
+            "O cadastro foi marcado como parcial; informe os demais componentes exigidos no item."
+        )
+    complete = complete_coverage and bool(criteria) and not conflicts
+    observation = {
+        "status": "evidencia_completa" if complete else "evidencia_parcial",
+        "titulo": (
+            "Foram encontradas evidências para todos os componentes identificados"
+            if complete
+            else "Foram encontradas evidências parciais"
+        ),
+        "descricao": (
+            "A régua técnica cadastrada sustenta todos os parâmetros informados para este item."
+            if complete
+            else "A régua técnica foi aplicada, mas há componentes ausentes ou divergentes."
+        ),
+        "evidencias": evidence,
+        "faltantes": missing,
+        "fonte": "Régua técnica cadastrada pelo usuário",
+    }
+    repertoire_copy = copy.deepcopy(repertoire)
+    repertoire_copy["item_key"] = catalog_repertoire_key(analyzed)
+    analyzed["repertorio_usuario"] = repertoire_copy
+    analyzed["modelo_referencia"] = {
+        "id": f"usuario-{repertoire_copy['id']}",
+        "nome": repertoire_copy["produto_nome"],
+        "familia": analyzed.get("subcategoria") or analyzed.get("categoria") or "Modelo cadastrado",
+        "confianca": "alta" if complete else "média",
+        "pontuacao": 1.0 if complete else 0.6,
+        "sinais_encontrados": [parameter["componente"] for parameter in parameters],
+        "fonte": observation["fonte"],
+    }
+    analyzed["caracteristicas_catalogo"] = characteristics
+    analyzed["analise_aderencia"] = {
+        "resultado": (
+            "revisao_obrigatoria"
+            if conflicts
+            else "referencia_identificada" if complete else "referencia_identificada_com_pendencias"
+        ),
+        "criterios": criteria,
+        "pendencias": missing,
+        "revisao_humana_obrigatoria": True,
+        "declaracao_atendimento_automatica": False,
+    }
+    analyzed["observacao_repertorio"] = observation
+    analyzed["status_catalogo"] = (
+        "bloqueado_por_divergencia" if conflicts else "rascunho_para_revisao"
+    )
+    analyzed["analise_desatualizada"] = False
+    return analyzed
+
+
 def analyze_catalog_item(item):
     analyzed = dict(item)
     text = normalize_text(item_requirement_text(analyzed))
@@ -590,6 +780,7 @@ def analyze_catalog_item(item):
             "declaracao_atendimento_automatica": False,
         }
         analyzed["status_catalogo"] = "bloqueado_sem_modelo"
+        analyzed["observacao_repertorio"] = evidence_observation(None, [])
         return analyzed
 
     criteria = []
@@ -630,18 +821,45 @@ def analyze_catalog_item(item):
         "declaracao_atendimento_automatica": False,
     }
     analyzed["status_catalogo"] = status
+    analyzed["observacao_repertorio"] = evidence_observation(profile, criteria)
     return analyzed
 
 
 def build_catalog_entries(items):
+    entries = []
     model_ids = []
     for item in items:
+        user_repertoire = item.get("repertorio_usuario")
+        if isinstance(user_repertoire, dict):
+            custom_id = f"usuario-{user_repertoire.get('id', '')}"
+            if custom_id in model_ids:
+                continue
+            model_ids.append(custom_id)
+            observation = item.get("observacao_repertorio") or {}
+            entries.append({
+                "id": custom_id,
+                "nome": user_repertoire.get("produto_nome") or item.get("produto") or "Modelo cadastrado",
+                "familia": item.get("subcategoria") or item.get("categoria") or "Modelo cadastrado",
+                "nivel_tecnico": "régua técnica cadastrada",
+                "fonte": "Régua técnica cadastrada pelo usuário",
+                "caracteristicas": list(item.get("caracteristicas_catalogo") or []),
+                "dimensoes": [],
+                "capacidade_kg": None,
+                "normas": [],
+                "pendencias": list(observation.get("faltantes") or []),
+            })
+            continue
         reference = item.get("modelo_referencia") or {}
         model_id = reference.get("id")
         if model_id and model_id not in model_ids:
             model_ids.append(model_id)
     profiles = {profile["id"]: profile for profile in MODEL_PROFILES}
-    return [public_profile(profiles[model_id]) for model_id in model_ids if model_id in profiles]
+    entries.extend(
+        public_profile(profiles[model_id])
+        for model_id in model_ids
+        if model_id in profiles
+    )
+    return entries
 
 
 def catalog_summary(items):

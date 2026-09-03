@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { FileText, RotateCcw } from "lucide-react";
-import { createReplicaDocumentBlocks } from "../docxOrder";
+import { createReplicaDocumentBlocks, withoutTemplateHeader } from "../docxOrder";
 import type { ReplicaDocumentBlock } from "../docxOrder";
 import {
   PREVIEW_PAGE_LINE_CAPACITY,
@@ -252,7 +252,9 @@ export function ProposalLivePreview({
   const showLot = items.some((item) => Boolean(String(item.lote || "").trim()));
   const columns = proposalColumns(showLot);
   const normalizedWidths = normalizeProposalColumnWidths(columnWidths, showLot);
-  const blocks = createReplicaDocumentBlocks(nodes, blockOrder, generatedTable);
+  const blocks = withoutTemplateHeader(
+    createReplicaDocumentBlocks(nodes, blockOrder, generatedTable),
+  );
   const tableIndex = blocks.findIndex((block) => block.type === "GENERATED_TABLE");
   const beforeBlocks = tableIndex >= 0 ? blocks.slice(0, tableIndex) : blocks;
   const afterBlocks = tableIndex >= 0 ? blocks.slice(tableIndex + 1) : [];

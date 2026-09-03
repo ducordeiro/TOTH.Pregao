@@ -10,6 +10,7 @@ import {
   moveMiniBox,
   reorderDocumentBlocks,
   reorderMiniBoxes,
+  withoutTemplateHeader,
 } from "./docxOrder";
 import type { DocumentNode } from "./types";
 
@@ -135,5 +136,32 @@ describe("DOCX mini-box ordering", () => {
 
     expect(replica.filter((block) => block.type !== "FIXED_TEXT").map((block) => block.id))
       .toEqual(["box-a", "box-b", "box-c", table.id]);
+  });
+
+  it("omits template header content only from the live preview", () => {
+    const table = {
+      id: "generated-table",
+      type: "GENERATED_TABLE" as const,
+      content: "Tabela gerada",
+    };
+    const scopedNodes: DocumentNode[] = [
+      { id: "body", type: "FIXED_TEXT", content: "Corpo", source_part: "word/document.xml" },
+      { id: "body-box", type: "MINI_BOX", content: "Item", order: 0, text_align: "left", source_part: "word/document.xml" },
+      { id: "header", type: "FIXED_TEXT", content: "Cabeçalho", source_part: "word/header1.xml" },
+      { id: "header-box", type: "MINI_BOX", content: "Marca", order: 1, text_align: "center", source_part: "word/header1.xml" },
+    ];
+
+    const replica = createReplicaDocumentBlocks(
+      scopedNodes,
+      ["body-box", "header-box", table.id],
+      table,
+    );
+
+    expect(withoutTemplateHeader(replica).map((block) => block.id)).toEqual([
+      "body",
+      "body-box",
+      table.id,
+    ]);
+    expect(replica.map((block) => block.id)).toContain("header-box");
   });
 });

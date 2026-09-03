@@ -1,7 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Check, Download, ExternalLink, FileArchive, LoaderCircle, Play, Upload } from "lucide-react";
-import { createCatalogGeneratorJob, createTemplate, exportGeneratedCatalog, getCatalogGeneratorJob } from "../api";
-import type { CatalogExportFile, CatalogGeneratorJob, GeneratedCatalogItem, OpportunityItemSelection, Template } from "../types";
+import {
+  AlertTriangle,
+  Check,
+  Database,
+  Download,
+  ExternalLink,
+  FileArchive,
+  LoaderCircle,
+  Play,
+  Plus,
+  Save,
+  SlidersHorizontal,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
+import { createCatalogGeneratorJob, exportGeneratedCatalog, getCatalogGeneratorJob, saveCatalogTechnicalRepertoire } from "../api";
+import type {
+  CatalogEvidenceObservation,
+  CatalogExportFile,
+  CatalogGeneratorJob,
+  CatalogTechnicalParameter,
+  CatalogTechnicalRepertoireInput,
+  GeneratedCatalogItem,
+  OpportunityItemSelection,
+  Template,
+} from "../types";
 import { opportunityItemKey, selectionForLink } from "../opportunitySelection";
 import { validateTemplateFile } from "../utils";
 
@@ -12,7 +36,6 @@ interface CatalogGeneratorBlockProps {
   templates: Template[];
   selectedTemplateId: string;
   onSelectedTemplateChange: (id: string) => void;
-  onTemplateCreated: (template: Template) => void;
 }
 
 const humanizeCatalogStatus = (value: string) => value.replaceAll("_", " ");
@@ -23,6 +46,53 @@ const catalogExportLabel = (kind: string) => {
   return "Auditoria " + kind.toUpperCase();
 };
 
+type TechnicalParameterDraft = Omit<CatalogTechnicalParameter, "valor_requerido" | "valor_minimo" | "valor_maximo"> & {
+  valor_requerido: string;
+  valor_minimo: string;
+  valor_maximo: string;
+};
+
+const technicalParameterId = () => (
+  globalThis.crypto?.randomUUID?.().replaceAll("-", "")
+  || `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`.slice(0, 32).padEnd(32, "0")
+);
+
+const newTechnicalParameter = (): TechnicalParameterDraft => ({
+  id: technicalParameterId(),
+  componente: "",
+  atributo: "",
+  comparacao: "intervalo",
+  valor_requerido: "",
+  valor_minimo: "",
+  valor_maximo: "",
+  unidade: "",
+  valor_requerido_texto: "",
+  valor_atendido_texto: "",
+  evidencia: "",
+});
+
+const technicalParameterDraft = (parameter: CatalogTechnicalParameter): TechnicalParameterDraft => ({
+  ...parameter,
+  valor_requerido: parameter.valor_requerido === undefined ? "" : String(parameter.valor_requerido),
+  valor_minimo: parameter.valor_minimo === undefined ? "" : String(parameter.valor_minimo),
+  valor_maximo: parameter.valor_maximo === undefined ? "" : String(parameter.valor_maximo),
+});
+
+const catalogObservation = (item: GeneratedCatalogItem): CatalogEvidenceObservation => (
+  item.observacao_repertorio || {
+    status: item.modelo_referencia ? "evidencia_parcial" : "sem_repertorio",
+    titulo: item.modelo_referencia
+      ? "Foram encontradas evidências parciais"
+      : "Não foi encontrado repertório para o item",
+    descricao: item.modelo_referencia
+      ? "Esta análise foi criada antes da auditoria por componentes e precisa ser reavaliada."
+      : "Não há dados técnicos cadastrados que permitam validar os componentes solicitados.",
+    evidencias: [],
+    faltantes: item.analise_aderencia?.pendencias || ["Cadastre os parâmetros técnicos do item."],
+    fonte: item.modelo_referencia?.fonte || "",
+  }
+);
+
 export function CatalogGeneratorBlock({
   pncpLink,
   onPncpLinkChange,
@@ -30,7 +100,6 @@ export function CatalogGeneratorBlock({
   templates,
   selectedTemplateId,
   onSelectedTemplateChange,
-  onTemplateCreated,
 }: CatalogGeneratorBlockProps) {
   const templateInputRef = useRef<HTMLInputElement>(null);
   const [job, setJob] = useState<CatalogGeneratorJob | null>(null);
@@ -39,13 +108,21 @@ export function CatalogGeneratorBlock({
   const [error, setError] = useState("");
   const [exporting, setExporting] = useState(false);
   const [starting, setStarting] = useState(false);
-  const [uploadingTemplate, setUploadingTemplate] = useState(false);
+  const [customTemplate, setCustomTemplate] = useState<File | null>(null);
+  const [editingRepertoireItemId, setEditingRepertoireItemId] = useState("");
+  const [repertoireProductName, setRepertoireProductName] = useState("");
+  const [repertoireCoverageComplete, setRepertoireCoverageComplete] = useState(false);
+  const [technicalParameters, setTechnicalParameters] = useState<TechnicalParameterDraft[]>([]);
+  const [savingRepertoire, setSavingRepertoire] = useState(false);
   const requestVersion = useRef(0);
   const exportVersion = useRef(0);
   const selection = selectionForLink(itemSelection, pncpLink);
   const selectedTemplate = templates.find((template) => template.id === selectedTemplateId);
   const selectedTemplateVersion = selectedTemplate
     ? `${selectedTemplate.id}:${selectedTemplate.size}:${selectedTemplate.updated_at}`
+    : "";
+  const customTemplateVersion = customTemplate
+    ? `${customTemplate.name}:${customTemplate.size}:${customTemplate.lastModified}`
     : "";
 
   useEffect(() => {
@@ -57,7 +134,10 @@ export function CatalogGeneratorBlock({
     setError("");
     setStarting(false);
     setExporting(false);
-  }, [pncpLink, itemSelection, selectedTemplateVersion]);
+    setEditingRepertoireItemId("");
+    setTechnicalParameters([]);
+    setSavingRepertoire(false);
+  }, [pncpLink, itemSelection, selectedTemplateVersion, customTemplateVersion]);
 
   useEffect(() => {
     if (!job || !["queued", "processing"].includes(job.status)) return;
@@ -87,7 +167,7 @@ export function CatalogGeneratorBlock({
 
   const start = async () => {
     if (starting) return;
-    if (!selectedTemplateId) {
+    if (!selectedTemplateId && !customTemplate) {
       setError("Selecione ou anexe um template Word para gerar o catálogo.");
       return;
     }
@@ -103,7 +183,8 @@ export function CatalogGeneratorBlock({
       const created = await createCatalogGeneratorJob(
         pncpLink,
         selection?.items.map(opportunityItemKey),
-        selectedTemplateId,
+        customTemplate ? undefined : selectedTemplateId,
+        customTemplate || undefined,
       );
       if (version === requestVersion.current) setJob(created);
     } catch (reason) {
@@ -148,23 +229,16 @@ export function CatalogGeneratorBlock({
     }));
   };
 
-  const uploadTemplate = async (file: File) => {
+  const selectCustomTemplate = (file: File) => {
     const validationError = validateTemplateFile(file);
     if (validationError) {
       setError(validationError);
+      if (templateInputRef.current) templateInputRef.current.value = "";
       return;
     }
-    setUploadingTemplate(true);
     setError("");
-    try {
-      const template = await createTemplate(file);
-      onTemplateCreated(template);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível anexar o template.");
-    } finally {
-      setUploadingTemplate(false);
-      if (templateInputRef.current) templateInputRef.current.value = "";
-    }
+    setCustomTemplate(file);
+    onSelectedTemplateChange("");
   };
 
   const runExport = async () => {
@@ -187,6 +261,74 @@ export function CatalogGeneratorBlock({
       if (version === requestVersion.current && currentExportVersion === exportVersion.current) {
         setExporting(false);
       }
+    }
+  };
+
+  const openRepertoireEditor = (item: GeneratedCatalogItem) => {
+    const saved = item.repertorio_usuario;
+    setEditingRepertoireItemId(item.id);
+    setRepertoireProductName(saved?.produto_nome || item.produto || `Item ${item.numero}`);
+    setRepertoireCoverageComplete(saved?.cobertura_completa || false);
+    setTechnicalParameters(
+      saved?.parametros.length
+        ? saved.parametros.map(technicalParameterDraft)
+        : [newTechnicalParameter()],
+    );
+    setError("");
+  };
+
+  const updateTechnicalParameter = (
+    id: string,
+    field: keyof TechnicalParameterDraft,
+    value: string,
+  ) => {
+    setTechnicalParameters((current) => current.map((parameter) => (
+      parameter.id === id ? { ...parameter, [field]: value } : parameter
+    )));
+  };
+
+  const saveTechnicalRepertoire = async (item: GeneratedCatalogItem) => {
+    if (!job || savingRepertoire) return;
+    const input: CatalogTechnicalRepertoireInput = {
+      produto_nome: repertoireProductName,
+      cobertura_completa: repertoireCoverageComplete,
+      parametros: technicalParameters.map((parameter) => (
+        parameter.comparacao === "intervalo"
+          ? {
+              id: parameter.id,
+              componente: parameter.componente,
+              atributo: parameter.atributo,
+              comparacao: parameter.comparacao,
+              valor_requerido: Number(parameter.valor_requerido.replace(",", ".")),
+              valor_minimo: Number(parameter.valor_minimo.replace(",", ".")),
+              valor_maximo: Number(parameter.valor_maximo.replace(",", ".")),
+              unidade: parameter.unidade,
+              evidencia: parameter.evidencia,
+            }
+          : {
+              id: parameter.id,
+              componente: parameter.componente,
+              atributo: parameter.atributo,
+              comparacao: parameter.comparacao,
+              valor_requerido_texto: parameter.valor_requerido_texto,
+              valor_atendido_texto: parameter.valor_atendido_texto,
+              evidencia: parameter.evidencia,
+            }
+      )),
+    };
+    setSavingRepertoire(true);
+    setError("");
+    try {
+      const updated = await saveCatalogTechnicalRepertoire(job.id, item.id, input);
+      setJob(updated);
+      setItems(updated.result?.items || []);
+      setExports({});
+      setEditingRepertoireItemId("");
+      setTechnicalParameters([]);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Não foi possível salvar a régua técnica.");
+    } finally {
+      setSavingRepertoire(false);
     }
   };
 
@@ -238,10 +380,16 @@ export function CatalogGeneratorBlock({
           <div className="catalog-generator-template-controls">
             <select
               id="catalog-generator-template"
-              value={selectedTemplateId}
-              onChange={(event) => onSelectedTemplateChange(event.target.value)}
+              value={customTemplate ? "" : selectedTemplateId}
+              onChange={(event) => {
+                setCustomTemplate(null);
+                if (templateInputRef.current) templateInputRef.current.value = "";
+                onSelectedTemplateChange(event.target.value);
+              }}
             >
-              {!templates.length && <option value="">Nenhum template cadastrado</option>}
+              <option value="">
+                {templates.length ? "Selecione um template" : "Nenhum template cadastrado"}
+              </option>
               {templates.map((template) => (
                 <option key={template.id} value={template.id}>
                   {template.display_name || template.name}
@@ -253,15 +401,32 @@ export function CatalogGeneratorBlock({
                 <ExternalLink size={16} aria-hidden="true" /> Abrir template
               </a>
             )}
-            <button
-              className="button button-secondary"
-              type="button"
-              disabled={uploadingTemplate}
-              onClick={() => templateInputRef.current?.click()}
-            >
-              {uploadingTemplate ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />}
-              {uploadingTemplate ? "Anexando..." : "Anexar .docx"}
-            </button>
+            <div className={`custom-template catalog-generator-custom-template${customTemplate ? " is-active" : ""}`}>
+              <span>{customTemplate?.name || "Template avulso"}</span>
+              <div className="custom-template-actions">
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  onClick={() => templateInputRef.current?.click()}
+                >
+                  <Upload size={16} /> Anexar .docx
+                </button>
+                {customTemplate && (
+                  <button
+                    className="button button-secondary custom-template-clear"
+                    type="button"
+                    title="Remover template avulso"
+                    aria-label="Remover template avulso"
+                    onClick={() => {
+                      setCustomTemplate(null);
+                      if (templateInputRef.current) templateInputRef.current.value = "";
+                    }}
+                  >
+                    <X size={16} />
+                  </button>
+                )}
+              </div>
+            </div>
             <input
               ref={templateInputRef}
               type="file"
@@ -269,7 +434,7 @@ export function CatalogGeneratorBlock({
               hidden
               onChange={(event) => {
                 const file = event.target.files?.[0];
-                if (file) void uploadTemplate(file);
+                if (file) selectCustomTemplate(file);
               }}
             />
           </div>
@@ -382,6 +547,131 @@ export function CatalogGeneratorBlock({
                   ))}
                 </tbody>
               </table>
+            </div>
+          </section>
+
+          <section className="catalog-generator-observations" aria-label="Observações de repertório">
+            <div className="catalog-generator-observations-heading">
+              <Database size={18} aria-hidden="true" />
+              <div>
+                <h2>Observações de repertório</h2>
+                <p>A conclusão considera cada componente técnico identificado no item.</p>
+              </div>
+            </div>
+            <div className="catalog-generator-observation-list">
+              {items.map((item) => {
+                const observation = catalogObservation(item);
+                const isEditing = editingRepertoireItemId === item.id;
+                const canEditRepertoire = observation.status === "sem_repertorio" || Boolean(item.repertorio_usuario);
+                return (
+                  <article className={`catalog-generator-observation is-${observation.status}`} key={item.id}>
+                    <header>
+                      <span>Item {item.numero}{item.lote ? ` · Lote ${item.lote}` : ""}</span>
+                      <strong>{observation.titulo}</strong>
+                      <span className={`evidence-status is-${observation.status}`}>
+                        {observation.status === "sem_repertorio" ? "1 · sem repertório" : observation.status === "evidencia_completa" ? "2 · evidência completa" : "3 · evidência parcial"}
+                      </span>
+                    </header>
+                    <p>{observation.descricao}</p>
+                    {observation.fonte && <small>Fonte: {observation.fonte}</small>}
+                    {observation.evidencias.length > 0 && (
+                      <div className="catalog-generator-observation-details is-supported">
+                        <strong>Evidências localizadas</strong>
+                        <ul>{observation.evidencias.map((entry) => <li key={entry}>{entry}</li>)}</ul>
+                      </div>
+                    )}
+                    {observation.faltantes.length > 0 && (
+                      <div className="catalog-generator-observation-details is-missing">
+                        <strong>Dados faltantes ou divergentes</strong>
+                        <ul>{observation.faltantes.map((entry) => <li key={entry}>{entry}</li>)}</ul>
+                      </div>
+                    )}
+                    {canEditRepertoire && !isEditing && (
+                      <button className="button button-secondary" type="button" onClick={() => openRepertoireEditor(item)}>
+                        <SlidersHorizontal size={16} aria-hidden="true" />
+                        {item.repertorio_usuario ? "Editar régua técnica" : "Cadastrar régua técnica"}
+                      </button>
+                    )}
+                    {isEditing && (
+                      <form className="catalog-generator-repertoire-form" onSubmit={(event) => { event.preventDefault(); void saveTechnicalRepertoire(item); }}>
+                        <label>
+                          Produto ou modelo Goldflex
+                          <input value={repertoireProductName} maxLength={180} required onChange={(event) => setRepertoireProductName(event.target.value)} />
+                        </label>
+                        <div className="catalog-generator-parameter-list">
+                          {technicalParameters.map((parameter, index) => (
+                            <fieldset key={parameter.id}>
+                              <legend>Parâmetro {index + 1}</legend>
+                              <button
+                                className="icon-button"
+                                type="button"
+                                title="Excluir parâmetro"
+                                aria-label={`Excluir parâmetro ${index + 1}`}
+                                disabled={technicalParameters.length === 1}
+                                onClick={() => setTechnicalParameters((current) => current.filter((entry) => entry.id !== parameter.id))}
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                              <label>
+                                Componente ou peça
+                                <input value={parameter.componente} maxLength={120} required placeholder="Ex.: Peça X" onChange={(event) => updateTechnicalParameter(parameter.id, "componente", event.target.value)} />
+                              </label>
+                              <label>
+                                Característica avaliada
+                                <input value={parameter.atributo} maxLength={120} required placeholder="Ex.: Tamanho" onChange={(event) => updateTechnicalParameter(parameter.id, "atributo", event.target.value)} />
+                              </label>
+                              <label>
+                                Regra de comparação
+                                <select value={parameter.comparacao} onChange={(event) => updateTechnicalParameter(parameter.id, "comparacao", event.target.value)}>
+                                  <option value="intervalo">Faixa numérica</option>
+                                  <option value="igual">Valor exato</option>
+                                  <option value="contem">Característica contida</option>
+                                </select>
+                              </label>
+                              {parameter.comparacao === "intervalo" ? (
+                                <div className="catalog-generator-numeric-rule">
+                                  <label>Exigido no item<input type="number" step="any" required value={parameter.valor_requerido} onChange={(event) => updateTechnicalParameter(parameter.id, "valor_requerido", event.target.value)} /></label>
+                                  <label>Mínimo Goldflex<input type="number" step="any" required value={parameter.valor_minimo} onChange={(event) => updateTechnicalParameter(parameter.id, "valor_minimo", event.target.value)} /></label>
+                                  <label>Máximo Goldflex<input type="number" step="any" required value={parameter.valor_maximo} onChange={(event) => updateTechnicalParameter(parameter.id, "valor_maximo", event.target.value)} /></label>
+                                  <label>Unidade<input required maxLength={24} value={parameter.unidade} placeholder="cm" onChange={(event) => updateTechnicalParameter(parameter.id, "unidade", event.target.value)} /></label>
+                                </div>
+                              ) : (
+                                <div className="catalog-generator-text-rule">
+                                  <label>Exigido no item<input required maxLength={240} value={parameter.valor_requerido_texto} onChange={(event) => updateTechnicalParameter(parameter.id, "valor_requerido_texto", event.target.value)} /></label>
+                                  <label>Atendido pela Goldflex<input required maxLength={240} value={parameter.valor_atendido_texto} onChange={(event) => updateTechnicalParameter(parameter.id, "valor_atendido_texto", event.target.value)} /></label>
+                                </div>
+                              )}
+                              <label className="catalog-generator-parameter-evidence">
+                                Evidência técnica
+                                <textarea required maxLength={1000} value={parameter.evidencia} placeholder="Informe catálogo, laudo, ficha técnica ou validação do fabricante." onChange={(event) => updateTechnicalParameter(parameter.id, "evidencia", event.target.value)} />
+                              </label>
+                            </fieldset>
+                          ))}
+                        </div>
+                        <button
+                          className="button button-secondary"
+                          type="button"
+                          disabled={technicalParameters.length >= 30}
+                          onClick={() => setTechnicalParameters((current) => [...current, newTechnicalParameter()])}
+                        >
+                          <Plus size={16} aria-hidden="true" /> Adicionar parâmetro
+                        </button>
+                        <label className="catalog-generator-coverage-check">
+                          <input type="checkbox" checked={repertoireCoverageComplete} onChange={(event) => setRepertoireCoverageComplete(event.target.checked)} />
+                          Esta régua contempla todos os componentes exigidos neste item.
+                        </label>
+                        <div className="catalog-generator-repertoire-actions">
+                          <button className="button button-secondary" type="button" disabled={savingRepertoire} onClick={() => setEditingRepertoireItemId("")}>Cancelar</button>
+                          <button className="button button-primary" type="submit" disabled={savingRepertoire}>
+                            {savingRepertoire ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}
+                            {savingRepertoire ? "Salvando..." : "Salvar e reavaliar"}
+                          </button>
+                        </div>
+                      </form>
+                    )}
+                  </article>
+                );
+              })}
             </div>
           </section>
 
