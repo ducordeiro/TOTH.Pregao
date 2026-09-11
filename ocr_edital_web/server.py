@@ -40,7 +40,7 @@ from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Pt
+from docx.shared import Pt, Twips
 from openpyxl import load_workbook
 
 from catalog import (
@@ -71,11 +71,13 @@ from docx_structure import (
     resolve_document_block_layout,
     validate_document_block_order,
     validate_mini_box_alignments,
+    validate_mini_box_contents,
     validate_mini_box_order,
 )
 
 import kanban as kanban_store
-from etl import ETLRepository, ETLSyncService, OpportunityClassifier, PNCPConnector, PNCPMapper, SyncRequest
+from etl import ETLRepository, ETLSyncService, OpportunityClassifier, PNCPMapper, SyncRequest
+from etl.preferred_source import MODALITIES as COMPRASGOV_MODALITIES, ComprasGovSource, PreferredProcurementConnector as PNCPConnector
 from etl.connectors import HttpJsonClient
 from etl.search_filters import (
     classify_object_text,
@@ -2484,11 +2486,10 @@ def pncp_purchase_metadata(cnpj, ano, sequencial):
     if local:
         return local
 
-    url = (
-        f"{PNCP_API_BASE}/consulta/v1/orgaos/{cnpj}/compras/"
-        f"{ano}/{sequencial}"
-    )
-    payload = request_json(url)
+    try:
+        payload = PNCPConnector().fetch_detail(cnpj, ano, sequencial).payload
+    except Exception:
+        return {}
     if not isinstance(payload, dict) or payload.get("timeout"):
         return {}
     orgao = payload.get("orgaoEntidade") or {}
@@ -4224,28 +4225,104 @@ def add_commercial_terms(doc, items, commercial_terms=None):
         value_run.font.size = Pt(10)
 
 
-def columns_for_items(items):
-    if any(compact(item.get("lote")) for item in items):
-        return [LOT_COLUMN] + COLUMNS
-    return COLUMNS
+def columns_for_items(items, extra_column=None, table_layout=None):
+    if table_layout is not None:
+        return [(entry["key"], entry["label"]) for entry in table_layout["columns"]]
+    columns = ([LOT_COLUMN] if any(compact(item.get("lote")) for item in items) else []) + list(COLUMNS)
+    if extra_column is not None:
+        columns.insert(extra_column["position"], ("extra_column", extra_column["title"]))
+    return columns
+
+
+def normalize_proposal_table_layout(items, layout):
+    if layout is None:
+        return None
+    if not isinstance(layout, dict) or not isinstance(layout.get("columns"), list):
+        raise ValueError("A estrutura da tabela e invalida.")
+    columns, custom = layout["columns"], layout.get("custom_values", {})
+    if not 1 <= len(columns) <= 24 or not isinstance(custom, dict):
+        raise ValueError("A tabela deve conter entre 1 e 24 colunas.")
+    allowed = {key for key, _ in [LOT_COLUMN] + COLUMNS}
+    seen, result = set(), []
+    invalid_xml = r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]"
+    for entry in columns:
+        if not isinstance(entry, dict):
+            raise ValueError("Coluna invalida.")
+        key, label = entry.get("key"), entry.get("label")
+        if not isinstance(key, str) or key in seen or (key not in allowed and not re.fullmatch(r"custom_[A-Za-z0-9_]{1,80}", key)):
+            raise ValueError("Identificacao de coluna invalida ou duplicada.")
+        if not isinstance(label, str) or not label.strip() or len(label) > 120 or re.search(invalid_xml, label):
+            raise ValueError("Titulo de coluna invalido.")
+        seen.add(key)
+        result.append({"key": key, "label": label.strip()})
+    custom_keys = {key for key in seen if key.startswith("custom_")}
+    if set(custom) != custom_keys:
+        raise ValueError("Os valores das colunas adicionais nao correspondem a tabela.")
+    values = {}
+    for key in custom_keys:
+        rows = custom[key]
+        if not isinstance(rows, list) or len(rows) != len(items) or any(
+            not isinstance(value, str) or len(value) > 5000 or re.search(invalid_xml, value) for value in rows
+        ):
+            raise ValueError("Valores de coluna invalidos.")
+        values[key] = [value.replace("\r\n", "\n").replace("\r", "\n") for value in rows]
+    return {"columns": result, "custom_values": values}
+
+
+def proposal_table_cell(item, item_index, key, extra_column=None, table_layout=None):
+    if table_layout is not None and key.startswith("custom_"):
+        return table_layout["custom_values"][key][item_index]
+    if key == "extra_column" and extra_column is not None:
+        return extra_column["values"][item_index]
+    return str(item.get(key) or "")
+
+
+def normalize_proposal_extra_column(items, extra_column):
+    if extra_column is None:
+        return None
+    if not isinstance(extra_column, dict):
+        raise ValueError("A coluna adicional é inválida.")
+    title = extra_column.get("title")
+    position = extra_column.get("position")
+    values = extra_column.get("values")
+    if not isinstance(title, str) or not title.strip() or len(title) > 120:
+        raise ValueError("Informe um título de até 120 caracteres para a coluna adicional.")
+    if type(position) is not int or not 0 <= position <= len(columns_for_items(items)):
+        raise ValueError("Escolha uma posição válida para a coluna adicional.")
+    if not isinstance(values, list) or len(values) != len(items) or not all(
+        isinstance(value, str) and len(value) <= 5000 for value in values
+    ):
+        raise ValueError("Informe um valor de até 5000 caracteres por item na coluna adicional.")
+    if any(re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]", text)
+           for text in [title, *values]):
+        raise ValueError("A coluna adicional contém caracteres inválidos.")
+    return {"title": title.strip(), "position": position,
+            "values": [value.replace("\r\n", "\n").replace("\r", "\n") for value in values]}
 
 
 def widths_for_columns(columns):
-    if columns and columns[0][0] == "lote":
-        return [750, 650, 600, 600, 3850, 1250, 1550, 1850]
-    return [650, 650, 600, 4500, 1200, 1600, 1900]
+    has_lot = any(key == "lote" for key, _ in columns)
+    standard_columns = ([LOT_COLUMN] if has_lot else []) + COLUMNS
+    weights = [750, 650, 600, 600, 3850, 1250, 1550, 1850] if has_lot else [650, 650, 600, 4500, 1200, 1600, 1900]
+    by_key = dict(zip((key for key, _ in standard_columns), weights))
+    by_key["extra_column"] = 1500
+    return [by_key.get(key, 1500) for key, _ in columns]
 
 
-def normalize_proposal_column_widths(items, requested_widths):
+def normalize_proposal_column_widths(items, requested_widths, extra_column=None, table_layout=None):
     if requested_widths is None:
         return None
     if not isinstance(requested_widths, dict):
         raise ValueError("As larguras das colunas da proposta são inválidas.")
     allowed_keys = {key for key, _ in [LOT_COLUMN] + COLUMNS}
+    if table_layout is not None:
+        allowed_keys = {entry["key"] for entry in table_layout["columns"]}
+    if extra_column is not None:
+        allowed_keys.add("extra_column")
     if not set(requested_widths).issubset(allowed_keys):
         raise ValueError("As larguras das colunas da proposta são inválidas.")
 
-    columns = columns_for_items(items)
+    columns = columns_for_items(items, extra_column, table_layout)
     defaults = widths_for_columns(columns)
     values = []
     for (key, _), default in zip(columns, defaults):
@@ -4254,7 +4331,7 @@ def normalize_proposal_column_widths(items, requested_widths):
             isinstance(candidate, bool)
             or not isinstance(candidate, (int, float))
             or not math.isfinite(candidate)
-            or candidate < 2
+            or candidate < (0.1 if table_layout is not None else 2)
         ):
             raise ValueError("Cada coluna da proposta deve possuir largura mínima de 2%.")
         values.append(float(candidate))
@@ -4295,7 +4372,12 @@ def build_docx(
     document_block_order=None,
     mini_box_alignments=None,
     proposal_column_widths=None,
+    mini_box_contents=None,
+    extra_column=None,
+    table_layout=None,
 ):
+    extra_column = normalize_proposal_extra_column(items, extra_column)
+    table_layout = normalize_proposal_table_layout(items, table_layout)
     table_paragraph_index = None
     if template_path and template_path.exists():
         template_mini_box_order = [
@@ -4324,13 +4406,14 @@ def build_docx(
                 mini_box_order,
                 mini_box_alignments,
                 include_markers=False,
+                contents=mini_box_contents,
             )
         doc = Document(str(output_path))
     else:
         doc = Document()
         doc.add_paragraph("PROPOSTA FINAL")
 
-    columns = columns_for_items(items)
+    columns = columns_for_items(items, extra_column, table_layout)
     table = doc.add_table(rows=1, cols=len(columns))
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     try:
@@ -4339,7 +4422,7 @@ def build_docx(
         set_table_grid_borders(table)
     table.autofit = False
 
-    requested_widths = normalize_proposal_column_widths(items, proposal_column_widths)
+    requested_widths = normalize_proposal_column_widths(items, proposal_column_widths, extra_column, table_layout)
     default_widths = widths_for_columns(columns)
     width_weights = (
         [
@@ -4351,6 +4434,8 @@ def build_docx(
     )
     total_width, widths = fit_widths_to_section(width_weights, doc.sections[-1])
     set_table_width(table, total_width)
+    for column, width in zip(table.columns, widths):
+        column.width = Twips(width)
 
     header_row = table.rows[0]
     repeat_header(header_row)
@@ -4360,14 +4445,15 @@ def build_docx(
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
         write_cell(cell, header, bold=True, size=10, align=WD_ALIGN_PARAGRAPH.CENTER)
 
-    for item in items:
+    for item_index, item in enumerate(items):
         row = table.add_row()
         for idx, (cell, (key, _), width) in enumerate(zip(row.cells, columns, widths)):
             set_cell_width(cell, width)
             set_column_cell_margins(cell, key)
             cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
             align = WD_ALIGN_PARAGRAPH.LEFT if key == "descricao" else WD_ALIGN_PARAGRAPH.CENTER
-            write_cell(cell, item.get(key, ""), bold=False, size=9, align=align)
+            value = proposal_table_cell(item, item_index, key, extra_column, table_layout)
+            write_cell(cell, value, bold=False, size=9, align=align)
 
     if table_paragraph_index is not None:
         move_table_before_template_paragraph(doc, table, table_paragraph_index)
@@ -4487,6 +4573,19 @@ def format_pncp_quantity(value):
 
 
 def list_pncp_item_payload(cnpj, ano, sequencial):
+    local = identify_items_from_opportunity_store(cnpj, ano, sequencial)
+    if local is not None:
+        return [{
+            "numeroItem": item.get("item"), "numeroLote": item.get("lote"),
+            "descricao": item.get("descricao"), "quantidade": item.get("quantidade"),
+            "unidadeMedida": item.get("unidade"),
+            "valorUnitarioEstimado": item.get("valor_unitario_estimado"),
+            "valorTotal": item.get("valor_total_estimado"),
+        } for item in local["items"]]
+    try:
+        return ComprasGovSource().fetch_items(cnpj, ano, sequencial).records
+    except Exception as exc:
+        LOGGER.info("Compras.gov itens -> PNCP: %s", exc)
     base_url = f"{PNCP_API_BASE}/pncp/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens"
     page_size = 500
     payload = []
@@ -6307,6 +6406,97 @@ def sync_pncp_opportunity_endpoints(params, data_inicial, data_final):
     return summary
 
 
+def refresh_comprasgov_search(params):
+    """Supplement the local index before PNCP without claiming unsupported coverage."""
+    start = optional_yyyymmdd(params.get("dataInicial"))
+    end = optional_yyyymmdd(params.get("dataFinal"))
+    field = parse_search_date_field(params.get("campoData"))
+    if start and end and start > end:
+        raise ValueError("Data inicial nao pode ser maior que a data final.")
+    if date_range_days(start, end) > 30:
+        raise ValueError("O periodo maximo e de 30 dias corridos.")
+    today = datetime.now()
+    exact_period = field == "publicacao" and bool(start and end)
+    publication_start = start if exact_period else (today - timedelta(days=29)).strftime("%Y%m%d")
+    publication_end = end if exact_period else today.strftime("%Y%m%d")
+    iso = lambda value: datetime.strptime(value, "%Y%m%d").strftime("%Y-%m-%d")
+    selected_modality = int(params["codigoModalidadeContratacao"]) if params.get("codigoModalidadeContratacao") else None
+    modalities = [COMPRASGOV_MODALITIES[selected_modality]] if selected_modality in COMPRASGOV_MODALITIES else sorted(set(COMPRASGOV_MODALITIES.values()))
+    ufs = parse_search_ufs(params.get("uf")) or ("",)
+    primary = ComprasGovSource()
+    repository = etl_repository()
+    run_id = repository.create_run("comprasgov", "search_reconciliation", dict(params))
+    counters = {"fetched": 0, "inserted": 0, "updated": 0, "skipped": 0, "failed": 0}
+    fallback_reason = ""
+    deadline = time.monotonic() + 12
+    try:
+        if selected_modality is not None and selected_modality not in COMPRASGOV_MODALITIES:
+            raise ValueError("Modalidade sem equivalencia validada no Compras.gov")
+        for modality in modalities:
+            for uf in ufs:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Janela de consulta Compras.gov esgotada")
+                query = {
+                    "dataPublicacaoPncpInicial": iso(publication_start),
+                    "dataPublicacaoPncpFinal": iso(publication_end),
+                    "codigoModalidade": modality,
+                    "unidadeOrgaoUfSigla": uf,
+                    "unidadeOrgaoCodigoUnidade": params.get("uasg"),
+                }
+                for page in primary.iter_publications(query):
+                    for row in page.records:
+                        if row.get("contratacaoExcluida"):
+                            continue
+                        if selected_modality is not None and row.get("modalidadeId") != selected_modality:
+                            continue
+                        opportunity = PNCPMapper().map(row)
+                        outcome, _ = repository.persist_record(
+                            run_id=run_id, source_endpoint="comprasgov/publicacao",
+                            request_url=page.request_url, raw_payload=row,
+                            opportunity=opportunity,
+                            match=OpportunityClassifier().classify(opportunity, {}),
+                            replace_children=False,
+                        )
+                        counters["fetched"] += 1
+                        counters[outcome] += 1
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Janela de consulta Compras.gov esgotada")
+        if not counters["fetched"]:
+            fallback_reason = "Compras.gov retornou zero registros"
+        elif selected_modality is None:
+            fallback_reason = "PNCP complementa modalidades sem equivalencia validada no Compras.gov"
+        elif not exact_period:
+            fallback_reason = "Compras.gov filtra publicacao, nao abertura/encerramento; PNCP complementa o periodo"
+        elif split_search_keywords(params.get("palavraChave")) or params.get("tipoObjeto"):
+            fallback_reason = "Busca por itens exige cobertura complementar do PNCP"
+    except Exception as exc:
+        counters["failed"] += 1
+        fallback_reason = str(exc)
+    status = "partial" if counters["failed"] else "success"
+    repository.finish_run(run_id, status=status, counters=counters, error_message=fallback_reason or None)
+    return {"run_id": run_id, "status": status, **counters, "fallback_reason": fallback_reason}
+
+
+def search_online_bids(params):
+    primary = refresh_comprasgov_search(params)
+    if primary["fallback_reason"]:
+        LOGGER.info("Compras.gov busca -> PNCP: %s", primary["fallback_reason"])
+        result = search_pncp_open_bids(params)
+        fallback_summary = result.get("reconciliation") or {}
+        result["reconciliation"] = {
+            **fallback_summary,
+            **{key: int(primary.get(key) or 0) + int(fallback_summary.get(key) or 0)
+               for key in ("fetched", "inserted", "updated", "skipped")},
+        }
+        result["provider_attempts"] = ["comprasgov", "pncp"]
+        result["fallback_reason"] = primary["fallback_reason"]
+    else:
+        result = internal_opportunities_response(params)
+        result.update({"complete": True, "searching": False, "source": "comprasgov",
+                       "reconciliation": primary, "provider_attempts": ["comprasgov"]})
+    return result
+
+
 def search_pncp_open_bids(params):
     data_inicial = optional_yyyymmdd(params.get("dataInicial"))
     data_final = optional_yyyymmdd(params.get("dataFinal"))
@@ -6552,7 +6742,7 @@ def search_pncp_open_bids_fast(params):
             full_params = dict(params)
             full_params["pagina"] = "1"
             full_params["tamanhoPagina"] = str(page_size)
-            result = search_pncp_open_bids(full_params)
+            result = search_online_bids(full_params)
         except Exception as exc:
             result = copy.deepcopy(pending)
             result.update({
@@ -6781,7 +6971,7 @@ def proposal_generation_context(payload):
     ):
         raise ValueError("informações não encontradas")
 
-    items = [dict(item, unidade=STANDARD_UNIT) for item in items]
+    items = [dict(item, unidade=(item.get("unidade") or STANDARD_UNIT) if payload.get("table_layout") is not None else STANDARD_UNIT) for item in items]
     if any(len(compact(item.get("marca"))) > 120 for item in items):
         raise ValueError("A marca deve possuir no máximo 120 caracteres.")
     for item in items:
@@ -6813,13 +7003,19 @@ def proposal_generation_context(payload):
     requested_order = payload.get("mini_box_order")
     requested_document_order = payload.get("document_block_order")
     requested_alignments = payload.get("mini_box_alignments")
+    requested_contents = payload.get("mini_box_contents")
     requested_column_widths = payload.get("proposal_column_widths")
     mini_box_order = None
     document_block_order = None
     mini_box_alignments = {}
+    mini_box_contents = {}
+    extra_column = normalize_proposal_extra_column(items, payload.get("extra_column"))
+    table_layout = normalize_proposal_table_layout(items, payload.get("table_layout"))
     proposal_column_widths = normalize_proposal_column_widths(
         items,
         requested_column_widths,
+        extra_column,
+        table_layout,
     )
     if requested_document_order is not None:
         if not template_path:
@@ -6849,6 +7045,11 @@ def proposal_generation_context(payload):
             requested_alignments,
         )
 
+    if requested_contents is not None:
+        if not template_path:
+            raise ValueError("O modelo Word selecionado não está disponível.")
+        mini_box_contents = validate_mini_box_contents(template_path, requested_contents)
+
     return {
         "items": items,
         "template_path": template_path,
@@ -6859,6 +7060,9 @@ def proposal_generation_context(payload):
         "mini_box_order": mini_box_order,
         "document_block_order": document_block_order,
         "mini_box_alignments": mini_box_alignments,
+        "mini_box_contents": mini_box_contents,
+        "extra_column": extra_column,
+        "table_layout": table_layout,
         "proposal_column_widths": proposal_column_widths,
     }
 
@@ -6881,6 +7085,9 @@ def proposal_preview_fingerprint(context):
         "mini_box_order": context.get("mini_box_order"),
         "document_block_order": context.get("document_block_order"),
         "mini_box_alignments": context.get("mini_box_alignments"),
+        "mini_box_contents": context.get("mini_box_contents"),
+        "extra_column": context.get("extra_column"),
+        "table_layout": context.get("table_layout"),
         "proposal_column_widths": context.get("proposal_column_widths"),
     }
     encoded = json.dumps(
@@ -7015,29 +7222,28 @@ def build_compatible_proposal_pdf(context, pdf_path):
         ),
         Spacer(1, 4 * mm),
     ]
-    rows = [[
-        Paragraph("Item", body_style),
-        Paragraph("Qtd.", body_style),
-        Paragraph("UND", body_style),
-        Paragraph("Descrição", body_style),
-        Paragraph("Marca", body_style),
-        Paragraph("Valor unitário", body_style),
-        Paragraph("Valor total", body_style),
-    ]]
-    for item in context.get("items") or []:
-        rows.append([
-            Paragraph(html.escape(compact(item.get("item"))), body_style),
-            Paragraph(html.escape(compact(item.get("quantidade"))), body_style),
-            Paragraph(html.escape(compact(item.get("unidade")) or STANDARD_UNIT), body_style),
-            Paragraph(html.escape(compact(item.get("descricao"))), body_style),
-            Paragraph(html.escape(compact(item.get("marca"))), body_style),
-            Paragraph(html.escape(compact(item.get("valor_unitario"))), body_style),
-            Paragraph(html.escape(compact(item.get("valor_total"))), body_style),
-        ])
+    items = context.get("items") or []
+    extra_column = normalize_proposal_extra_column(items, context.get("extra_column"))
+    table_layout = normalize_proposal_table_layout(items, context.get("table_layout"))
+    columns = columns_for_items(items, extra_column, table_layout)
+    rows = [[Paragraph(html.escape(label), body_style) for _, label in columns]]
+    for item_index, item in enumerate(items):
+        row = []
+        for key, _ in columns:
+            value = proposal_table_cell(item, item_index, key, extra_column, table_layout)
+            if key == "unidade":
+                value = value or STANDARD_UNIT
+            row.append(Paragraph(html.escape(value).replace("\n", "<br/>"), body_style))
+        rows.append(row)
+    requested_widths = normalize_proposal_column_widths(
+        items, context.get("proposal_column_widths"), extra_column, table_layout,
+    )
+    weights = [requested_widths[key] for key, _ in columns] if requested_widths else widths_for_columns(columns)
     table = Table(
         rows,
         repeatRows=1,
-        colWidths=[14 * mm, 18 * mm, 15 * mm, 100 * mm, 32 * mm, 34 * mm, 34 * mm],
+        colWidths=[weight / sum(weights) * document.width for weight in weights],
+        splitInRow=1,
     )
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#233254")),
@@ -7105,6 +7311,9 @@ def create_proposal_preview(context):
                 mini_box_order=context.get("mini_box_order"),
                 document_block_order=context.get("document_block_order"),
                 mini_box_alignments=context.get("mini_box_alignments"),
+                mini_box_contents=context.get("mini_box_contents"),
+                extra_column=context.get("extra_column"),
+                table_layout=context.get("table_layout"),
                 proposal_column_widths=context.get("proposal_column_widths"),
             )
             try:
@@ -11791,7 +12000,7 @@ class App(BaseHTTPRequestHandler):
                 if str(query.get("rapido") or "") == "1":
                     result = search_pncp_open_bids_fast(query)
                 else:
-                    result = search_pncp_open_bids(query)
+                    result = search_online_bids(query)
                 json_response(self, 200, result)
             except ValueError as exc:
                 json_response(self, 400, {"error": str(exc) or "Revise os filtros da consulta."})
@@ -12147,6 +12356,9 @@ class App(BaseHTTPRequestHandler):
                     mini_box_order=context["mini_box_order"],
                     document_block_order=context["document_block_order"],
                     mini_box_alignments=context["mini_box_alignments"],
+                    mini_box_contents=context["mini_box_contents"],
+                    extra_column=context["extra_column"],
+                    table_layout=context.get("table_layout"),
                     proposal_column_widths=context["proposal_column_widths"],
                 )
                 try:

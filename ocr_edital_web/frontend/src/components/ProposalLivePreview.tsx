@@ -25,6 +25,8 @@ import type {
   ProposalColumnKey,
   ProposalColumnWidths,
   ProposalItem,
+  ProposalExtraColumn,
+  ProposalTableLayout,
   Responsible,
 } from "../types";
 import { formatCents, parseMoneyToCents } from "../utils";
@@ -38,7 +40,9 @@ interface ProposalLivePreviewProps {
   responsible?: Responsible;
   miniBoxAlignments: Record<string, MiniBoxTextAlign>;
   columnWidths: ProposalColumnWidths;
-  onColumnWidthsChange: (widths: ProposalColumnWidths) => void;
+  onColumnWidthsChange?: (widths: ProposalColumnWidths) => void;
+  extraColumn?: ProposalExtraColumn | null;
+  tableLayout?: ProposalTableLayout | null;
 }
 
 function proposalTotal(items: ProposalItem[]): string {
@@ -50,27 +54,33 @@ function proposalTotal(items: ProposalItem[]): string {
 }
 
 function columnValue(row: ProposalRowFragment, key: ProposalColumnKey): string {
+  if (row.cells) return row.cells[key] || "";
+  if (key === "extra_column") return row.extraValue || "";
   if (key === "descricao") return row.description;
   if (row.continuation) return "";
   if (key === "unidade") return String(row.item.unidade || "UND");
-  return String(row.item[key] || "");
+  return String(row.item[key as keyof ProposalItem] || "");
 }
 
-function ColumnResizeHandle({
+export function ColumnResizeHandle({
   left,
   right,
   widths,
   showLot,
   onChange,
+  extraColumn,
+  tableLayout,
 }: {
   left: ProposalColumnKey;
   right: ProposalColumnKey;
   widths: ProposalColumnWidths;
   showLot: boolean;
   onChange: (widths: ProposalColumnWidths) => void;
+  extraColumn?: ProposalExtraColumn | null;
+  tableLayout?: ProposalTableLayout | null;
 }) {
   const resizeBy = (deltaPercent: number) => {
-    onChange(resizeAdjacentProposalColumns(widths, showLot, left, right, deltaPercent));
+    onChange(resizeAdjacentProposalColumns(widths, showLot, left, right, deltaPercent, extraColumn, tableLayout));
   };
   const handlePointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -81,7 +91,7 @@ function ColumnResizeHandle({
     const handleMove = (moveEvent: PointerEvent) => {
       const deltaPercent = ((moveEvent.clientX - startX) / tableWidth) * 100;
       onChange(
-        resizeAdjacentProposalColumns(initialWidths, showLot, left, right, deltaPercent),
+        resizeAdjacentProposalColumns(initialWidths, showLot, left, right, deltaPercent, extraColumn, tableLayout),
       );
     };
     const handleEnd = () => {
@@ -116,12 +126,16 @@ function ReplicaTable({
   widths,
   showLot,
   onWidthsChange,
+  extraColumn,
+  tableLayout,
 }: {
   rows: ProposalRowFragment[];
   columns: ProposalColumnDefinition[];
   widths: ProposalColumnWidths;
   showLot: boolean;
-  onWidthsChange: (widths: ProposalColumnWidths) => void;
+  onWidthsChange?: (widths: ProposalColumnWidths) => void;
+  extraColumn?: ProposalExtraColumn | null;
+  tableLayout?: ProposalTableLayout | null;
 }) {
   return (
     <div className="proposal-replica-table-wrap">
@@ -136,13 +150,15 @@ function ReplicaTable({
             {columns.map((column, index) => (
               <th key={column.key}>
                 {column.label}
-                {index < columns.length - 1 && (
+                {onWidthsChange && index < columns.length - 1 && (
                   <ColumnResizeHandle
                     left={column.key}
                     right={columns[index + 1].key}
                     widths={widths}
                     showLot={showLot}
                     onChange={onWidthsChange}
+                    extraColumn={extraColumn}
+                    tableLayout={tableLayout}
                   />
                 )}
               </th>
@@ -156,6 +172,7 @@ function ReplicaTable({
                 <td
                   key={column.key}
                   className={column.key === "descricao" ? "proposal-replica-description" : undefined}
+                  style={tableLayout || column.key === "extra_column" ? { whiteSpace: "pre-wrap", overflowWrap: "anywhere" } : undefined}
                 >
                   {columnValue(row, column.key)}
                 </td>
@@ -248,10 +265,12 @@ export function ProposalLivePreview({
   miniBoxAlignments,
   columnWidths,
   onColumnWidthsChange,
+  extraColumn,
+  tableLayout,
 }: ProposalLivePreviewProps) {
   const showLot = items.some((item) => Boolean(String(item.lote || "").trim()));
-  const columns = proposalColumns(showLot);
-  const normalizedWidths = normalizeProposalColumnWidths(columnWidths, showLot);
+  const columns = proposalColumns(showLot, extraColumn, tableLayout);
+  const normalizedWidths = normalizeProposalColumnWidths(columnWidths, showLot, extraColumn, tableLayout);
   const blocks = withoutTemplateHeader(
     createReplicaDocumentBlocks(nodes, blockOrder, generatedTable),
   );
@@ -265,14 +284,14 @@ export function ProposalLivePreview({
       - documentBlocksLineCost(beforeBlocks),
   );
   const tablePages = useMemo(
-    () => paginateProposalRows(items, normalizedWidths, showLot, firstPageLines),
-    [firstPageLines, items, normalizedWidths, showLot],
+    () => paginateProposalRows(items, normalizedWidths, showLot, firstPageLines, undefined, extraColumn, tableLayout),
+    [firstPageLines, items, normalizedWidths, showLot, extraColumn, tableLayout],
   );
   const lastTablePage = tablePages[tablePages.length - 1];
   const finalContentLines = trailingLineCost(afterBlocks, responsible);
   const trailingFitsLastTablePage = lastTablePage.remainingLines >= finalContentLines;
   const pageCount = tablePages.length + (trailingFitsLastTablePage ? 0 : 1);
-  const defaultWidths = defaultProposalColumnWidths(showLot);
+  const defaultWidths = defaultProposalColumnWidths(showLot, extraColumn, tableLayout);
   const hasCustomWidths = columns.some(
     ({ key }) => Math.abs((normalizedWidths[key] || 0) - (defaultWidths[key] || 0)) > 0.01,
   );
@@ -284,7 +303,7 @@ export function ProposalLivePreview({
           <FileText size={14} aria-hidden="true" />
           <span>Prévia da proposta</span>
         </div>
-        {hasCustomWidths && (
+        {onColumnWidthsChange && hasCustomWidths && (
           <button
             type="button"
             className="proposal-replica-reset-columns"
@@ -310,6 +329,8 @@ export function ProposalLivePreview({
                 widths={normalizedWidths}
                 showLot={showLot}
                 onWidthsChange={onColumnWidthsChange}
+                extraColumn={extraColumn}
+                tableLayout={tableLayout}
               />
               {isLastTablePage && trailingFitsLastTablePage && (
                 <>

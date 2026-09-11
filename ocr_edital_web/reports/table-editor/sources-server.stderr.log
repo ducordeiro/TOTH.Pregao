@@ -1,0 +1,42 @@
+Enriquecimento assíncrono do detalhamento falhou (f42cad88f31c4421af35f516a2dc394d, Itens oficiais pendentes): Nao foi possivel carregar os itens desta oportunidade agora. A oportunidade permanece salva no banco e os itens continuam pendentes. Tente novamente mais tarde.
+Enriquecimento assíncrono do detalhamento falhou (f42cad88f31c4421af35f516a2dc394d, Arquivos oficiais pendentes): GET https://pncp.gov.br/api/pncp/v1/orgaos/45739091000110/compras/2026/25/arquivos failed: HTTP Error 404: Not Found
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 58839)
+Traceback (most recent call last):
+  File "C:\Users\ducor\OneDrive\Documentos\Pregão\ocr_edital_web\server.py", line 11844, in do_GET
+    json_response(
+  File "C:\Users\ducor\OneDrive\Documentos\Pregão\ocr_edital_web\server.py", line 6813, in json_response
+    handler.wfile.write(body)
+  File "C:\Users\ducor\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+ConnectionAbortedError: [WinError 10053] Uma conexão estabelecida foi anulada pelo software no computador host
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\ducor\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+  File "C:\Users\ducor\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "C:\Users\ducor\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\socketserver.py", line 766, in __init__
+    self.handle()
+  File "C:\Users\ducor\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\http\server.py", line 440, in handle
+    self.handle_one_request()
+  File "C:\Users\ducor\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\http\server.py", line 428, in handle_one_request
+    method()
+  File "C:\Users\ducor\OneDrive\Documentos\Pregão\ocr_edital_web\server.py", line 11856, in do_GET
+    json_response(self, 500, {"error": "Nao foi possivel consultar o radar interno."})
+  File "C:\Users\ducor\OneDrive\Documentos\Pregão\ocr_edital_web\server.py", line 6812, in json_response
+    handler.end_headers()
+  File "C:\Users\ducor\OneDrive\Documentos\Pregão\ocr_edital_web\server.py", line 11806, in end_headers
+    super().end_headers()
+  File "C:\Users\ducor\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\http\server.py", line 542, in end_headers
+    self.flush_headers()
+  File "C:\Users\ducor\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\http\server.py", line 546, in flush_headers
+    self.wfile.write(b"".join(self._headers_buffer))
+  File "C:\Users\ducor\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+ConnectionAbortedError: [WinError 10053] Uma conexão estabelecida foi anulada pelo software no computador host
+----------------------------------------
+Enriquecimento assíncrono do detalhamento falhou (969b49d7f662457d886ce5fb386b513b, Itens oficiais pendentes): Nao foi possivel carregar os itens desta oportunidade agora. A oportunidade permanece salva no banco e os itens continuam pendentes. Tente novamente mais tarde.
+Enriquecimento assíncrono do detalhamento falhou (969b49d7f662457d886ce5fb386b513b, Arquivos oficiais pendentes): GET https://pncp.gov.br/api/pncp/v1/orgaos/06554968000146/compras/2026/14/arquivos failed: HTTP Error 404: Not Found

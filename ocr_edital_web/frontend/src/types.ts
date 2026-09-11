@@ -71,7 +71,20 @@ export type ProposalColumnKey =
   | "descricao"
   | "marca"
   | "valor_unitario"
-  | "valor_total";
+  | "valor_total"
+  | "extra_column"
+  | `custom_${string}`;
+
+export interface ProposalTableLayout {
+  columns: { key: ProposalColumnKey; label: string }[];
+  custom_values: Record<string, string[]>;
+}
+
+export interface ProposalExtraColumn {
+  title: string;
+  position: number;
+  values: string[];
+}
 
 export type ProposalColumnWidths = Partial<Record<ProposalColumnKey, number>>;
 

@@ -58,6 +58,8 @@ interface DocxReorderBoardProps {
   onOrderCommit: () => void;
   onAlignmentChange: (id: string, alignment: MiniBoxTextAlign) => void;
   onAlignmentsReset: (alignments: Record<string, MiniBoxTextAlign>) => void;
+  onContentChange: (id: string, content: string) => void;
+  onEditTable: () => void;
   renderPreview: (order: string[]) => ReactNode;
 }
 
@@ -74,6 +76,8 @@ interface SortableDocumentBlockProps {
   onToggleAlignment: (id: string) => void;
   onDelete: (id: string) => void;
   onReturnToDock: () => void;
+  onContentChange: (id: string, content: string) => void;
+  onEditTable: () => void;
 }
 
 function ordersMatch(left: string[], right: string[]): boolean {
@@ -81,26 +85,15 @@ function ordersMatch(left: string[], right: string[]): boolean {
     && left.every((nodeId, index) => nodeId === right[index]);
 }
 
-function DocumentBlockContent({
-  content,
-  generated,
-  alignment,
-}: {
-  content: string;
-  generated: boolean;
-  alignment: MiniBoxTextAlign;
-}) {
-  const label = generated ? "Tabela gerada" : (content.trim() || "Bloco vazio");
-  return (
-    <div
-      className={`docx-mini-box-content${alignment === "center" ? " is-text-centered" : ""}`}
-      title={label}
-      style={generated ? undefined : { textAlign: alignment }}
-    >
-      {generated && <Table2 size={20} aria-hidden="true" />}
-      <span>{`{${label}}`}</span>
-    </div>
-  );
+function TableConfigurationButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
+  return <button type="button" className="docx-mini-box-content docx-table-configure"
+    disabled={disabled} onClick={onClick} title="Editar tabela"
+    aria-label="Editar tabela gerada"
+    onPointerDown={(event) => event.stopPropagation()}
+    onTouchStart={(event) => event.stopPropagation()}
+    onKeyDown={(event) => event.stopPropagation()}>
+    <Table2 size={20} aria-hidden="true" /><span>Tabela gerada</span>
+  </button>;
 }
 
 function SortableDocumentBlock({
@@ -116,6 +109,8 @@ function SortableDocumentBlock({
   onToggleAlignment,
   onDelete,
   onReturnToDock,
+  onContentChange,
+  onEditTable,
 }: SortableDocumentBlockProps) {
   const {
     attributes,
@@ -146,7 +141,7 @@ function SortableDocumentBlock({
       style={style}
       role="listitem"
       aria-label={`${generated ? "Tabela gerada" : "Mini-box"}, posição ${position} de ${total}`}
-      title={generated ? "Arraste para mover a tabela" : "Clique duas vezes e mantenha pressionado para arrastar"}
+      title={generated ? "Arraste para mover a tabela" : "Edite o texto ou arraste pela barra superior para mover"}
     >
       <div className="docx-mini-box-toolbar">
         <span className="docx-mini-box-index" aria-hidden="true">
@@ -155,8 +150,8 @@ function SortableDocumentBlock({
         <div
           className="docx-mini-box-actions"
           onPointerDown={(event) => event.stopPropagation()}
-          onTouchStart={generated ? (event) => event.stopPropagation() : undefined}
-          onKeyDown={generated ? (event) => event.stopPropagation() : undefined}
+          onTouchStart={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
         >
           {!generated && (
             <>
@@ -230,7 +225,24 @@ function SortableDocumentBlock({
           )}
         </div>
       </div>
-      <DocumentBlockContent content={content} generated={generated} alignment={alignment} />
+      {generated ? (
+        <TableConfigurationButton disabled={disabled} onClick={onEditTable} />
+      ) : (
+        <textarea
+          className="docx-mini-box-editor"
+          aria-label={`Texto do mini-box ${position}`}
+          title="Clique para editar o texto"
+          value={content}
+          rows={2}
+          disabled={disabled}
+          placeholder="Digite o texto do mini-box"
+          style={{ textAlign: alignment }}
+          onChange={(event) => onContentChange(id, event.target.value)}
+          onPointerDown={(event) => event.stopPropagation()}
+          onTouchStart={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        />
+      )}
     </article>
   );
 }
@@ -241,12 +253,14 @@ function GeneratedTableDock({
   disabled,
   active,
   onInsert,
+  onEditTable,
 }: {
   block: GeneratedTableBlock;
   docked: boolean;
   disabled: boolean;
   active: boolean;
   onInsert: () => void;
+  onEditTable: () => void;
 }) {
   const {
     attributes,
@@ -314,7 +328,7 @@ function GeneratedTableDock({
               </button>
             </div>
           </div>
-          <DocumentBlockContent content={block.content} generated alignment="center" />
+          <TableConfigurationButton disabled={disabled} onClick={onEditTable} />
         </article>
       ) : (
         <div className="docx-generated-table-return" role="img" aria-label="Área de retorno da tabela">
@@ -354,6 +368,8 @@ export function DocxReorderBoard({
   onOrderCommit,
   onAlignmentChange,
   onAlignmentsReset,
+  onContentChange,
+  onEditTable,
   renderPreview,
 }: DocxReorderBoardProps) {
   const [previewOrder, setPreviewOrder] = useState<string[] | null>(null);
@@ -633,6 +649,7 @@ export function DocxReorderBoard({
               disabled={disabled}
               active={activeId === tableId}
               onInsert={insertTableAtEnd}
+              onEditTable={onEditTable}
             />
           </div>
           <div className="docx-stage-column docx-organization-column">
@@ -660,6 +677,8 @@ export function DocxReorderBoard({
                       onToggleAlignment={toggleTextAlignment}
                       onDelete={deleteMiniBox}
                       onReturnToDock={returnTableToDock}
+                      onContentChange={onContentChange}
+                      onEditTable={onEditTable}
                     />
                   );
                 })}

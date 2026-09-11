@@ -206,7 +206,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
         setSearchingAll(true);
         setMessage({
           kind: "info",
-          text: `Exibindo ${initialTotal.toLocaleString("pt-BR")} edital(is) da base interna. Verificando novas oportunidades no PNCP...`,
+          text: `Exibindo ${initialTotal.toLocaleString("pt-BR")} edital(is) da base interna. Verificando novas oportunidades nas fontes online...`,
         });
       } catch (error) {
         if (requestId !== searchRequestRef.current) return;
@@ -214,7 +214,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
         setSearchingAll(true);
         setMessage({
           kind: "warning",
-          text: "Base interna indisponivel. Tentando atualizar os dados pelo PNCP...",
+          text: "Base interna indisponivel. Tentando atualizar os dados pelas fontes online...",
         });
       }
 
@@ -238,7 +238,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
           setSearchingAll(false);
           setMessage({
             kind: "warning",
-            text: `Exibindo ${initialTotal.toLocaleString("pt-BR")} edital(is) locais. O PNCP não respondeu no prazo da consulta rápida; a atualização continuará em segundo plano.`,
+            text: `Exibindo ${initialTotal.toLocaleString("pt-BR")} edital(is) locais. As fontes online não responderam no prazo da consulta rápida; a atualização continuará em segundo plano.`,
           });
           return;
         }
@@ -256,7 +256,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
             setTotalPages(1);
             setMessage({
               kind: "info",
-              text: `Exibindo ${previewResults.length} resultado(s) local(is) e online enquanto a conferência completa do PNCP continua...`,
+              text: `Exibindo ${previewResults.length} resultado(s) local(is) e online enquanto a conferência das fontes continua...`,
             });
           }
           setSearchingAll(true);
@@ -270,7 +270,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
             const progressiveTotal = progressivePayload.total || 0;
             setMessage({
               kind: "info",
-              text: `Exibindo ${progressiveTotal.toLocaleString("pt-BR")} edital(is) da base interna enquanto a atualização do PNCP continua...`,
+              text: `Exibindo ${progressiveTotal.toLocaleString("pt-BR")} edital(is) da base interna enquanto a atualização online continua...`,
             });
           }
         }
@@ -284,7 +284,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
           setSearchingAll(false);
           setMessage({
             kind: "warning",
-            text: "A base interna continua disponível, mas a verificação completa do PNCP excedeu um minuto. O processamento online continua em segundo plano.",
+            text: "A base interna continua disponível, mas a verificação das fontes excedeu um minuto. O processamento online continua em segundo plano.",
           });
           return;
         }
@@ -303,7 +303,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
         setMessage({
           kind: incomplete ? "warning" : refreshedTotal ? "success" : "warning",
           text: incomplete
-            ? `Base local atualizada com ${inserted} nova(s) oportunidade(s), mas o PNCP nao respondeu integralmente. Uma nova consulta pode completar os dados.`
+              ? `Base local atualizada com ${inserted} nova(s) oportunidade(s), mas as fontes online nao responderam integralmente. Uma nova consulta pode completar os dados.`
             : `${refreshedPayload.results.length} edital(is) nesta pagina, de ${refreshedTotal.toLocaleString("pt-BR")} na base atualizada. ${inserted} nova(s) e ${updated} atualizada(s) nesta verificacao.`,
         });
       } catch (onlineError) {
@@ -311,7 +311,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
         setSearchingAll(false);
         if (!localAvailable) {
           throw new Error(
-            `Base interna indisponivel (${errorMessage(localFailure)}) e verificacao PNCP falhou (${errorMessage(onlineError)}).`,
+            `Base interna indisponivel (${errorMessage(localFailure)}) e verificacao online falhou (${errorMessage(onlineError)}).`,
           );
         }
         setMessage({
@@ -323,7 +323,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
       if (requestId !== searchRequestRef.current) return;
       setMessage({
         kind: "error",
-        text: error instanceof Error ? error.message : "Não foi possível consultar o PNCP.",
+        text: error instanceof Error ? error.message : "Não foi possível consultar as fontes online.",
       });
     } finally {
       if (requestId === searchRequestRef.current) setBusy(false);

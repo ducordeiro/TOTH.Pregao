@@ -1,13 +1,16 @@
-"""Fill missing PNCP items for opportunities already stored in SQLite."""
+"""Fill missing stored items using Compras.gov first and PNCP as fallback."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import threading
 import time
+import urllib.error
+from email.utils import parsedate_to_datetime
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
@@ -18,7 +21,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from etl.connectors import HttpJsonClient, PNCPConnector
+from etl.connectors import ConnectorError, HttpJsonClient, PNCPConnector
+from etl.preferred_source import ComprasGovSource, PreferredProcurementConnector
 from etl.mappers import PNCPMapper
 from etl.repository import ETLRepository
 
@@ -38,28 +42,56 @@ class RequestPacer:
         self._next_request_at = 0.0
 
     def wait(self) -> None:
-        if not self.interval:
-            return
-        with self._lock:
-            now = time.monotonic()
-            scheduled_at = max(now, self._next_request_at)
-            self._next_request_at = scheduled_at + self.interval
-        delay = scheduled_at - now
-        if delay > 0:
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                delay = self._next_request_at - now
+                if delay <= 0:
+                    self._next_request_at = now + self.interval
+                    return
             time.sleep(delay)
+
+    def defer(self, seconds: float) -> None:
+        with self._lock:
+            self._next_request_at = max(self._next_request_at, time.monotonic() + seconds)
 
 
 class PacedHttpJsonClient(HttpJsonClient):
     def __init__(self, *, pacer: RequestPacer, **kwargs: Any) -> None:
         super().__init__(request_delay=0, **kwargs)
         self.pacer = pacer
+        self.paced_retries = self.retries
+        # Each HTTP attempt must pass through the shared provider limiter.
+        self.retries = 0
 
     def get(self, url, params=None):
-        self.pacer.wait()
-        return super().get(url, params)
+        for attempt in range(self.paced_retries + 1):
+            self.pacer.wait()
+            try:
+                return super().get(url, params)
+            except ConnectorError as exc:
+                cause = exc.__cause__
+                limited = "429" in str(exc)
+                if limited:
+                    delay = 60.0
+                    if isinstance(cause, urllib.error.HTTPError) and cause.headers:
+                        value = cause.headers.get("Retry-After", "")
+                        try:
+                            delay = max(delay, float(value))
+                        except ValueError:
+                            try:
+                                delay = max(delay, parsedate_to_datetime(value).timestamp() - time.time())
+                            except (ValueError, TypeError, OverflowError):
+                                pass
+                    self.pacer.defer(delay)
+                permanent = isinstance(cause, urllib.error.HTTPError) and cause.code < 500 and cause.code != 429
+                if permanent or attempt == self.paced_retries:
+                    raise
+                self.sleeper(self.retry_backoff * (2 ** attempt))
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database", default=str(DEFAULT_DATABASE))
     parser.add_argument("--date-from", default=DEFAULT_DATE_FROM)
@@ -67,14 +99,14 @@ def main() -> int:
     parser.add_argument("--as-of", default=date.today().isoformat())
     parser.add_argument(
         "--scope",
-        choices=("open-future", "publication", "opening", "closing"),
+        choices=("all", "open-future", "publication", "opening", "closing"),
         default="publication",
     )
     parser.add_argument(
         "--source",
         choices=("all", "pncp", "comprasgov"),
         default="all",
-        help="Limit stored opportunities by source; items still come from PNCP.",
+        help="Limit stored opportunities; online priority is Compras.gov then PNCP.",
     )
     parser.add_argument("--limit", type=int)
     parser.add_argument(
@@ -192,20 +224,26 @@ def _run_enrichment(
     status_path: Path | None,
 ) -> int:
     pacer = RequestPacer(args.request_delay)
+    primary_pacer = RequestPacer(args.request_delay)
     worker_state = threading.local()
 
-    def worker_dependencies() -> tuple[PNCPConnector, PNCPMapper]:
+    def worker_dependencies() -> tuple[PreferredProcurementConnector, PNCPMapper]:
         connector = getattr(worker_state, "connector", None)
         mapper = getattr(worker_state, "mapper", None)
         if connector is None:
-            connector = PNCPConnector(
-                client=PacedHttpJsonClient(
-                    pacer=pacer,
-                    timeout=args.timeout,
-                    retries=args.retries,
-                    retry_backoff=args.retry_backoff,
+            connector = PreferredProcurementConnector(
+                primary=ComprasGovSource(client=PacedHttpJsonClient(
+                    pacer=primary_pacer, timeout=min(args.timeout, 4), retries=0,
+                )),
+                fallback=PNCPConnector(
+                    client=PacedHttpJsonClient(
+                        pacer=pacer,
+                        timeout=args.timeout,
+                        retries=args.retries,
+                        retry_backoff=args.retry_backoff,
+                    ),
+                    page_size=args.item_page_size,
                 ),
-                page_size=args.item_page_size,
             )
             worker_state.connector = connector
         if mapper is None:
@@ -230,6 +268,8 @@ def _run_enrichment(
             "retry_failures_after_hours": args.retry_failures_after_hours,
             "item_max_pages": args.item_max_pages,
             "item_page_size": args.item_page_size,
+            "provider_priority": ["comprasgov", "pncp"],
+            "queue_order": "publication_desc",
         },
     )
     counters = {
@@ -273,7 +313,7 @@ def _run_enrichment(
                 dry_run=args.dry_run,
             )
 
-        remaining_limit = total if args.dry_run else args.limit
+        remaining_limit = total
         while remaining_limit is None or remaining_limit > 0:
             load_limit = args.batch_size
             if remaining_limit is not None:
@@ -287,6 +327,7 @@ def _run_enrichment(
                 date_to=args.date_to,
                 as_of=args.as_of,
                 retry_failures_after_hours=args.retry_failures_after_hours,
+                exclude_run_id=run_id,
             )
             if not rows:
                 break
@@ -397,6 +438,8 @@ def _status_payload(
         "status": status,
         "scope": args.scope,
         "source": args.source,
+        "provider_priority": ["comprasgov", "pncp"],
+        "queue_order": "publication_desc",
         "date_from": args.date_from,
         "date_to": args.date_to,
         "as_of": args.as_of,
@@ -517,6 +560,7 @@ def _load_missing(
     date_to: str | None = None,
     as_of: str | None = None,
     retry_failures_after_hours: float = 12.0,
+    exclude_run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     priority_sql, where_sql, params = _missing_selection(
         date_from,
@@ -526,12 +570,21 @@ def _load_missing(
         as_of=as_of,
         retry_failures_after_hours=retry_failures_after_hours,
     )
+    if exclude_run_id:
+        where_sql += """ AND NOT EXISTS (
+            SELECT 1 FROM source_records attempted
+            WHERE attempted.source = 'pncp'
+              AND attempted.etl_run_id = ? AND attempted.external_key = o.external_key
+              AND attempted.source_endpoint = 'item_enrichment_batch'
+              AND attempted.status = 'failed'
+        )"""
+        params.append(exclude_run_id)
     sql = f"""
         SELECT o.*, {priority_sql} AS priority
         FROM opportunities o
         WHERE {where_sql}
-        ORDER BY priority,
-                 COALESCE(o.proposal_end_at, o.proposal_start_at, o.published_at) ASC,
+        ORDER BY NULLIF(o.published_at, '') DESC,
+                 priority,
                  CASE WHEN o.source = 'pncp' THEN 0 ELSE 1 END,
                  o.updated_at ASC,
                  o.id ASC
@@ -610,7 +663,10 @@ def _missing_selection(
     range_end_exclusive = (
         date.fromisoformat(range_end) + timedelta(days=1)
     ).isoformat() + "T00:00:00"
-    if scope == "publication":
+    if scope == "all":
+        scope_condition = "1 = 1"
+        scope_params = []
+    elif scope == "publication":
         scope_condition = "o.published_at >= ? AND o.published_at < ?"
         scope_params: list[Any] = [range_start, range_end_exclusive]
     elif scope == "opening":
@@ -684,14 +740,46 @@ def _enrich_one(
     items: list[dict[str, Any]] = []
     item_request_url = str(row["detail_url"] or "")
     page_count = 0
+    last_page = None
+    expected_count = None
     for page in connector.iter_items(cnpj, year, sequence, item_max_pages):
         items.extend(page.records)
         page_count += 1
         item_request_url = page.request_url
+        last_page = page
+        if isinstance(page.raw_payload, dict) and "totalRegistros" in page.raw_payload:
+            total = int(page.raw_payload["totalRegistros"])
+            if expected_count is not None and total != expected_count:
+                raise RuntimeError("Item count changed during pagination; nothing persisted")
+            expected_count = total
+
+    if last_page is not None:
+        if last_page.total_pages is not None and last_page.page_number < last_page.total_pages:
+            raise RuntimeError("Incomplete item pagination; nothing persisted")
+        if last_page.total_pages is None and page_count >= item_max_pages and last_page.records:
+            raise RuntimeError("Item page limit reached without confirmed end; nothing persisted")
+    if expected_count is not None and len(items) != expected_count:
+        raise RuntimeError("Incomplete item count; nothing persisted")
+
+    seen_keys = set()
+    for item in items:
+        number = next((str(item[key]).strip() for key in ("numeroItem", "numeroItemPncp", "numeroItemCompra")
+                       if item.get(key) is not None and str(item[key]).strip()), "")
+        group = next((str(item[key]).strip() for key in ("numeroGrupo", "grupo", "lote", "numeroLote")
+                      if item.get(key) is not None and str(item[key]).strip()), "")
+        group = "" if group in {"0", "0.0"} else group
+        key = (group, number)
+        if not number or key in seen_keys:
+            raise RuntimeError("Missing or duplicate item number; nothing persisted")
+        seen_keys.add(key)
 
     mapped_items = mapper.map_items(items)
     if not mapped_items:
-        raise RuntimeError("PNCP returned no items for this opportunity")
+        raise RuntimeError("Online sources returned no items for this opportunity")
+    if len(mapped_items) != len(items):
+        raise RuntimeError("Invalid or duplicate items; nothing persisted")
+    if any(not (item.description or "").strip() for item in mapped_items):
+        raise RuntimeError("Item description missing; nothing persisted")
     if dry_run:
         outcome = "updated"
     else:
@@ -710,7 +798,7 @@ def _enrich_one(
             finish_run=False,
         )
         outcome = "updated" if persistence["persisted"] else "skipped"
-    return outcome, len(mapped_items), 0, []
+    return outcome, len(mapped_items) if outcome != "skipped" else 0, 0, []
 
 
 def _row_to_listing(row: dict[str, Any]) -> dict[str, Any]:

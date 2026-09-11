@@ -323,6 +323,34 @@ def validate_mini_box_alignments(path: Path, alignments: object) -> dict[str, st
     return _validated_alignments(_analyze_docx(Path(path)), alignments)
 
 
+def _validated_contents(analysis: DocxAnalysis, contents: object) -> dict[str, str]:
+    if contents is None:
+        return {}
+    if not isinstance(contents, dict) or not all(
+        isinstance(node_id, str) and isinstance(content, str)
+        for node_id, content in contents.items()
+    ):
+        raise ValueError("Os textos dos mini-boxes são inválidos.")
+    if not set(contents).issubset({slot.id for slot in analysis.slots}):
+        raise ValueError(
+            "A estrutura do modelo foi alterada. Reprocesse a proposta antes de gerar o arquivo."
+        )
+    normalized = {
+        node_id: content.replace("\r\n", "\n").replace("\r", "\n")
+        for node_id, content in contents.items()
+    }
+    for content in normalized.values():
+        try:
+            etree.Element(TEXT_TAG).text = content
+        except (ValueError, UnicodeError) as exc:
+            raise ValueError("O texto do mini-box contém caracteres inválidos.") from exc
+    return normalized
+
+
+def validate_mini_box_contents(path: Path, contents: object) -> dict[str, str]:
+    return _validated_contents(_analyze_docx(Path(path)), contents)
+
+
 def _validated_document_block_order(
     analysis: DocxAnalysis,
     ordered_ids: object,
@@ -477,6 +505,24 @@ def _rewrite_part(
                 replacement or "",
             )
 
+    # Word requires explicit break/tab elements, not literal newlines in w:t.
+    # Expand only after replacing all ranges so their original offsets stay valid.
+    for element in list(root.iter(TEXT_TAG)):
+        value = element.text or ""
+        if "\n" not in value and "\t" not in value:
+            continue
+        pieces = re.split(r"([\n\t])", value)
+        _set_text(element, pieces[0])
+        previous = element
+        for piece in pieces[1:]:
+            if piece in ("\n", "\t"):
+                child = etree.Element(TEXT_TAG.replace("}t", "}br" if piece == "\n" else "}tab"))
+            else:
+                child = etree.Element(TEXT_TAG)
+                _set_text(child, piece)
+            previous.addnext(child)
+            previous = child
+
     return etree.tostring(
         root,
         encoding="UTF-8",
@@ -491,15 +537,17 @@ def rebuild_docx_with_mini_box_order(
     ordered_ids: object,
     alignments: object = None,
     include_markers: bool = True,
+    contents: object = None,
 ) -> None:
     source_path = Path(source_path)
     target_path = Path(target_path)
     analysis = _analyze_docx(source_path)
     validated_order = _validated_order(analysis, ordered_ids)
     validated_alignments = _validated_alignments(analysis, alignments)
+    validated_contents = _validated_contents(analysis, contents)
     slots_by_id = {slot.id: slot for slot in analysis.slots}
     replacement_contents: dict[str, str | None] = {
-        target_slot.id: slots_by_id[source_id].content
+        target_slot.id: validated_contents.get(source_id, slots_by_id[source_id].content)
         for target_slot, source_id in zip(analysis.slots, validated_order)
     }
     replacement_contents.update({

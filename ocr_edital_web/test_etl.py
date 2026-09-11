@@ -1662,7 +1662,7 @@ class BatchItemEnrichmentTests(unittest.TestCase):
             with (
                 patch.object(
                     enrich_missing_pncp_items,
-                    "PNCPConnector",
+                    "PreferredProcurementConnector",
                     return_value=connector,
                 ),
                 patch("builtins.print"),
@@ -1738,16 +1738,16 @@ class BatchItemEnrichmentTests(unittest.TestCase):
         self.assertEqual({row["id"] for row in pending}, {"open", "future", "unknown", "expired"})
         self.assertEqual([row["id"] for row in closed_on_july_tenth], ["expired"])
 
-    def test_missing_item_batch_can_prioritize_and_filter_comprasgov_rows(self):
+    def test_missing_item_batch_prioritizes_publication_and_filters_comprasgov_rows(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repository = ETLRepository(Path(temp_dir) / "etl.sqlite3")
             repository.initialize()
             rows = [
-                ("pncp-later", "pncp", "pncp-key", 1, "2026-08-30T18:00:00"),
-                ("compras-sooner", "comprasgov", "compras-key", 2, "2026-08-26T18:00:00"),
+                ("pncp-later", "pncp", "pncp-key", 1, "2026-08-30T18:00:00", "2026-08-11T09:00:00"),
+                ("compras-sooner", "comprasgov", "compras-key", 2, "2026-08-26T18:00:00", "2026-08-10T09:00:00"),
             ]
             with repository.connect() as connection, connection:
-                for opportunity_id, source, external_key, sequence, closing in rows:
+                for opportunity_id, source, external_key, sequence, closing, published in rows:
                     connection.execute(
                         """
                         INSERT INTO opportunities (
@@ -1755,10 +1755,10 @@ class BatchItemEnrichmentTests(unittest.TestCase):
                             title, published_at, proposal_start_at, proposal_end_at,
                             record_hash, created_at, updated_at
                         ) VALUES (?, ?, ?, '12345678000199', 2026, ?, ?,
-                                  '2026-08-10T09:00:00', '2026-08-20T09:00:00', ?,
+                                  ?, '2026-08-20T09:00:00', ?,
                                   'hash', '2026-08-10T09:00:00', '2026-08-10T09:00:00')
                         """,
-                        (opportunity_id, external_key, source, sequence, opportunity_id, closing),
+                        (opportunity_id, external_key, source, sequence, opportunity_id, published, closing),
                     )
 
             pending = enrich_missing_pncp_items._load_missing(
@@ -1778,7 +1778,7 @@ class BatchItemEnrichmentTests(unittest.TestCase):
                 as_of="2026-08-24",
                 retry_failures_after_hours=0,
             )
-        self.assertEqual([row["id"] for row in pending], ["compras-sooner", "pncp-later"])
+        self.assertEqual([row["id"] for row in pending], ["pncp-later", "compras-sooner"])
         self.assertEqual([row["id"] for row in compras_only], ["compras-sooner"])
 
     def test_batch_enrichment_calls_only_item_endpoint_and_uses_atomic_persistence(self):

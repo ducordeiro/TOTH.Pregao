@@ -22,6 +22,8 @@ import type {
   ProcessResponse,
   ProposalColumnWidths,
   ProposalItem,
+  ProposalExtraColumn,
+  ProposalTableLayout,
   Responsible,
   Template,
   UiMessage,
@@ -30,7 +32,7 @@ import {
   createDocumentBlockOrder,
   miniBoxOrderFromDocumentOrder,
 } from "../docxOrder";
-import { defaultProposalColumnWidths } from "../proposalPreviewLayout";
+import { defaultProposalColumnWidths, proposalColumns } from "../proposalPreviewLayout";
 import { proposalItemsFromSelection, selectionForLink } from "../opportunitySelection";
 import {
   calculateItemTotal,
@@ -45,6 +47,7 @@ import {
 import { StatusMessage } from "./StatusMessage";
 import { DocxReorderBoard } from "./DocxReorderBoard";
 import { ProposalLivePreview } from "./ProposalLivePreview";
+import { ProposalColumnModal } from "./ProposalColumnModal";
 
 interface ProposalBlockProps {
   pncpLink: string;
@@ -126,6 +129,15 @@ export function ProposalBlock({
   );
   const [structureLoading, setStructureLoading] = useState(false);
   const [structureError, setStructureError] = useState("");
+  const [extraColumn, setExtraColumn] = useState<ProposalExtraColumn | null>(null);
+  const [tableLayout, setTableLayout] = useState<ProposalTableLayout | null>(null);
+  const [columnEditorOpen, setColumnEditorOpen] = useState(false);
+
+  useEffect(() => {
+    setExtraColumn(null);
+    setTableLayout(null);
+    setColumnEditorOpen(false);
+  }, [processed?.response]);
 
   const selectedTemplate = templates.find((template) => template.id === selectedTemplateId);
   const selectedResponsible = responsibles.find(
@@ -423,6 +435,10 @@ export function ProposalBlock({
     ? documentBlockIds
     : undefined;
 
+  const resultColumns = proposalColumns(
+    Boolean(processed?.items.some((item) => item.lote?.trim())), extraColumn, tableLayout,
+  );
+
   const updateDocumentOrder = (order: string[]) => {
     setDocumentBlockIds(order);
     invalidateGeneratedDocument();
@@ -444,6 +460,13 @@ export function ProposalBlock({
         ? "Texto do mini-box centralizado e refletido na pré-visualização."
         : "Alinhamento do mini-box atualizado na pré-visualização.",
     });
+  };
+
+  const updateMiniBoxContent = (id: string, content: string) => {
+    setDocumentNodes((current) => current.map((node) =>
+      node.type === "MINI_BOX" && node.id === id ? { ...node, content } : node,
+    ));
+    invalidateGeneratedDocument();
   };
 
   const resetMiniBoxAlignments = (alignments: Record<string, MiniBoxTextAlign>) => {
@@ -485,6 +508,11 @@ export function ProposalBlock({
         orderedDocumentBlockIds,
         miniBoxAlignments,
         proposalColumnWidths,
+        Object.fromEntries(documentNodes
+          .filter((node) => node.type === "MINI_BOX")
+          .map((node) => [node.id, node.content])),
+        extraColumn,
+        tableLayout,
       );
       if (generationVersion !== generationVersionRef.current) return;
       setDownload({ url: response.download_url, filename: response.filename });
@@ -788,6 +816,8 @@ export function ProposalBlock({
             onOrderCommit={commitDocumentOrder}
             onAlignmentChange={updateMiniBoxAlignment}
             onAlignmentsReset={resetMiniBoxAlignments}
+            onContentChange={updateMiniBoxContent}
+            onEditTable={() => setColumnEditorOpen(true)}
             renderPreview={(previewOrder) => (
               <ProposalLivePreview
                 nodes={documentNodes}
@@ -798,10 +828,8 @@ export function ProposalBlock({
                 responsible={selectedResponsible}
                 miniBoxAlignments={miniBoxAlignments}
                 columnWidths={proposalColumnWidths}
-                onColumnWidthsChange={(widths) => {
-                  setProposalColumnWidths(widths);
-                  invalidateGeneratedDocument();
-                }}
+                extraColumn={extraColumn}
+                tableLayout={tableLayout}
               />
             )}
           />
@@ -811,33 +839,19 @@ export function ProposalBlock({
             <table className="data-table result-table">
               <thead>
                 <tr>
-                  {processed.items.some((item) => item.lote) && <th>Lote</th>}
-                  <th>Item</th>
-                  <th>Qtd.</th>
-                  <th>UND</th>
-                  <th>Descrição</th>
-                  <th>Marca</th>
-                  <th>Valor unitário</th>
-                  <th>Valor total</th>
+                  {resultColumns.map((column) => <th key={column.key}>{column.label}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {processed.items.map((item, index) => (
                   <tr key={itemKey(item)}>
-                    {processed.items.some((row) => row.lote) && <td>{item.lote}</td>}
-                    <td>{item.item}</td>
-                    <td>{item.quantidade}</td>
-                    <td>UND</td>
-                    <td className="description-cell">{item.descricao}</td>
-                    <td>
-                      <input
+                    {resultColumns.map(({ key }) => <td key={key}
+                      className={key === "descricao" ? "description-cell" : undefined}>
+                      {key === "marca" ? <input
                         value={item.marca}
                         maxLength={120}
                         onChange={(event) => updateProcessedItem(index, "marca", event.target.value)}
-                      />
-                    </td>
-                    <td>
-                      <input
+                      /> : key === "valor_unitario" ? <input
                         className="money-input"
                         inputMode="decimal"
                         value={item.valor_unitario}
@@ -852,14 +866,28 @@ export function ProposalBlock({
                           const normalized = normalizeMoney(item.valor_unitario);
                           if (normalized) updateProcessedItem(index, "valor_unitario", normalized);
                         }}
-                      />
-                    </td>
-                    <td>{item.valor_total || "—"}</td>
+                      /> : key === "extra_column" ? <span style={{ whiteSpace: "pre-wrap" }}>{extraColumn?.values[index] || ""}</span>
+                        : key.startsWith("custom_") ? tableLayout?.custom_values[key]?.[index] || ""
+                        : key === "unidade" ? item.unidade || "UND" : item[key as keyof ProposalItem] || (key === "valor_total" ? "—" : "")}
+                    </td>)}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+        )}
+        {processed && columnEditorOpen && (
+          <ProposalColumnModal items={processed.items} column={extraColumn} layout={tableLayout} widths={proposalColumnWidths}
+            onClose={() => setColumnEditorOpen(false)}
+            onSave={(items, layout, widths) => {
+              setProcessed((current) => current ? { ...current, items } : current);
+              setTableLayout(layout);
+              setExtraColumn(null);
+              setProposalColumnWidths(widths);
+              setColumnEditorOpen(false);
+              invalidateGeneratedDocument();
+              setMessage({ kind: "info", text: "Tabela atualizada." });
+            }} />
         )}
         {download && <div className="generated-file">Arquivo: {download.filename}</div>}
       </section>

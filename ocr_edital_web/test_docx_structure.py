@@ -16,6 +16,7 @@ from docx_structure import (
     resolve_document_block_layout,
     validate_document_block_order,
     validate_mini_box_alignments,
+    validate_mini_box_contents,
     validate_mini_box_order,
 )
 import server
@@ -26,6 +27,41 @@ def paragraph_text(paragraph) -> str:
 
 
 class DocxStructureTests(unittest.TestCase):
+    def test_edited_text_follows_reordered_blocks_and_preserves_template(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template = self.create_marker_template(root)
+            original = template.read_bytes()
+            nodes = [node for node in inspect_docx_structure(template)["nodes"]
+                     if node["type"] == "MINI_BOX"]
+            ids = [node["id"] for node in nodes]
+            output = root / "editado.docx"
+            rebuild_docx_with_mini_box_order(
+                template, output, [ids[1], ids[0], ids[2], ids[3]],
+                include_markers=False,
+                contents={ids[0]: "Novo & <texto>\nSegunda linha\tFim", ids[1]: "",
+                          ids[2]: "Tabela editada", ids[3]: "Cabeçalho editado"},
+            )
+            document = Document(output)
+            self.assertEqual(document.paragraphs[0].text,
+                             "Prefixo  entre Novo & <texto>\nSegunda linha\tFim sufixo")
+            self.assertEqual(document.tables[0].cell(0, 0).text, "Antes Tabela editada depois")
+            self.assertEqual(document.sections[0].header.paragraphs[0].text,
+                             "Topo Cabeçalho editado fixo")
+            self.assertEqual(template.read_bytes(), original)
+
+    def test_edited_text_validation_rejects_invalid_payloads(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template = self.create_marker_template(Path(temp_dir))
+            node = next(node for node in inspect_docx_structure(template)["nodes"]
+                        if node["type"] == "MINI_BOX")
+            for contents in ([], {"stale-id": "Texto"}, {node["id"]: 123},
+                             {node["id"]: "Texto\x00inválido"}):
+                with self.subTest(contents=contents), self.assertRaises(ValueError):
+                    validate_mini_box_contents(template, contents)
+            self.assertEqual(validate_mini_box_contents(template, {node["id"]: "a\r\nb"}),
+                             {node["id"]: "a\nb"})
+
     def create_marker_template(self, root: Path) -> Path:
         image_path = root / "logo.png"
         Image.new("RGB", (8, 8), (255, 128, 64)).save(image_path)
@@ -284,6 +320,75 @@ class DocxStructureTests(unittest.TestCase):
 
 
 class ProposalDocxIntegrationTests(unittest.TestCase):
+    def test_extra_column_exports_title_position_and_values_with_and_without_lots(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template = self.create_template(root)
+            original_template = template.read_bytes()
+            for show_lot in (False, True):
+                items = [{**self.proposal_item(), "item": str(index + 1),
+                          "lote": str(index + 1) if show_lot else ""} for index in range(3)]
+                for position in (0, 3, len(server.columns_for_items(items))):
+                    with self.subTest(show_lot=show_lot, position=position):
+                        column = {"title": "Garantia & condições", "position": position,
+                                  "values": ["12 meses\nAssistência local", "", "24 meses"]}
+                        output = root / "coluna.docx"
+                        server.build_docx(items, template, output, extra_column=column)
+                        table = Document(output).tables[0]
+                        self.assertEqual(table.rows[0].cells[position].text, column["title"])
+                        self.assertEqual([row.cells[position].text for row in table.rows[1:]], column["values"])
+                        headers = [cell.text for cell in table.rows[0].cells]
+                        item_index = next(index for index, (key, _) in enumerate(server.columns_for_items(items, column)) if key == "item")
+                        self.assertEqual([row.cells[item_index].text for row in table.rows[1:]], ["1", "2", "3"])
+                        self.assertEqual(len(headers), 9 if show_lot else 8)
+                        self.assertEqual(len(table.columns), len(headers))
+            self.assertEqual(template.read_bytes(), original_template)
+
+    def test_extra_column_context_validates_input_and_fingerprints_changes(self):
+        items = [self.proposal_item()]
+        column = {"title": "Modelo", "position": 4, "values": ["GF-01"]}
+        for invalid in ([], {**column, "title": " "}, {**column, "position": -1},
+                        {**column, "position": 8}, {**column, "position": True},
+                        {**column, "values": []}, {**column, "values": [123]},
+                        {**column, "values": ["a\x00b"]}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                server.normalize_proposal_extra_column(items, invalid)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template = self.create_template(Path(temp_dir))
+            payload = {"items": items, "template_ref": "managed:proposta.docx", "responsible_id": "1"}
+            with (patch.object(server, "resolve_template", return_value=template),
+                  patch.object(server, "resolve_responsible", return_value={"id": "1"})):
+                original = server.proposal_generation_context(payload)
+                edited = server.proposal_generation_context({**payload, "extra_column": column})
+            self.assertEqual(edited["extra_column"], column)
+            self.assertNotEqual(server.proposal_preview_fingerprint(original), server.proposal_preview_fingerprint(edited))
+            for change in ({"title": "Garantia"}, {"position": 0}, {"values": ["GF-02"]}):
+                self.assertNotEqual(server.proposal_preview_fingerprint(edited),
+                                    server.proposal_preview_fingerprint({**edited, "extra_column": {**column, **change}}))
+
+    def test_extra_column_widths_and_pdf_export(self):
+        items = [self.proposal_item()]
+        column = {"title": "Modelo adicional", "position": 0, "values": ["GF-123"]}
+        columns = server.columns_for_items(items, column)
+        widths = server.normalize_proposal_column_widths(items, dict(zip(
+            [key for key, _ in columns], [12, 5, 5, 5, 35, 10, 13, 15],
+        )), column)
+        self.assertAlmostEqual(sum(widths.values()), 100)
+        self.assertEqual(widths["extra_column"], 12)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output = root / "coluna.docx"
+            server.build_docx(items, self.create_template(root), output, extra_column=column,
+                              proposal_column_widths=widths)
+            table = Document(output).tables[0]
+            self.assertAlmostEqual(int(table.columns[0].width) / sum(int(col.width) for col in table.columns), .12, places=3)
+            pdf_path = root / "coluna.pdf"
+            server.build_compatible_proposal_pdf({"items": items, "extra_column": column}, pdf_path)
+            with server.pdfplumber.open(pdf_path) as pdf:
+                text = "".join(page.extract_text() or "" for page in pdf.pages)
+            self.assertIn("Modelo adicional", text)
+            self.assertIn("GF-123", text)
+
     def create_template(self, root: Path) -> Path:
         path = root / "proposta.docx"
         document = Document()
@@ -334,6 +439,30 @@ class ProposalDocxIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(len(generated.tables), 1)
         self.assertEqual(generated.tables[0].rows[1].cells[3].text, "Item de teste")
+
+    def test_generation_exports_edited_text_and_invalidates_preview_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template = self.create_separate_marker_template(root)
+            ids = [node["id"] for node in inspect_docx_structure(template)["nodes"]
+                   if node["type"] == "MINI_BOX"]
+            payload = {"items": [self.proposal_item()], "template_ref": "managed:proposta.docx",
+                       "responsible_id": "1", "mini_box_order": list(reversed(ids))}
+            with (patch.object(server, "resolve_template", return_value=template),
+                  patch.object(server, "resolve_responsible", return_value={"id": "1"})):
+                original = server.proposal_generation_context(payload)
+                edited = server.proposal_generation_context({
+                    **payload, "mini_box_contents": {ids[0]: "Texto editado\nNova linha"},
+                })
+            self.assertNotEqual(server.proposal_preview_fingerprint(original),
+                                server.proposal_preview_fingerprint(edited))
+            output = root / "proposta.docx"
+            server.build_docx(edited["items"], template, output,
+                              mini_box_order=edited["mini_box_order"],
+                              mini_box_contents=edited["mini_box_contents"])
+            document = Document(output)
+            self.assertEqual(document.paragraphs[0].text, "Antes Segundo")
+            self.assertEqual(document.paragraphs[1].text, "Depois Texto editado\nNova linha")
 
     def test_build_docx_places_generated_table_at_the_selected_visual_position(self):
         with tempfile.TemporaryDirectory() as temp_dir:
