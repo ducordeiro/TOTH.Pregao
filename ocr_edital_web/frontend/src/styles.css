@@ -1,3 +1,10 @@
+.search-results span.search-keyword-hit,
+.opportunity-modal span.search-keyword-hit {
+  color: #00E5FF;
+  font: inherit;
+  letter-spacing: inherit;
+}
+
 :root {
   color-scheme: dark;
   font-family: Arial, Helvetica, sans-serif;
@@ -629,10 +636,11 @@ main {
 
 .proposal-retro .proposal-replica-page {
   position: relative;
+  display: flex;
+  flex-direction: column;
   width: min(100%, 500px);
   min-width: 330px;
-  min-height: 466px;
-  aspect-ratio: 210 / 297;
+  min-height: 706px;
   padding: 7% 6.5%;
   overflow: hidden;
   background: #fff;
@@ -641,6 +649,32 @@ main {
   font-family: Arial, Helvetica, sans-serif;
   font-size: 8px;
   line-height: 1.35;
+}
+
+.proposal-retro .proposal-replica-body {
+  flex: 1 0 auto;
+  min-width: 0;
+}
+
+.proposal-retro .proposal-replica-template-header {
+  margin-bottom: 10px;
+  overflow-wrap: anywhere;
+}
+
+.proposal-retro .proposal-replica-template-footer {
+  margin-top: 10px;
+  overflow-wrap: anywhere;
+}
+
+.proposal-retro .proposal-template-page-part {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: normal;
+  word-break: normal;
+  text-align: left;
+  line-height: normal;
+  letter-spacing: 0;
 }
 
 .proposal-retro .proposal-replica-page-number {
@@ -681,23 +715,24 @@ main {
   table-layout: fixed;
   border-collapse: collapse;
   color: #101116;
-  font-size: 5.5px;
-  line-height: 1.25;
+  font-family: Arial, Helvetica, sans-serif;
+  line-height: normal;
 }
 
 .proposal-retro .proposal-replica-table th,
 .proposal-retro .proposal-replica-table td {
   padding: 2px;
   overflow-wrap: anywhere;
-  border: 1px solid #4f525c;
+  border: 0.5pt solid #4f525c;
   text-align: center;
-  vertical-align: middle;
+  vertical-align: top;
 }
 
 .proposal-retro .proposal-replica-table th {
   position: relative;
   background: #e8ebf0;
-  font-weight: 800;
+  font-weight: 700;
+  vertical-align: middle;
 }
 
 .proposal-retro .proposal-column-resizer {
@@ -973,6 +1008,15 @@ main {
   touch-action: auto;
 }
 
+.proposal-retro .docx-mini-box-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
 .proposal-retro .docx-mini-box-editor:focus {
   outline: none;
   border-color: #633b32;
@@ -1010,6 +1054,18 @@ main {
 .proposal-table-editor .proposal-table-editor-grid input, .proposal-table-editor .proposal-table-editor-grid textarea { display: block; box-sizing: border-box; width: 100%; min-width: 0; min-height: 48px; margin: 0; padding: 10px; border: 0; border-radius: 0; background: transparent; color: #211c15; box-shadow: none; font-size: 13px; line-height: 1.45; letter-spacing: 0; }
 .proposal-table-editor .proposal-table-editor-grid input { font-weight: 700; }
 .proposal-table-editor .proposal-table-editor-grid textarea { resize: vertical; min-height: 96px; overflow-wrap: anywhere; }
+.proposal-table-heading-editor { display: grid; min-width: 0; }
+.proposal-table-heading-editor > span,
+.proposal-table-editor .proposal-table-editor-grid .proposal-table-heading-editor > textarea {
+  grid-area: 1 / 1; box-sizing: border-box; min-width: 0; min-height: 48px;
+  margin: 0; padding: 10px; border: 0; font: inherit; font-size: 13px;
+  font-weight: 700; line-height: 1.45; letter-spacing: 0;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.proposal-table-heading-editor > span { visibility: hidden; pointer-events: none; }
+.proposal-table-editor .proposal-table-editor-grid .proposal-table-heading-editor > textarea {
+  height: 100%; resize: none; overflow: hidden;
+}
 .proposal-table-editor .proposal-table-editor-grid input:focus, .proposal-table-editor .proposal-table-editor-grid textarea:focus { outline: 2px solid #1f354d; outline-offset: -2px; background: #fff2d5; }
 .proposal-table-editor .proposal-table-editor-grid textarea[readonly] { color: #5b4930; background: #f6d295; }
 .proposal-table-editor-grid .proposal-table-add-cell { background: #e9a22c; border: 0; }
@@ -1136,6 +1192,7 @@ main {
 
   .proposal-retro .proposal-replica-page {
     min-width: 290px;
+    min-height: 466px;
   }
 
   .proposal-retro .docx-mini-box.is-generated-table {
@@ -7513,6 +7570,8 @@ textarea:focus-visible,
 }
 
 .catalog-generator-exports { justify-content: flex-start; }
+.catalog-export-modal .modal-body { background: var(--brand-panel); color: var(--text); }
+.catalog-export-modal .catalog-generator-exports { flex-wrap: wrap; }
 .catalog-generator-exports a { padding: 8px 11px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--text); }
 .catalog-generator-exports a:hover { border-color: var(--orange); color: var(--orange); }
 

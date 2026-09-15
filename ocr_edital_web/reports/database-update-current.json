@@ -1,0 +1,81 @@
+{
+  "generated_at": "2026-09-13T21:39:31.287731-03:00",
+  "database": {
+    "opportunities": 356020,
+    "items": 3033438,
+    "indexed_opportunities": 356020,
+    "missing_index": 0
+  },
+  "publications": {
+    "pid": 3300,
+    "database": "C:\\Users\\ducor\\OneDrive\\Documentos\\Pregão\\ocr_edital_web\\data\\pncp.sqlite3",
+    "status": "running",
+    "date_from": "2026-06-01",
+    "date_to": "2026-09-13",
+    "started_at": "2026-09-13T21:37:37.337569-03:00",
+    "updated_at": "2026-09-13T21:39:28.926356-03:00",
+    "provider_priority": [
+      "comprasgov",
+      "pncp"
+    ],
+    "order": "newest_first",
+    "total_units": 1995,
+    "pending_at_start": 1995,
+    "current_unit": {
+      "date": "2026-09-12",
+      "modality": 16
+    },
+    "attempted_units": 34,
+    "pages_received": 35,
+    "counters": {
+      "fetched": 174,
+      "inserted": 109,
+      "updated": 65,
+      "skipped": 0,
+      "failed": 0
+    },
+    "remaining_units": 1961,
+    "estimated_seconds_first_pass": 6436,
+    "last_source_url": "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao?dataInicial=20260912&dataFinal=20260912&codigoModalidadeContratacao=15&pagina=1&tamanhoPagina=50",
+    "last_page": 1,
+    "source_pages": null
+  },
+  "publication_units_completed": 34,
+  "publication_units_failed": 0,
+  "publication_process_alive": true,
+  "item_process_alive": true,
+  "items": {
+    "run_id": "c11ad7ba3ce243faa07350d0015b0e28",
+    "pid": 13256,
+    "status": "running",
+    "scope": "all",
+    "source": "all",
+    "provider_priority": [
+      "comprasgov",
+      "pncp"
+    ],
+    "queue_order": "publication_desc",
+    "date_from": "2026-06-01",
+    "date_to": "2026-09-12",
+    "as_of": "2026-09-12",
+    "total": 124067,
+    "completed": 19989,
+    "remaining": 104078,
+    "progress_percent": 16.11,
+    "opportunities_per_minute": 50.57,
+    "estimated_seconds_remaining": 123490,
+    "counters": {
+      "fetched": 19989,
+      "inserted": 0,
+      "updated": 18791,
+      "skipped": 0,
+      "failed": 1198,
+      "items": 324521,
+      "documents": 0
+    },
+    "started_at": "2026-09-13T15:04:13.676653-03:00",
+    "updated_at": "2026-09-13T21:39:30.971711-03:00",
+    "error": ""
+  },
+  "item_first_pass_forecast": "15/09/2026 07:57"
+}

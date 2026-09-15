@@ -12,6 +12,7 @@ import type { Bid, OpportunityItemSelection, SearchResponse, UiMessage } from ".
 import { localIsoDate, parseLocalDate, toPncpDate } from "../utils";
 import { DateRangePicker } from "./DateRangePicker";
 import { KeywordTagInput } from "./KeywordTagInput";
+import { KeywordHighlight } from "./KeywordHighlight";
 import { OpportunityDetailModal } from "./OpportunityDetailModal";
 import { StatusMessage } from "./StatusMessage";
 
@@ -92,6 +93,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
   const [ufs, setUfs] = useState<string[]>([]);
   const [keywords, setKeywords] = useState<string[]>([]);
   const [keywordDraft, setKeywordDraft] = useState("");
+  const [resultKeywords, setResultKeywords] = useState<string[]>([]);
   const [objectType, setObjectType] = useState("");
   const [modality, setModality] = useState("");
   const [purchaseNumber, setPurchaseNumber] = useState("");
@@ -114,6 +116,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
     setIncludeMissingEndDate(true);
     setUfs([]);
     setKeywords([]);
+    setResultKeywords([]);
     setKeywordDraft("");
     setObjectType("");
     setModality("");
@@ -180,6 +183,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
         rapido: "1",
       });
       const applyLocalPayload = (payload: SearchResponse) => {
+        setResultKeywords(effectiveKeywords);
         const nextResults = payload.results || [];
         const nextPage = payload.pagina || targetPage;
         const nextTotal = payload.total || 0;
@@ -249,6 +253,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
         ) {
           if (requestId !== searchRequestRef.current) return;
           if (!localAvailable && onlinePayload.results?.length) {
+            setResultKeywords(effectiveKeywords);
             const previewResults = mergeBidPages(initialResults, onlinePayload.results);
             setResults(previewResults);
             setPage(1);
@@ -544,13 +549,13 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
                     }
                   }}
                 >
-                  <td>{bid.orgao}</td>
-                  <td>{[bid.municipio, bid.uf].filter(Boolean).join(" / ")}</td>
+                  <td><KeywordHighlight text={bid.orgao} terms={resultKeywords} /></td>
+                  <td><KeywordHighlight text={[bid.municipio, bid.uf].filter(Boolean).join(" / ")} terms={resultKeywords} /></td>
                   <td>
-                    {bid.numeroCompra}
+                    <KeywordHighlight text={bid.numeroCompra} terms={resultKeywords} />
                     <span className="search-result-source">{sourceLabel(bid)}</span>
                   </td>
-                  <td className="description-cell">{bid.objeto}</td>
+                  <td className="description-cell"><KeywordHighlight text={bid.objeto} terms={resultKeywords} /></td>
                   <td>
                     <span className={`item-index-status ${bid.itensIndexados ? "is-indexed" : "is-pending"}`}>
                       {bid.itensIndexados
@@ -615,6 +620,7 @@ export function SearchBlock({ onUseLink, onGenerateProposal, onGenerateCatalog }
 
       <OpportunityDetailModal
         bid={selectedBid}
+        highlightTerms={resultKeywords}
         onClose={() => setSelectedBid(null)}
         onGenerateProposal={onGenerateProposal}
         onGenerateCatalog={onGenerateCatalog}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -10,14 +10,12 @@ import {
   Play,
   Plus,
   Save,
-  SlidersHorizontal,
   Trash2,
   Upload,
   X,
 } from "lucide-react";
 import { createCatalogGeneratorJob, exportGeneratedCatalog, getCatalogGeneratorJob, saveCatalogTechnicalRepertoire } from "../api";
 import type {
-  CatalogEvidenceObservation,
   CatalogExportFile,
   CatalogGeneratorJob,
   CatalogTechnicalParameter,
@@ -28,6 +26,8 @@ import type {
 } from "../types";
 import { opportunityItemKey, selectionForLink } from "../opportunitySelection";
 import { validateTemplateFile } from "../utils";
+import { Modal } from "./Modal";
+import { CatalogItemRow, CatalogObservationContent, catalogObservation } from "./CatalogItemReview";
 
 interface CatalogGeneratorBlockProps {
   pncpLink: string;
@@ -37,8 +37,6 @@ interface CatalogGeneratorBlockProps {
   selectedTemplateId: string;
   onSelectedTemplateChange: (id: string) => void;
 }
-
-const humanizeCatalogStatus = (value: string) => value.replaceAll("_", " ");
 
 const catalogExportLabel = (kind: string) => {
   if (kind === "docx") return "Catálogo DOCX";
@@ -78,21 +76,6 @@ const technicalParameterDraft = (parameter: CatalogTechnicalParameter): Technica
   valor_maximo: parameter.valor_maximo === undefined ? "" : String(parameter.valor_maximo),
 });
 
-const catalogObservation = (item: GeneratedCatalogItem): CatalogEvidenceObservation => (
-  item.observacao_repertorio || {
-    status: item.modelo_referencia ? "evidencia_parcial" : "sem_repertorio",
-    titulo: item.modelo_referencia
-      ? "Foram encontradas evidências parciais"
-      : "Não foi encontrado repertório para o item",
-    descricao: item.modelo_referencia
-      ? "Esta análise foi criada antes da auditoria por componentes e precisa ser reavaliada."
-      : "Não há dados técnicos cadastrados que permitam validar os componentes solicitados.",
-    evidencias: [],
-    faltantes: item.analise_aderencia?.pendencias || ["Cadastre os parâmetros técnicos do item."],
-    fonte: item.modelo_referencia?.fonte || "",
-  }
-);
-
 export function CatalogGeneratorBlock({
   pncpLink,
   onPncpLinkChange,
@@ -102,11 +85,15 @@ export function CatalogGeneratorBlock({
   onSelectedTemplateChange,
 }: CatalogGeneratorBlockProps) {
   const templateInputRef = useRef<HTMLInputElement>(null);
+  const repertoireFormRef = useRef<HTMLFormElement>(null);
   const [job, setJob] = useState<CatalogGeneratorJob | null>(null);
   const [items, setItems] = useState<GeneratedCatalogItem[]>([]);
   const [exports, setExports] = useState<Record<string, CatalogExportFile>>({});
   const [error, setError] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportError, setExportError] = useState("");
+  const [exportWarnings, setExportWarnings] = useState<string[]>([]);
   const [starting, setStarting] = useState(false);
   const [customTemplate, setCustomTemplate] = useState<File | null>(null);
   const [editingRepertoireItemId, setEditingRepertoireItemId] = useState("");
@@ -117,6 +104,9 @@ export function CatalogGeneratorBlock({
   const requestVersion = useRef(0);
   const exportVersion = useRef(0);
   const selection = selectionForLink(itemSelection, pncpLink);
+  useEffect(() => {
+    if (editingRepertoireItemId) repertoireFormRef.current?.scrollIntoView({ block: "start" });
+  }, [editingRepertoireItemId]);
   const selectedTemplate = templates.find((template) => template.id === selectedTemplateId);
   const selectedTemplateVersion = selectedTemplate
     ? `${selectedTemplate.id}:${selectedTemplate.size}:${selectedTemplate.updated_at}`
@@ -131,6 +121,8 @@ export function CatalogGeneratorBlock({
     setJob(null);
     setItems([]);
     setExports({});
+    setExportDialogOpen(false);
+    setExportError("");
     setError("");
     setStarting(false);
     setExporting(false);
@@ -142,21 +134,36 @@ export function CatalogGeneratorBlock({
   useEffect(() => {
     if (!job || !["queued", "processing"].includes(job.status)) return;
     let cancelled = false;
-    const timer = window.setInterval(() => {
-      getCatalogGeneratorJob(job.id)
-        .then((updated) => {
-          if (cancelled) return;
-          setJob(updated);
-          if (updated.result) setItems(updated.result.items);
-          if (updated.status === "failed") setError(updated.error);
-        })
-        .catch((reason) => {
-          if (!cancelled) setError(reason instanceof Error ? reason.message : "Falha ao acompanhar o processamento.");
-        });
-    }, 900);
+    let timer: number | undefined;
+    const controller = new AbortController();
+    const poll = async () => {
+      let pending = true;
+      const requestController = new AbortController();
+      const timeout = window.setTimeout(() => requestController.abort(), 15000);
+      const abort = () => requestController.abort();
+      controller.signal.addEventListener("abort", abort, { once: true });
+      try {
+        const updated = await getCatalogGeneratorJob(job.id, requestController.signal);
+        if (cancelled) return;
+        pending = ["queued", "processing"].includes(updated.status);
+        setJob(updated);
+        if (updated.result) setItems(updated.result.items);
+        setError(updated.status === "failed" ? updated.error : "");
+      } catch (reason) {
+        if (!cancelled) setError(requestController.signal.aborted
+          ? "O acompanhamento demorou a responder. Tentando novamente..."
+          : reason instanceof Error ? reason.message : "Falha ao acompanhar o processamento.");
+      } finally {
+        window.clearTimeout(timeout);
+        controller.signal.removeEventListener("abort", abort);
+        if (!cancelled && pending) timer = window.setTimeout(() => void poll(), 900);
+      }
+    };
+    void poll();
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      controller.abort();
+      window.clearTimeout(timer);
     };
   }, [job?.id, job?.status]);
 
@@ -194,7 +201,8 @@ export function CatalogGeneratorBlock({
     }
   };
 
-  const updateItem = (id: string, field: keyof GeneratedCatalogItem, value: string) => {
+  const updateItem = useCallback((id: string, field: keyof GeneratedCatalogItem, value: string) => {
+    setEditingRepertoireItemId("");
     exportVersion.current += 1;
     setExporting(false);
     setExports({});
@@ -227,7 +235,7 @@ export function CatalogGeneratorBlock({
         analise_desatualizada: invalidatesAnalysis || updated.analise_desatualizada,
       };
     }));
-  };
+  }, []);
 
   const selectCustomTemplate = (file: File) => {
     const validationError = validateTemplateFile(file);
@@ -242,20 +250,23 @@ export function CatalogGeneratorBlock({
   };
 
   const runExport = async () => {
-    if (!job) return;
+    if (!job || exporting) return;
     const version = requestVersion.current;
     const currentExportVersion = ++exportVersion.current;
     setExporting(true);
+    setExportError("");
+    setExportWarnings([]);
     setError("");
     try {
       const response = await exportGeneratedCatalog(job.id, items);
       if (version === requestVersion.current && currentExportVersion === exportVersion.current) {
         setItems(response.items);
         setExports(response.exports);
+        setExportWarnings(response.export_warnings || []);
       }
     } catch (reason) {
       if (version === requestVersion.current && currentExportVersion === exportVersion.current) {
-        setError(reason instanceof Error ? reason.message : "Não foi possível exportar o catálogo.");
+        setExportError(reason instanceof Error ? reason.message : "Não foi possível exportar o catálogo.");
       }
     } finally {
       if (version === requestVersion.current && currentExportVersion === exportVersion.current) {
@@ -264,18 +275,22 @@ export function CatalogGeneratorBlock({
     }
   };
 
-  const openRepertoireEditor = (item: GeneratedCatalogItem) => {
+  const openRepertoireEditor = useCallback((item: GeneratedCatalogItem) => {
     const saved = item.repertorio_usuario;
     setEditingRepertoireItemId(item.id);
     setRepertoireProductName(saved?.produto_nome || item.produto || `Item ${item.numero}`);
     setRepertoireCoverageComplete(saved?.cobertura_completa || false);
-    setTechnicalParameters(
-      saved?.parametros.length
-        ? saved.parametros.map(technicalParameterDraft)
-        : [newTechnicalParameter()],
-    );
+    const existing = saved?.parametros.map(technicalParameterDraft) || [];
+    const questions = (item.perguntas_pendentes || []).filter((question) => !existing.some((parameter) => parameter.pergunta_id === question.id));
+    const drafts = [...existing, ...questions.map((question) => ({
+      ...newTechnicalParameter(), pergunta_id: question.id,
+      componente: question.titulo.slice(0, 120), atributo: "Validação técnica",
+      comparacao: "igual" as const, valor_requerido_texto: question.requisito,
+      resposta: "nao_confirmado" as const,
+    }))];
+    setTechnicalParameters(drafts.length ? drafts : [newTechnicalParameter()]);
     setError("");
-  };
+  }, []);
 
   const updateTechnicalParameter = (
     id: string,
@@ -288,14 +303,23 @@ export function CatalogGeneratorBlock({
   };
 
   const saveTechnicalRepertoire = async (item: GeneratedCatalogItem) => {
-    if (!job || savingRepertoire) return;
+    if (!job || savingRepertoire || item.analise_desatualizada) return;
+    const answeredParameters = technicalParameters.filter((parameter) => !parameter.pergunta_id
+      || parameter.resposta !== "nao_confirmado"
+      || (parameter.valor_atendido_texto?.trim() && parameter.evidencia.trim()));
+    if (!answeredParameters.length) {
+      setError("Responda ao menos uma pendência antes de salvar.");
+      return;
+    }
     const input: CatalogTechnicalRepertoireInput = {
       produto_nome: repertoireProductName,
       cobertura_completa: repertoireCoverageComplete,
-      parametros: technicalParameters.map((parameter) => (
+      parametros: answeredParameters.map((parameter) => (
         parameter.comparacao === "intervalo"
           ? {
               id: parameter.id,
+              pergunta_id: parameter.pergunta_id,
+              resposta: parameter.resposta,
               componente: parameter.componente,
               atributo: parameter.atributo,
               comparacao: parameter.comparacao,
@@ -307,6 +331,8 @@ export function CatalogGeneratorBlock({
             }
           : {
               id: parameter.id,
+              pergunta_id: parameter.pergunta_id,
+              resposta: parameter.resposta,
               componente: parameter.componente,
               atributo: parameter.atributo,
               comparacao: parameter.comparacao,
@@ -316,19 +342,33 @@ export function CatalogGeneratorBlock({
             }
       )),
     };
+    const version = requestVersion.current;
     setSavingRepertoire(true);
     setError("");
     try {
       const updated = await saveCatalogTechnicalRepertoire(job.id, item.id, input);
+      if (version !== requestVersion.current) return;
       setJob(updated);
-      setItems(updated.result?.items || []);
+      const savedItem = updated.result?.items.find((entry) => entry.id === item.id);
+      // Updating one repertoire must not replace other items' unsaved edits.
+      if (savedItem) setItems((current) => current.map((entry) => entry.id === item.id ? {
+        ...savedItem,
+        numero: entry.numero,
+        quantidade: entry.quantidade,
+        unidade: entry.unidade,
+        campos_ausentes: entry.campos_ausentes,
+        status_evidencia: entry.status_evidencia,
+      } : entry));
       setExports({});
+      exportVersion.current += 1;
+      setExporting(false);
+      setExportError("");
       setEditingRepertoireItemId("");
       setTechnicalParameters([]);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível salvar a régua técnica.");
+      if (version === requestVersion.current) setError(reason instanceof Error ? reason.message : "Não foi possível salvar a régua técnica.");
     } finally {
-      setSavingRepertoire(false);
+      if (version === requestVersion.current) setSavingRepertoire(false);
     }
   };
 
@@ -486,7 +526,7 @@ export function CatalogGeneratorBlock({
             </div>
             <div><span>Modalidade</span><strong>{String(result.metadata.modalidade || "Não informada")}</strong><small>{String(result.metadata.situacao || "Situação não informada")}</small></div>
             <div><span>Itens</span><strong>{items.length}</strong><small>{currentValidation.incompletos} pendência(s)</small></div>
-            <div><span>Repertório estruturado</span><strong>{result.repertoire.structured_models} modelos</strong><small>{currentCatalogMetrics.modelos} localizado(s) nesta análise</small></div>
+            <div><span>Modelos no acervo</span><strong>{result.repertoire.cataloged_models || result.repertoire.structured_models} modelos</strong><small>{result.repertoire.structured_models} perfis estruturados · {currentCatalogMetrics.modelos} localizado(s) nesta análise</small></div>
           </section>
 
           {(currentWarnings.length > 0 || result.documents.length > 0) && (
@@ -510,7 +550,10 @@ export function CatalogGeneratorBlock({
                 <h2>Revisão dos requisitos e aderência</h2>
                 <p>{currentCatalogMetrics.semModelo} sem modelo · {currentCatalogMetrics.divergencias} com divergência · {currentCatalogMetrics.reanalises} aguardando reanálise</p>
               </div>
-              <button className="button button-primary" type="button" onClick={() => void runExport()} disabled={exporting || items.length === 0}>
+              <button className="button button-primary" type="button" onClick={() => {
+                setExportDialogOpen(true);
+                if (!Object.keys(exports).length) void runExport();
+              }} disabled={items.length === 0 || savingRepertoire || Boolean(editingRepertoireItemId)}>
                 {exporting ? <LoaderCircle className="spin" size={17} /> : <Download size={17} />} Gerar catálogo e auditoria
               </button>
             </div>
@@ -519,31 +562,7 @@ export function CatalogGeneratorBlock({
                 <thead><tr><th>Item</th><th>Produto e requisito</th><th>Unidade</th><th>Quantidade</th><th>Categoria</th><th>Modelo e aderência</th><th>Evidência</th></tr></thead>
                 <tbody>
                   {items.map((item) => (
-                    <tr key={item.id}>
-                      <td><input value={item.numero} onChange={(event) => updateItem(item.id, "numero", event.target.value)} />{item.lote && <small>Lote {item.lote}</small>}</td>
-                      <td>
-                        <input value={item.produto} aria-label={`Produto do item ${item.numero}`} onChange={(event) => updateItem(item.id, "produto", event.target.value)} />
-                        <textarea value={item.descricao} aria-label={`Descrição do item ${item.numero}`} onChange={(event) => updateItem(item.id, "descricao", event.target.value)} />
-                        <small title={item.fontes[0]?.url}>{item.fontes[0]?.documento} · {item.fontes[0]?.secao}</small>
-                      </td>
-                      <td><input value={item.unidade} aria-label={`Unidade do item ${item.numero}`} onChange={(event) => updateItem(item.id, "unidade", event.target.value)} /></td>
-                      <td><input value={item.quantidade} aria-label={`Quantidade do item ${item.numero}`} onChange={(event) => updateItem(item.id, "quantidade", event.target.value)} /></td>
-                      <td><input value={item.categoria} onChange={(event) => updateItem(item.id, "categoria", event.target.value)} /></td>
-                      <td className="catalog-generator-fit">
-                        {item.analise_desatualizada ? (
-                          <><span className="evidence-status">reanálise necessária</span><small>Gere os arquivos para recalcular.</small></>
-                        ) : item.modelo_referencia ? (
-                          <>
-                            <strong>{item.modelo_referencia.nome}</strong>
-                            <span className={"evidence-status is-" + item.status_catalogo}>{humanizeCatalogStatus(item.analise_aderencia.resultado)}</span>
-                            <small>Confiança {item.modelo_referencia.confianca} · {item.analise_aderencia.pendencias.length} pendência(s)</small>
-                          </>
-                        ) : (
-                          <><span className="evidence-status is-bloqueado_sem_modelo">sem modelo correspondente</span><small>Características técnicas não serão publicadas.</small></>
-                        )}
-                      </td>
-                      <td><span className={`evidence-status is-${item.status_evidencia}`}>{item.status_evidencia}</span>{item.campos_ausentes.length > 0 && <small>{item.campos_ausentes.join(", ")}</small>}</td>
-                    </tr>
+                    <CatalogItemRow key={item.id} item={item} disabled={savingRepertoire} onChange={updateItem} />
                   ))}
                 </tbody>
               </table>
@@ -562,38 +581,11 @@ export function CatalogGeneratorBlock({
               {items.map((item) => {
                 const observation = catalogObservation(item);
                 const isEditing = editingRepertoireItemId === item.id;
-                const canEditRepertoire = observation.status === "sem_repertorio" || Boolean(item.repertorio_usuario);
                 return (
                   <article className={`catalog-generator-observation is-${observation.status}`} key={item.id}>
-                    <header>
-                      <span>Item {item.numero}{item.lote ? ` · Lote ${item.lote}` : ""}</span>
-                      <strong>{observation.titulo}</strong>
-                      <span className={`evidence-status is-${observation.status}`}>
-                        {observation.status === "sem_repertorio" ? "1 · sem repertório" : observation.status === "evidencia_completa" ? "2 · evidência completa" : "3 · evidência parcial"}
-                      </span>
-                    </header>
-                    <p>{observation.descricao}</p>
-                    {observation.fonte && <small>Fonte: {observation.fonte}</small>}
-                    {observation.evidencias.length > 0 && (
-                      <div className="catalog-generator-observation-details is-supported">
-                        <strong>Evidências localizadas</strong>
-                        <ul>{observation.evidencias.map((entry) => <li key={entry}>{entry}</li>)}</ul>
-                      </div>
-                    )}
-                    {observation.faltantes.length > 0 && (
-                      <div className="catalog-generator-observation-details is-missing">
-                        <strong>Dados faltantes ou divergentes</strong>
-                        <ul>{observation.faltantes.map((entry) => <li key={entry}>{entry}</li>)}</ul>
-                      </div>
-                    )}
-                    {canEditRepertoire && !isEditing && (
-                      <button className="button button-secondary" type="button" onClick={() => openRepertoireEditor(item)}>
-                        <SlidersHorizontal size={16} aria-hidden="true" />
-                        {item.repertorio_usuario ? "Editar régua técnica" : "Cadastrar régua técnica"}
-                      </button>
-                    )}
+                    <CatalogObservationContent item={item} isEditing={isEditing} disabled={savingRepertoire} onEdit={openRepertoireEditor} />
                     {isEditing && (
-                      <form className="catalog-generator-repertoire-form" onSubmit={(event) => { event.preventDefault(); void saveTechnicalRepertoire(item); }}>
+                      <form ref={repertoireFormRef} className="catalog-generator-repertoire-form" onSubmit={(event) => { event.preventDefault(); void saveTechnicalRepertoire(item); }}>
                         <label>
                           Produto ou modelo Goldflex
                           <input value={repertoireProductName} maxLength={180} required onChange={(event) => setRepertoireProductName(event.target.value)} />
@@ -620,14 +612,21 @@ export function CatalogGeneratorBlock({
                                 Característica avaliada
                                 <input value={parameter.atributo} maxLength={120} required placeholder="Ex.: Tamanho" onChange={(event) => updateTechnicalParameter(parameter.id, "atributo", event.target.value)} />
                               </label>
-                              <label>
+                              {parameter.pergunta_id ? <label>
+                                Atendimento ao requisito
+                                <select value={parameter.resposta || "nao_confirmado"} onChange={(event) => updateTechnicalParameter(parameter.id, "resposta", event.target.value)}>
+                                  <option value="nao_confirmado">Ainda não confirmado</option>
+                                  <option value="atende">Atende, conforme evidência informada</option>
+                                  <option value="nao_atende">Não atende</option>
+                                </select>
+                              </label> : <label>
                                 Regra de comparação
-                                <select value={parameter.comparacao} onChange={(event) => updateTechnicalParameter(parameter.id, "comparacao", event.target.value)}>
+                                <select disabled={Boolean(parameter.pergunta_id)} value={parameter.comparacao} onChange={(event) => updateTechnicalParameter(parameter.id, "comparacao", event.target.value)}>
                                   <option value="intervalo">Faixa numérica</option>
                                   <option value="igual">Valor exato</option>
                                   <option value="contem">Característica contida</option>
                                 </select>
-                              </label>
+                              </label>}
                               {parameter.comparacao === "intervalo" ? (
                                 <div className="catalog-generator-numeric-rule">
                                   <label>Exigido no item<input type="number" step="any" required value={parameter.valor_requerido} onChange={(event) => updateTechnicalParameter(parameter.id, "valor_requerido", event.target.value)} /></label>
@@ -637,13 +636,13 @@ export function CatalogGeneratorBlock({
                                 </div>
                               ) : (
                                 <div className="catalog-generator-text-rule">
-                                  <label>Exigido no item<input required maxLength={240} value={parameter.valor_requerido_texto} onChange={(event) => updateTechnicalParameter(parameter.id, "valor_requerido_texto", event.target.value)} /></label>
-                                  <label>Atendido pela Goldflex<input required maxLength={240} value={parameter.valor_atendido_texto} onChange={(event) => updateTechnicalParameter(parameter.id, "valor_atendido_texto", event.target.value)} /></label>
+                                  <label>Requisito ou pendência<textarea required readOnly={Boolean(parameter.pergunta_id)} maxLength={parameter.pergunta_id ? 2000 : 240} value={parameter.valor_requerido_texto} onChange={(event) => updateTechnicalParameter(parameter.id, "valor_requerido_texto", event.target.value)} /></label>
+                                  <label>Especificação atendida pela Goldflex<textarea required={!parameter.pergunta_id || parameter.resposta !== "nao_confirmado"} maxLength={parameter.pergunta_id ? 2000 : 240} value={parameter.valor_atendido_texto} onChange={(event) => updateTechnicalParameter(parameter.id, "valor_atendido_texto", event.target.value)} /></label>
                                 </div>
                               )}
                               <label className="catalog-generator-parameter-evidence">
                                 Evidência técnica
-                                <textarea required maxLength={1000} value={parameter.evidencia} placeholder="Informe catálogo, laudo, ficha técnica ou validação do fabricante." onChange={(event) => updateTechnicalParameter(parameter.id, "evidencia", event.target.value)} />
+                                <textarea required={!parameter.pergunta_id || parameter.resposta !== "nao_confirmado"} maxLength={1000} value={parameter.evidencia} placeholder="Informe catálogo, laudo, ficha técnica ou validação do fabricante." onChange={(event) => updateTechnicalParameter(parameter.id, "evidencia", event.target.value)} />
                               </label>
                             </fieldset>
                           ))}
@@ -651,7 +650,7 @@ export function CatalogGeneratorBlock({
                         <button
                           className="button button-secondary"
                           type="button"
-                          disabled={technicalParameters.length >= 30}
+                          disabled={technicalParameters.length >= 100}
                           onClick={() => setTechnicalParameters((current) => [...current, newTechnicalParameter()])}
                         >
                           <Plus size={16} aria-hidden="true" /> Adicionar parâmetro
@@ -675,12 +674,22 @@ export function CatalogGeneratorBlock({
             </div>
           </section>
 
-          {Object.keys(exports).length > 0 && (
-            <section className="catalog-generator-exports">
-              <strong>Arquivos prontos</strong>
-              {Object.entries(exports).map(([kind, file]) => <a key={kind} href={file.download_url} download><Download size={16} />{catalogExportLabel(kind)}</a>)}
-            </section>
-          )}
+          <Modal open={exportDialogOpen} title="Baixar catálogo e auditoria" className="catalog-export-modal" onClose={() => setExportDialogOpen(false)}>
+            {job.template_name && <p>Template: {job.template_name}</p>}
+            {exportWarnings.map((warning) => <p key={warning} role="status">{warning}</p>)}
+            {exporting ? (
+              <p role="status"><LoaderCircle className="spin" size={17} aria-hidden="true" /> Gerando arquivos...</p>
+            ) : exportError ? (
+              <>
+                <p className="status-message status-error" role="alert">{exportError}</p>
+                <button className="button button-primary" type="button" onClick={() => void runExport()}>Tentar novamente</button>
+              </>
+            ) : Object.keys(exports).length > 0 ? (
+              <section className="catalog-generator-exports" aria-label="Formatos disponíveis">
+                {Object.entries(exports).map(([kind, file]) => <a key={kind} href={file.download_url} download><Download size={16} aria-hidden="true" />{catalogExportLabel(kind)}</a>)}
+              </section>
+            ) : <p role="status">Nenhum arquivo disponível para download.</p>}
+          </Modal>
         </>
       )}
     </section>

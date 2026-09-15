@@ -5,6 +5,8 @@ import {
   paginateProposalRows,
   resizeAdjacentProposalColumns,
   proposalColumns,
+  proposalTableWidthPt,
+  defaultTableMetrics,
 } from "./proposalPreviewLayout";
 import type { ProposalItem, ProposalTableLayout } from "./types";
 
@@ -21,6 +23,13 @@ function proposalItem(description: string): ProposalItem {
 }
 
 describe("proposal preview layout", () => {
+  it("uses the template printable width instead of the preview viewport width", () => {
+    expect(proposalTableWidthPt(proposalColumns(false), false, defaultTableMetrics)).toBe(468);
+    expect(proposalTableWidthPt(proposalColumns(false), false,
+      { ...defaultTableMetrics, available_width_twips: 7200 })).toBe(360);
+    expect(proposalTableWidthPt([{key: "descricao", label: "Descricao"}], false,
+      defaultTableMetrics)).toBe(225);
+  });
   it("uses edited headers, removed columns and multiple additional values", () => {
     const text = Array.from({ length: 300 }, (_, index) => `linha${index}`).join("\n");
     const layout: ProposalTableLayout = { columns: [

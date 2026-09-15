@@ -22,6 +22,7 @@ CONTENT_PART_PATTERN = re.compile(
     r"^word/(?:document|header\d+|footer\d+|footnotes|endnotes|comments)\.xml$"
 )
 GENERATED_TABLE_BLOCK_ID = "generated-proposal-table"
+DOCUMENT_SPLIT_TOKEN = "__TOTH_TABLE_SPLIT_6F2C9D1A__"
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ class DocumentBlockLayout:
     order: tuple[str, ...]
     mini_box_order: tuple[str, ...]
     table_paragraph_index: int | None
+    split_after_slot_id: str | None = None
 
 
 def _document_signature(path: Path) -> str:
@@ -388,6 +390,7 @@ def resolve_document_block_layout(
     )
 
     target_paragraph_index = None
+    split_after_slot_id = None
     if table_order < len(analysis.slots):
         target_slot = analysis.slots[table_order]
         if target_slot.part != "word/document.xml":
@@ -400,16 +403,16 @@ def resolve_document_block_layout(
                 previous_slot.part == target_slot.part
                 and previous_slot.paragraph_index == target_slot.paragraph_index
             ):
-                raise ValueError(
-                    "A tabela não pode ser inserida entre mini-boxes do mesmo parágrafo. "
-                    "Posicione-a antes ou depois desse conjunto."
-                )
+                split_after_slot_id = previous_slot.id
         target_paragraph_index = target_slot.paragraph_index
+        if split_after_slot_id:
+            target_paragraph_index += 1
 
     return DocumentBlockLayout(
         order=tuple(validated_order),
         mini_box_order=mini_box_order,
         table_paragraph_index=target_paragraph_index,
+        split_after_slot_id=split_after_slot_id,
     )
 
 
@@ -464,12 +467,57 @@ def _replace_text_range(
     _set_text(text_elements[last], suffix)
 
 
+def _split_paragraph_at_token(root: etree._Element, token: str) -> None:
+    matches = [element for element in root.iter(TEXT_TAG) if token in (element.text or "")]
+    if len(matches) != 1:
+        raise ValueError("Não foi possível determinar o ponto de inserção da tabela.")
+    text_element = matches[0]
+    before, after = (text_element.text or "").split(token, 1)
+    paragraph = next(
+        (ancestor for ancestor in text_element.iterancestors() if ancestor.tag == f"{{{WORD_NAMESPACE}}}p"),
+        None,
+    )
+    if paragraph is None or paragraph.getparent() is None:
+        raise ValueError("Não foi possível dividir o parágrafo para inserir a tabela.")
+    direct_child = text_element
+    while direct_child.getparent() is not paragraph:
+        direct_child = direct_child.getparent()
+
+    new_paragraph = etree.Element(paragraph.tag, paragraph.attrib, nsmap=paragraph.nsmap)
+    properties = paragraph.find("./w:pPr", namespaces=NAMESPACES)
+    if properties is not None:
+        new_paragraph.append(etree.fromstring(etree.tostring(properties)))
+
+    cloned_child = etree.fromstring(etree.tostring(direct_child))
+    original_texts = list(direct_child.iter(TEXT_TAG))
+    cloned_texts = list(cloned_child.iter(TEXT_TAG))
+    target_index = original_texts.index(text_element)
+    for index, element in enumerate(original_texts):
+        if index == target_index:
+            _set_text(element, before)
+        elif index > target_index:
+            _set_text(element, "")
+    for index, element in enumerate(cloned_texts):
+        if index < target_index:
+            _set_text(element, "")
+        elif index == target_index:
+            _set_text(element, after)
+    new_paragraph.append(cloned_child)
+
+    child_index = paragraph.index(direct_child)
+    for child in list(paragraph)[child_index + 1:]:
+        paragraph.remove(child)
+        new_paragraph.append(child)
+    paragraph.addnext(new_paragraph)
+
+
 def _rewrite_part(
     data: bytes,
     slots: list[MiniBoxSlot],
     replacement_contents: dict[str, str | None],
     replacement_alignments: dict[str, str] | None = None,
     include_markers: bool = True,
+    split_after_slot_id: str | None = None,
 ) -> bytes:
     root = _parse_xml(data)
     paragraphs = root.xpath(".//w:p", namespaces=NAMESPACES)
@@ -498,6 +546,8 @@ def _rewrite_part(
             replacement = replacement_content
             if replacement_content is not None and include_markers:
                 replacement = "{" + replacement_content + "}"
+            if slot.id == split_after_slot_id:
+                replacement = (replacement or "") + DOCUMENT_SPLIT_TOKEN
             _replace_text_range(
                 paragraph,
                 slot.start,
@@ -523,6 +573,9 @@ def _rewrite_part(
             previous.addnext(child)
             previous = child
 
+    if split_after_slot_id:
+        _split_paragraph_at_token(root, DOCUMENT_SPLIT_TOKEN)
+
     return etree.tostring(
         root,
         encoding="UTF-8",
@@ -538,6 +591,7 @@ def rebuild_docx_with_mini_box_order(
     alignments: object = None,
     include_markers: bool = True,
     contents: object = None,
+    split_after_slot_id: str | None = None,
 ) -> None:
     source_path = Path(source_path)
     target_path = Path(target_path)
@@ -545,6 +599,8 @@ def rebuild_docx_with_mini_box_order(
     validated_order = _validated_order(analysis, ordered_ids)
     validated_alignments = _validated_alignments(analysis, alignments)
     validated_contents = _validated_contents(analysis, contents)
+    if split_after_slot_id is not None and split_after_slot_id not in {slot.id for slot in analysis.slots}:
+        raise ValueError("O ponto de inserção da tabela não pertence ao modelo.")
     slots_by_id = {slot.id: slot for slot in analysis.slots}
     replacement_contents: dict[str, str | None] = {
         target_slot.id: validated_contents.get(source_id, slots_by_id[source_id].content)
@@ -585,6 +641,7 @@ def rebuild_docx_with_mini_box_order(
                             replacement_contents,
                             replacement_alignments,
                             include_markers,
+                            split_after_slot_id if entry.filename == "word/document.xml" else None,
                         )
                     target_archive.writestr(entry, data)
         os.replace(temporary_path, target_path)

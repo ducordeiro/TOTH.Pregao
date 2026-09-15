@@ -1,8 +1,10 @@
 import csv
 import html
 import json
+import logging
 import re
 import uuid
+import zipfile
 from datetime import datetime
 
 from docx import Document
@@ -11,6 +13,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Mm, Pt, RGBColor
+from docx.text.paragraph import Paragraph as WordParagraph
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from reportlab.lib import colors
@@ -28,6 +31,7 @@ from catalog_rules import (
     catalog_summary,
     repertoire_summary,
 )
+from catalog_technical_layout import identification_lines, technical_sections
 
 
 MANUFACTURER = {
@@ -310,26 +314,52 @@ def add_catalog_paragraph(document, text="", style=None, *, bold=False, size=Non
     return paragraph
 
 
-def write_catalog_docx(path, entries, template_path=None):
-    document = Document(str(template_path)) if template_path else Document()
-    marker = next(
-        (paragraph for paragraph in document.paragraphs if paragraph.text.strip() == "{CATALOGO}"),
-        None,
-    )
-    body = document._body._element
-    original_elements = set(body.iterchildren())
-    template_has_content = bool(
-        template_path
-        and (
-            any(paragraph.text.strip() for paragraph in document.paragraphs if paragraph is not marker)
-            or document.tables
-        )
-    )
+def add_technical_catalog_sections(document, entry):
+    for title, lines in technical_sections(entry, catalog_characteristics(entry)):
+        add_catalog_paragraph(document, title, style="Heading 2", bold=True, size=12)
+        for line in lines:
+            add_catalog_paragraph(document, line)
 
-    if not template_path:
-        configure_docx(document)
-    elif marker is None and template_has_content:
-        document.add_page_break()
+
+def write_templated_catalog_docx(path, entries, template_path, metadata=None):
+    document = Document(str(template_path))
+    body = document._body._element
+    paragraphs = [WordParagraph(element, document._body) for element in body.iter(qn("w:p"))]
+    markers = [paragraph for paragraph in paragraphs if "{CATALOGO}" in paragraph.text]
+    if len(markers) > 1 or any(paragraph.text.strip() != "{CATALOGO}" for paragraph in markers):
+        raise ValueError("Use apenas um marcador {CATALOGO}, em um parágrafo exclusivo do template.")
+    marker = markers[0] if markers else None
+    original_elements = set(body.iterchildren())
+    for line in identification_lines(metadata, MANUFACTURER):
+        add_catalog_paragraph(document, line)
+    for entry in entries:
+        add_catalog_paragraph(document, entry["nome"], style="Heading 1")
+        add_catalog_paragraph(document, entry["familia"])
+        add_catalog_paragraph(document, "Características", style="Heading 2")
+        add_technical_catalog_sections(document, entry)
+    if not entries:
+        add_catalog_paragraph(document, "Modelo não identificado. As especificações permanecem pendentes de confirmação.")
+    if marker is not None:
+        for element in list(body.iterchildren()):
+            if element not in original_elements and element.tag != qn("w:sectPr"):
+                marker._p.addprevious(element)
+        parent = marker._p.getparent()
+        parent.remove(marker._p)
+        # Word requires a final paragraph in a table cell.
+        if parent.tag == qn("w:tc") and (not len(parent) or parent[-1].tag != qn("w:p")):
+            parent.append(OxmlElement("w:p"))
+    # Only the body changes. Preserve every other package part byte-for-byte,
+    # including floating header artwork and the user's style/numbering definitions.
+    with zipfile.ZipFile(template_path) as source, zipfile.ZipFile(path, "w") as target:
+        for entry in source.infolist():
+            target.writestr(entry, document.part.blob if entry.filename == "word/document.xml" else source.read(entry))
+
+
+def write_catalog_docx(path, entries, template_path=None, metadata=None):
+    if template_path:
+        return write_templated_catalog_docx(path, entries, template_path, metadata)
+    document = Document()
+    configure_docx(document)
     if not document.core_properties.title:
         document.core_properties.title = "Catálogo técnico Goldflex"
     if not document.core_properties.subject:
@@ -359,6 +389,8 @@ def write_catalog_docx(path, entries, template_path=None):
     status_run = status.add_run("RASCUNHO TÉCNICO — REVISÃO HUMANA OBRIGATÓRIA")
     status_run.bold = True
     status_run.font.color.rgb = RGBColor.from_string("9C6500")
+    for line in identification_lines(metadata, MANUFACTURER)[2:]:
+        add_catalog_paragraph(document, line)
 
     if not entries:
         document.add_page_break()
@@ -382,8 +414,7 @@ def write_catalog_docx(path, entries, template_path=None):
         family_run.bold = True
         family_run.font.color.rgb = RGBColor.from_string("666666")
         add_docx_band(document, "Características")
-        for value in catalog_characteristics(entry):
-            add_catalog_paragraph(document, value, style="List Bullet")
+        add_technical_catalog_sections(document, entry)
         add_catalog_paragraph(
             document,
             "Documentação e referência",
@@ -406,16 +437,6 @@ def write_catalog_docx(path, entries, template_path=None):
         review_run.bold = True
         review_run.font.color.rgb = RGBColor.from_string("9C6500")
 
-    if marker is not None:
-        generated_elements = [
-            element
-            for element in body.iterchildren()
-            if element not in original_elements and element.tag != qn("w:sectPr")
-        ]
-        for element in generated_elements:
-            marker._p.addprevious(element)
-        marker._element.getparent().remove(marker._element)
-
     document.save(path)
 
 
@@ -434,7 +455,7 @@ def pdf_header_footer(canvas, document):
     canvas.restoreState()
 
 
-def write_catalog_pdf(path, entries):
+def write_catalog_pdf(path, entries, metadata=None):
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
         "GoldflexTitle",
@@ -527,6 +548,8 @@ def write_catalog_pdf(path, entries):
         Paragraph(f"CNPJ {MANUFACTURER['cnpj']}", subtitle_style),
         Paragraph("RASCUNHO TÉCNICO — REVISÃO HUMANA OBRIGATÓRIA", status_style),
     ]
+    story.extend(Paragraph(html.escape(line), body_style)
+                 for line in identification_lines(metadata, MANUFACTURER)[2:])
     if not entries:
         story.extend([
             PageBreak(),
@@ -568,10 +591,9 @@ def write_catalog_pdf(path, entries):
             ),
             Spacer(1, 4 * mm),
         ])
-        story.extend(
-            Paragraph(f"• {html.escape(value)}", bullet_style)
-            for value in catalog_characteristics(entry)
-        )
+        for title, lines in technical_sections(entry, catalog_characteristics(entry)):
+            story.append(Paragraph(html.escape(title), section_style))
+            story.extend(Paragraph(html.escape(line), body_style) for line in lines)
         story.extend([
             Spacer(1, 2 * mm),
             Paragraph("Documentação e referência", section_style),
@@ -638,10 +660,14 @@ def write_audit_xlsx(path, safe_items):
     workbook.save(path)
 
 
-def export_catalog(output_dir, metadata, items, job_id, template_path=None):
+def export_catalog(output_dir, metadata, items, job_id, template_path=None, pdf_converter=None):
     output_dir.mkdir(parents=True, exist_ok=True)
     safe_items = prepare_catalog_items(items)
     entries = build_catalog_entries(safe_items)
+    for entry in entries:
+        entry["itens"] = list(dict.fromkeys(str(item.get("numero") or "") for item in safe_items
+                                          if (item.get("modelo_referencia") or {}).get("id") == entry["id"]
+                                          and item.get("numero")))
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     stem = f"catalogo_goldflex_{job_id[:8]}_{stamp}_{uuid.uuid4().hex[:8]}"
 
@@ -654,8 +680,17 @@ def export_catalog(output_dir, metadata, items, job_id, template_path=None):
     write_audit_json(json_path, metadata, safe_items, entries)
     write_audit_csv(csv_path, safe_items)
     write_audit_xlsx(xlsx_path, safe_items)
-    write_catalog_docx(docx_path, entries, template_path=template_path)
-    write_catalog_pdf(pdf_path, entries)
+    write_catalog_docx(docx_path, entries, template_path=template_path, metadata=metadata)
+    if template_path:
+        # Never substitute an unrelated layout when template conversion is unavailable.
+        try:
+            if pdf_converter is not None:
+                pdf_converter(docx_path, pdf_path)
+        except RuntimeError as exc:
+            logging.getLogger(__name__).warning("Catalog template PDF unavailable: %s", exc)
+            pdf_path.unlink(missing_ok=True)
+    else:
+        write_catalog_pdf(pdf_path, entries, metadata=metadata)
 
     return {
         kind: {"filename": path.name, "download_url": f"/download/{path.name}"}
@@ -666,4 +701,5 @@ def export_catalog(output_dir, metadata, items, job_id, template_path=None):
             ("csv", csv_path),
             ("json", json_path),
         )
+        if path.is_file() and path.stat().st_size
     }

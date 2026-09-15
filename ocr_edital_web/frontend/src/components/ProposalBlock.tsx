@@ -119,7 +119,7 @@ export function ProposalBlock({
   const [message, setMessage] = useState<UiMessage | null>(null);
   const [processing, setProcessing] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [download, setDownload] = useState<{ url: string; filename: string } | null>(null);
+  const [download, setDownload] = useState<{ url: string; filename: string; format: "docx" | "pdf" } | null>(null);
   const [documentStructure, setDocumentStructure] = useState<DocxStructureResponse | null>(null);
   const [documentNodes, setDocumentNodes] = useState<DocumentNode[]>([]);
   const [documentBlockIds, setDocumentBlockIds] = useState<string[]>([]);
@@ -485,18 +485,19 @@ export function ProposalBlock({
         (item) => parseMoneyToCents(item.valor_unitario || "") === null,
       )
     ) {
-      setMessage({ kind: "warning", text: "Revise os valores unitários antes de gerar o Word." });
+      setMessage({ kind: "warning", text: "Revise os valores unitários antes de gerar o documento." });
       return false;
     }
     return true;
   };
 
-  const generate = async () => {
+  const generate = async (format: "docx" | "pdf") => {
     if (!processed || generating || !validateDocument()) return;
     const generationVersion = ++generationVersionRef.current;
     setGenerating(true);
     setDownload(null);
-    setMessage({ kind: "info", text: "Gerando documento Word..." });
+    const formatLabel = format === "pdf" ? "PDF" : "Word";
+    setMessage({ kind: "info", text: `Gerando documento ${formatLabel}...` });
     try {
       const response = await generateProposal(
         preparedItems(),
@@ -513,15 +514,16 @@ export function ProposalBlock({
           .map((node) => [node.id, node.content])),
         extraColumn,
         tableLayout,
+        format,
       );
       if (generationVersion !== generationVersionRef.current) return;
-      setDownload({ url: response.download_url, filename: response.filename });
-      setMessage({ kind: "success", text: "Documento Word gerado com sucesso." });
+      setDownload({ url: response.download_url, filename: response.filename, format });
+      setMessage({ kind: "success", text: `Documento ${formatLabel} gerado com sucesso.` });
     } catch (error) {
       if (generationVersion !== generationVersionRef.current) return;
       setMessage({
         kind: "error",
-        text: error instanceof Error ? error.message : "Não foi possível gerar o documento Word.",
+        text: error instanceof Error ? error.message : `Não foi possível gerar o documento ${formatLabel}.`,
       });
     } finally {
       if (generationVersion === generationVersionRef.current) setGenerating(false);
@@ -778,20 +780,31 @@ export function ProposalBlock({
           </div>
           <div className="result-actions">
             {processed && (
+              <>
               <button
                 className="button button-primary"
                 type="button"
                 disabled={generating || structureLoading}
-                onClick={generate}
+                onClick={() => generate("docx")}
               >
                 <FileOutput size={17} />
                 {generating ? "Gerando..." : "Gerar Word"}
               </button>
+              <button
+                className="button button-primary"
+                type="button"
+                disabled={generating || structureLoading}
+                onClick={() => generate("pdf")}
+              >
+                <FileOutput size={17} />
+                {generating ? "Gerando..." : "Gerar PDF"}
+              </button>
+              </>
             )}
             {download && (
               <a className="button button-success" href={download.url} download>
                 <Download size={17} />
-                Baixar Word
+                Baixar {download.format === "pdf" ? "PDF" : "Word"}
               </a>
             )}
           </div>
@@ -823,6 +836,8 @@ export function ProposalBlock({
                 nodes={documentNodes}
                 blockOrder={previewOrder}
                 generatedTable={documentStructure.generated_table_block}
+                tableMetrics={documentStructure.table_metrics}
+                pagePartsPreview={documentStructure.page_parts_preview}
                 items={processed.items}
                 commercialTerms={processed.response.commercial_terms}
                 responsible={selectedResponsible}

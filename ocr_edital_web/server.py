@@ -4139,11 +4139,21 @@ def set_cell_margins(cell, top=80, bottom=80, start=100, end=100):
         node.set(qn("w:type"), "dxa")
 
 
+PROPOSAL_TABLE_STYLE = {
+    "body_font_pt": 9,
+    "header_font_pt": 9,
+    "horizontal_padding_twips": 40,
+    "narrow_padding_twips": 20,
+    "vertical_padding_twips": 80,
+}
+
+
 def set_column_cell_margins(cell, key):
     if key in {"lote", "item", "quantidade", "unidade"}:
         set_cell_margins(cell, start=20, end=20)
     else:
-        set_cell_margins(cell)
+        set_cell_margins(cell, start=PROPOSAL_TABLE_STYLE["horizontal_padding_twips"],
+                         end=PROPOSAL_TABLE_STYLE["horizontal_padding_twips"])
 
 
 def repeat_header(row):
@@ -4157,7 +4167,11 @@ def write_cell(cell, text, bold=False, size=8, align=WD_ALIGN_PARAGRAPH.CENTER):
     cell.text = ""
     p = cell.paragraphs[0]
     p.alignment = align
+    p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(0)
+    p.paragraph_format.left_indent = Pt(0)
+    p.paragraph_format.right_indent = Pt(0)
+    p.paragraph_format.first_line_indent = Pt(0)
     p.paragraph_format.line_spacing = 1.0
     run = p.add_run(text or "")
     set_font(run)
@@ -4379,6 +4393,7 @@ def build_docx(
     extra_column = normalize_proposal_extra_column(items, extra_column)
     table_layout = normalize_proposal_table_layout(items, table_layout)
     table_paragraph_index = None
+    split_after_slot_id = None
     if template_path and template_path.exists():
         template_mini_box_order = [
             node["id"]
@@ -4397,6 +4412,7 @@ def build_docx(
                 raise ValueError("As ordens visual e estrutural do documento são divergentes.")
             mini_box_order = resolved_mini_box_order
             table_paragraph_index = layout.table_paragraph_index
+            split_after_slot_id = layout.split_after_slot_id
         with TEMPLATE_LOCK:
             shutil.copyfile(template_path, output_path)
         if template_mini_box_order:
@@ -4407,6 +4423,7 @@ def build_docx(
                 mini_box_alignments,
                 include_markers=False,
                 contents=mini_box_contents,
+                split_after_slot_id=split_after_slot_id,
             )
         doc = Document(str(output_path))
     else:
@@ -4443,7 +4460,7 @@ def build_docx(
         set_cell_width(cell, width)
         set_column_cell_margins(cell, key)
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-        write_cell(cell, header, bold=True, size=10, align=WD_ALIGN_PARAGRAPH.CENTER)
+        write_cell(cell, header, bold=True, size=PROPOSAL_TABLE_STYLE["header_font_pt"], align=WD_ALIGN_PARAGRAPH.CENTER)
 
     for item_index, item in enumerate(items):
         row = table.add_row()
@@ -4453,7 +4470,7 @@ def build_docx(
             cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
             align = WD_ALIGN_PARAGRAPH.LEFT if key == "descricao" else WD_ALIGN_PARAGRAPH.CENTER
             value = proposal_table_cell(item, item_index, key, extra_column, table_layout)
-            write_cell(cell, value, bold=False, size=9, align=align)
+            write_cell(cell, value, bold=False, size=PROPOSAL_TABLE_STYLE["body_font_pt"], align=align)
 
     if table_paragraph_index is not None:
         move_table_before_template_paragraph(doc, table, table_paragraph_index)
@@ -6957,7 +6974,15 @@ def docx_structure_response(payload):
     template_path = resolve_template(template_ref)
     if not template_path:
         raise ValueError("O modelo Word selecionado não está disponível.")
-    return inspect_docx_structure(template_path)
+    result = inspect_docx_structure(template_path)
+    section = Document(str(template_path)).sections[-1]
+    result["table_metrics"] = {
+        **PROPOSAL_TABLE_STYLE,
+        "available_width_twips": int((section.page_width - section.left_margin - section.right_margin) / 635),
+    }
+    from proposal_template_preview import template_page_parts_preview
+    result["page_parts_preview"] = template_page_parts_preview(template_path)
+    return result
 
 
 def proposal_generation_context(payload):
@@ -7174,6 +7199,47 @@ def convert_docx_to_pdf(docx_path, pdf_path):
             "Não foi possível converter o Word para a pré-visualização em PDF."
             + (f" Detalhe: {detail[:300]}" if detail else "")
         )
+
+
+def generate_proposal_download(context, output_format="docx"):
+    if output_format not in ("docx", "pdf"):
+        raise ValueError("Selecione Word ou PDF para gerar a proposta.")
+    stem = f"Proposta_Final_{context['source_name']}_{int(time.time())}_{uuid.uuid4().hex[:12]}"
+    docx_path = OUTPUT_DIR / f"{stem}.docx"
+    output_path = OUTPUT_DIR / f"{stem}.{output_format}"
+    try:
+        build_docx(
+            context["items"], context["template_path"], docx_path,
+            responsible=context["responsible"],
+            commercial_terms=context["commercial_terms"],
+            mini_box_order=context["mini_box_order"],
+            document_block_order=context["document_block_order"],
+            mini_box_alignments=context["mini_box_alignments"],
+            mini_box_contents=context["mini_box_contents"],
+            extra_column=context["extra_column"],
+            table_layout=context.get("table_layout"),
+            proposal_column_widths=context["proposal_column_widths"],
+        )
+        if output_format == "pdf":
+            try:
+                convert_docx_to_pdf(docx_path, output_path)
+                with output_path.open("rb") as handle:
+                    if handle.read(5) != b"%PDF-":
+                        raise RuntimeError("O conversor nao produziu um PDF valido.")
+            except Exception as exc:
+                raise ValueError(
+                    "Nao foi possivel gerar o PDF com o template. "
+                    "Verifique o Microsoft Word instalado no servidor ou gere em Word."
+                ) from exc
+        record_generated_document(context["responsible_id"], output_path)
+    except Exception:
+        output_path.unlink(missing_ok=True)
+        docx_path.unlink(missing_ok=True)
+        raise
+    finally:
+        if output_format == "pdf":
+            docx_path.unlink(missing_ok=True)
+    return {"download_url": f"/download/{output_path.name}", "filename": output_path.name}
 
 
 def build_compatible_proposal_pdf(context, pdf_path):
@@ -11384,8 +11450,8 @@ def validate_catalog_technical_repertoire(payload):
     if not isinstance(complete_coverage, bool):
         raise ValueError("Informe se a régua cobre todos os componentes do item.")
     parameters = payload.get("parametros")
-    if not isinstance(parameters, list) or not 1 <= len(parameters) <= 30:
-        raise ValueError("Cadastre entre 1 e 30 parâmetros técnicos.")
+    if not isinstance(parameters, list) or not 1 <= len(parameters) <= 100:
+        raise ValueError("Cadastre entre 1 e 100 parâmetros técnicos.")
 
     validated = []
     for index, raw in enumerate(parameters, start=1):
@@ -11438,15 +11504,23 @@ def validate_catalog_technical_repertoire(payload):
                 "valor_requerido_texto": catalog_repertoire_text(
                     raw.get("valor_requerido_texto"),
                     f"o valor exigido do parâmetro {index}",
-                    240,
+                    2000 if raw.get("pergunta_id") else 240,
                 ),
                 "valor_atendido_texto": catalog_repertoire_text(
                     raw.get("valor_atendido_texto"),
                     f"o valor atendido pela Goldflex no parâmetro {index}",
-                    240,
+                    2000 if raw.get("pergunta_id") else 240,
                 ),
             })
         validated.append(parameter)
+        if raw.get("pergunta_id"):
+            question_id = str(raw["pergunta_id"])
+            if not re.fullmatch(r"[a-f0-9]{64}", question_id):
+                raise ValueError("A identificação da pendência técnica é inválida.")
+            parameter["pergunta_id"] = question_id
+            if raw.get("resposta") not in {"atende", "nao_atende", "nao_confirmado"}:
+                raise ValueError("Informe a resposta para a pendência técnica.")
+            parameter["resposta"] = raw["resposta"]
     return {
         "produto_nome": product_name,
         "cobertura_completa": complete_coverage,
@@ -11602,8 +11676,10 @@ def run_catalog_generator_job(job_id, pncp_link, selected_item_keys=None):
                     "status": document_status,
                     "origem": compact(candidate.get("file_info", {}).get("titulo")),
                 })
-            if not candidates:
+            if not candidates and not download_errors:
                 warnings.append("Nenhum documento oficial foi disponibilizado pelo PNCP.")
+            elif not candidates:
+                warnings.append("Os anexos não puderam ser carregados. Isso não significa que o PNCP não disponibilizou documentos.")
         except Exception as exc:
             warnings.append(f"Documentos anexos não puderam ser processados: {exc}")
 
@@ -11766,8 +11842,11 @@ def export_catalog_generator_job(job_id, payload):
         raise ValueError("Envie os itens revisados para exportação.")
     prepared_items = prepare_catalog_items(items)
     template_path = None
-    if job.get("template_ref"):
-        template_path = resolve_template(job["template_ref"])
+    template_ref = job.get("template_ref") or (
+        f"managed:{job['template_id']}" if job.get("template_id") else ""
+    )
+    if template_ref:
+        template_path = resolve_template(template_ref)
         if template_path is None:
             raise ValueError(
                 "O template selecionado não está mais disponível. Selecione-o novamente."
@@ -11778,9 +11857,18 @@ def export_catalog_generator_job(job_id, payload):
         prepared_items,
         job_id,
         template_path=template_path,
+        pdf_converter=convert_docx_to_pdf,
     )
+    result = dict(job["result"])
+    result["items"] = prepared_items
+    result["validation"] = validation_summary(prepared_items)
+    result["catalog_summary"] = catalog_summary(prepared_items)
+    update_catalog_generator_job(job_id, result=result)
     return {
         "exports": exports,
+        "export_warnings": ([] if "pdf" in exports else [
+            "O PDF com o template não pôde ser convertido neste servidor. O Word e os arquivos de auditoria estão disponíveis."
+        ]),
         "items": prepared_items,
         "template_id": job.get("template_id", ""),
         "template_name": job.get("template_name", ""),
@@ -11801,7 +11889,7 @@ class App(BaseHTTPRequestHandler):
             "Content-Security-Policy",
             "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; "
             "form-action 'self'; connect-src 'self'; img-src 'self' data: blob:; "
-            "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-src 'self'",
+            "style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'unsafe-inline'; frame-src 'self'",
         )
         super().end_headers()
 
@@ -12342,37 +12430,10 @@ class App(BaseHTTPRequestHandler):
                     json_response(self, 200, create_proposal_preview(context))
                     return
 
-                out_name = (
-                    f"Proposta_Final_{context['source_name']}_{int(time.time())}_"
-                    f"{uuid.uuid4().hex[:12]}.docx"
-                )
-                out_path = OUTPUT_DIR / out_name
-                build_docx(
-                    context["items"],
-                    context["template_path"],
-                    out_path,
-                    responsible=context["responsible"],
-                    commercial_terms=context["commercial_terms"],
-                    mini_box_order=context["mini_box_order"],
-                    document_block_order=context["document_block_order"],
-                    mini_box_alignments=context["mini_box_alignments"],
-                    mini_box_contents=context["mini_box_contents"],
-                    extra_column=context["extra_column"],
-                    table_layout=context.get("table_layout"),
-                    proposal_column_widths=context["proposal_column_widths"],
-                )
-                try:
-                    record_generated_document(context["responsible_id"], out_path)
-                except Exception:
-                    out_path.unlink(missing_ok=True)
-                    raise
                 json_response(
                     self,
                     200,
-                    {
-                        "download_url": f"/download/{out_name}",
-                        "filename": out_name,
-                    },
+                    generate_proposal_download(context, payload.get("output_format", "docx")),
                 )
                 return
 

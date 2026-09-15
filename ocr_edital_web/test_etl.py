@@ -356,6 +356,39 @@ class EtlSmokeTests(unittest.TestCase):
         self.assertEqual(without_accent["total"], 1)
         self.assertEqual(with_accent["total"], 1)
 
+    def test_keyword_score_pagination_beyond_last_page_keeps_total(self):
+        self.sync()
+        for filters in ({"sort_by_score": True}, {"score_min": 0}):
+            with self.subTest(filters=filters):
+                page = self.repository.list_opportunities({
+                    "keywords": ["cadeira"], "limit": 1, "offset": 10, **filters,
+                })
+                self.assertEqual(page["items"], [])
+                self.assertEqual(page["total"], 1)
+
+    def test_search_rowids_remain_aligned_after_item_and_opportunity_updates(self):
+        self.sync()
+        self.connector.description = "Aquisicao de mobiliario revisada"
+        self.sync()
+        opportunity_id = self.repository.list_opportunities({})["items"][0]["id"]
+        self.repository.replace_opportunity_items(opportunity_id, [
+            OpportunityItem(source_item_id=str(index), item_number=str(index), title="Cadeira",
+                            description="Cadeira ergonomica atualizada")
+            for index in (1, 2)
+        ])
+        with self.repository.connect() as connection:
+            mismatch = connection.execute("""
+                SELECT count(*) FROM opportunity_search s
+                LEFT JOIN opportunities o ON o.rowid = s.rowid
+                WHERE o.id IS NULL OR o.id <> s.opportunity_id
+            """).fetchone()[0]
+        self.assertEqual(mismatch, 0)
+        page = self.repository.list_opportunities({
+            "keywords": ["ergonomica"], "uf": "SP", "modality_code": 6,
+        })
+        self.assertEqual(page["total"], 1)
+        self.assertEqual(page["items"][0]["item_count"], 2)
+
     def test_pncp_search_term_is_kept_in_the_local_search_index(self):
         self.sync()
         opportunity_id = self.repository.list_opportunities({"limit": 1})["items"][0]["id"]
@@ -1780,6 +1813,48 @@ class BatchItemEnrichmentTests(unittest.TestCase):
             )
         self.assertEqual([row["id"] for row in pending], ["pncp-later", "compras-sooner"])
         self.assertEqual([row["id"] for row in compras_only], ["compras-sooner"])
+
+    def test_missing_item_batch_can_retry_only_failures_from_one_run(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = ETLRepository(Path(temp_dir) / "etl.sqlite3")
+            repository.initialize()
+            with repository.connect() as connection, connection:
+                for opportunity_id, external_key, sequence in (
+                    ("failed", "failed-key", 1),
+                    ("unrelated", "unrelated-key", 2),
+                ):
+                    connection.execute(
+                        """
+                        INSERT INTO opportunities (
+                            id, external_key, source, source_cnpj, year, sequence,
+                            title, published_at, record_hash, created_at, updated_at
+                        ) VALUES (?, ?, 'pncp', '12345678000199', 2026, ?, ?,
+                                  '2026-08-10T09:00:00', 'hash',
+                                  '2026-08-10T09:00:00', '2026-08-10T09:00:00')
+                        """,
+                        (opportunity_id, external_key, sequence, opportunity_id),
+                    )
+            failed_run_id = repository.create_run("pncp", "item_enrichment_batch", {})
+            repository.save_failed_source_record(
+                run_id=failed_run_id,
+                source="pncp",
+                source_endpoint="item_enrichment_batch",
+                request_url="https://pncp.test/failed",
+                raw_payload={},
+                error_message="temporary failure",
+                external_key="failed-key",
+            )
+
+            pending = enrich_missing_pncp_items._load_missing(
+                repository,
+                "2026-06-01",
+                None,
+                scope="all",
+                as_of="2026-08-24",
+                retry_run_id=failed_run_id,
+            )
+
+        self.assertEqual([row["id"] for row in pending], ["failed"])
 
     def test_batch_enrichment_calls_only_item_endpoint_and_uses_atomic_persistence(self):
         persisted = []

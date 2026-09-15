@@ -55,6 +55,17 @@ createRoot(document.getElementById('root')).render(React.createElement(Harness))
     const firstColumn = dialog.locator('col').first();
     const originalWidth = await firstColumn.evaluate(el=>el.getBoundingClientRect().width);
     const handle = dialog.getByRole('button',{name:/Redimensionar colunas/}).first();
+    const heading = dialog.getByRole('textbox',{name:'Título da coluna 1',exact:true});
+    await heading.fill('Identificação completa do item');
+    const wrappedHeight = (await heading.boundingBox()).height;
+    assert(wrappedHeight > 48);
+    assert(await heading.evaluate(el=>el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1));
+    for(let step=0;step<8;step++) await handle.press('ArrowRight');
+    assert((await heading.boundingBox()).height < wrappedHeight);
+    await dialog.getByRole('button',{name:'Restaurar largura das colunas',exact:true}).click();
+    assert((await heading.boundingBox()).height >= wrappedHeight - 1);
+    await page.screenshot({path:path.join(output,'wrapped-heading.png')});
+    await heading.fill('ITEM');
     await handle.press('ArrowRight');
     assert((await firstColumn.evaluate(el=>el.getBoundingClientRect().width)) > originalWidth);
     await page.screenshot({path:path.join(output,'desktop.png')});

@@ -1,0 +1,50 @@
+[
+  {
+    "case": "month",
+    "legacy_ms": 6731.92,
+    "optimized_ms": 100.2,
+    "equal": true,
+    "total": 776,
+    "rows": 50
+  },
+  {
+    "case": "uf",
+    "legacy_ms": 397.74,
+    "optimized_ms": 97.91,
+    "equal": true,
+    "total": 126,
+    "rows": 50
+  },
+  {
+    "case": "phrase",
+    "legacy_ms": 2274.44,
+    "optimized_ms": 482.48,
+    "equal": true,
+    "total": 149,
+    "rows": 50
+  },
+  {
+    "case": "page2",
+    "legacy_ms": 392.75,
+    "optimized_ms": 144.03,
+    "equal": true,
+    "total": 776,
+    "rows": 50
+  },
+  {
+    "case": "score",
+    "legacy_ms": 716.52,
+    "optimized_ms": 188.09,
+    "equal": true,
+    "total": 776,
+    "rows": 50
+  },
+  {
+    "case": "empty_score_page",
+    "legacy_ms": 872.41,
+    "optimized_ms": 140.92,
+    "equal": true,
+    "total": 776,
+    "rows": 0
+  }
+]

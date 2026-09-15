@@ -1,0 +1,1199 @@
+{
+  "documents": 169,
+  "documented_products": 37,
+  "states": {
+    "text_extracted": 167,
+    "empty_document": 1,
+    "needs_ocr": 1
+  },
+  "searchable": 159,
+  "documents_detail": [
+    {
+      "source": "Laudos e ensaios/Laudo_CFC_Espuma.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/Laudo_Revestimento_Tecido_100_Poliester.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/Laudos_Completos_Componentes_Metalicos.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/Laudos_Completos_Espuma.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/Nr das cadeiras/005. Laudo_Poltrona_Auditorio_NR17_Goldflex  (1).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/Nr das cadeiras/027 - Laudo_Cadeira_ISO_Grecia_NR17_Goldflex.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/Nr das cadeiras/029 - Laudo_Cadeira_Chile _NR17_Goldflex .pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/Nr das cadeiras/Laudo Mobiliario - Cadeira Universitaria Fixa Estofada com Prancheta.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/Nr das cadeiras/Laudo Mobiliario - Cadeira Universitaria Fixa em Polipropileno com Prancheta.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/Nr das cadeiras/Laudo Mobiliário - Cadeira Escritorio Executiva Gerente - Rev02.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/Nr das cadeiras/Laudo Mobiliário - Cadeira Escritorio Tela Ergonômica - Rev02 (2).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/Nr das cadeiras/Laudo Técnico de Mobiliário_NR-17_Banqueta Semi Sentado (2) (1).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/Nr das cadeiras/N4 - Laudo Mobiliário - Cadeira Fixa Secretaria Executiva.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/Nr das cadeiras/relatorio-mapeamento-laudos-nr17-cadeiras-e-faixas-dimensionais.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/indice-consolidado-laudos-e-ensaios.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/relatorio-mapeamento-laudo-revestimento-tecido-100-poliester.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/relatorio-mapeamento-laudos-componentes-metalicos.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "Laudos e ensaios/relatorio-mapeamento-laudos-espuma.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "analises de editais/relatorio-viabilidade-edital-036-2026-santo-antonio-do-monte.md",
+      "kind": "requisito_edital",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira - Assistencia Juridica/ITEM 1  - CADEIRA FIXA - LOTE 2.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira - Assistencia Juridica/laudo-tecnico-assistencia-juridica.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira - Assistencia Juridica/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira - Assistencia Juridica/pedido edital.txt",
+      "kind": "requisito_edital",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira - Assistencia Juridica/relatorio-comparativo-aceitacao-assistencia-juridica.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira - Piçarras/ITEM 148 - MOCHO BIPARTIDO.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira - Piçarras/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Almirante Alexandrino/Cadeira Auditorio - ASSINADA (1).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Almirante Alexandrino/laudo-tecnico-cadeira-almirante-alexandrino.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Almirante Alexandrino/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Almirante Alexandrino/pedido edital.pdf",
+      "kind": "requisito_edital",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Almirante Alexandrino/relatorio-comparativo-aceitacao-almirante-alexandrino.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Material Belico injetada/ITEM 2 - BANCO SEMI-SENTADO (1).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Material Belico injetada/ITEM 3 - CADEIRA INJETADA EM POLIURETANO (1).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Material Belico injetada/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Material Belico injetada/laudo-tecnico-material-belico-injetada.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Material Belico injetada/pedido edital.txt",
+      "kind": "requisito_edital",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Material Belico injetada/relatorio-comparativo-aceitacao-material-belico-injetada.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Patrocinio Paulista/Item 10 - Cadeira Fixa.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Patrocinio Paulista/Item 6 -Cadeira Secrertaria Fixa.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Patrocinio Paulista/Item 8 - Cadeira Executiva Lamina.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Patrocinio Paulista/laudo-tecnico-cadeiras-patrocinio-paulista.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Patrocinio Paulista/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Patrocinio Paulista/pedido edital.txt",
+      "kind": "requisito_edital",
+      "scan_status": "empty_document",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Patrocinio Paulista/relatorio-status-edital-patrocinio-paulista.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Sj dos Pinhais/Catalogo - cadeira em tela.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Sj dos Pinhais/Edital pinhais.pdf",
+      "kind": "requisito_edital",
+      "scan_status": "needs_ocr",
+      "empty_pages": [
+        1,
+        2,
+        3
+      ],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Sj dos Pinhais/laudo-final-modelo-cadeira-tela-pinhais.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Sj dos Pinhais/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira Sj dos Pinhais/relatorio-final-aceitacao-pinhais.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira UFRGS/Catalogo Cadeira Fixa Estofada com Prancheta.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira UFRGS/Catalogo Cadeira Fixa Polipropileno com Prancheta..pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira UFRGS/laudo-final-modelos-ufrgs.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira UFRGS/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogo cadeira UFRGS/relatorio-final-comparativo-ufrgs.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogos geral/ITEM 1 - CADEIRA DIRETOR FIXA.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogos geral/ITEM 1 - POLTRONA FIXA COM BRACOS.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogos geral/ITEM 14 - MOCHO ODONTOLOGICO BIPARTIDO.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogos geral/ITEM 2 – CADEIRA FIXA PARA ATENDIMENTO ADMINISTRATIVO.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogos geral/ITEM 24 - POLTRONA AUDITORIO.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogos geral/ITEM 6 - CADEIRA GIRATORIA CAPACIDADE 140KG.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogos geral/ITEM 6 - Cadeira Giratoria Ergonomica Para Obeso (1).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogos geral/ITEM 8  Poltrona de Espera sem Bracos.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogos geral/ITEM 9  Poltrona para Auditorio com Prancheta Lateral Rebativel.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogos geral/catalogo-goldflex-poltrona-auditorio-modular-individual-v4.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogos geral/laudo-tecnico-cadeira-chile-giratoria-plus-size-maior.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogos geral/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/Catalogos geral/relatorio-completo-avaliacao-cadeira-chile-plus-size-maior.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeira - Paranagua/ITEM 21 - POLTRONA PADRÃO PARA O AUDITÓRIO.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeira - Paranagua/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Artilharia/118 - Poltrona Auditorio.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Artilharia/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Bombeiros/ITEM 4 - CADEIRAS FIXAS PARA SALAS DE AULA.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Bombeiros/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Del Rei/ITEM 12 -CADEIRA GIRATORIA MEDIA ESTOFADA COM BRAÇO.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Del Rei/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Estancia velha/ITEM 191 - MOCHO ERGONOMICO BIPARTIDO.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Estancia velha/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Lagoa Santa 12/Item 95 - Poltrona Espaldar Medio Giratorio Com Braços.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Lagoa Santa 12/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Lagoa Santa 33/ITEM 2 - CADEIRA HOTELARIA FIXA EMPILHAVEL ASSENTO ENCOSTO ESTOFADO (1).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Lagoa Santa 33/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Material Belico Tela/900092025 srp 168007   (1).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Material Belico Tela/laudo-completo-modelo-tela.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Material Belico Tela/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Material Belico Tela/pedido no edital.txt",
+      "kind": "requisito_edital",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Material Belico Tela/registro-atualizacao-confirmacoes-fabricante.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Material Belico Tela/relatorio-completo-comparativo-material-belico.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Piumhi/ITEM 15 - Cadeira Giratória Modelo Diretor Cromada (1).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Piumhi/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Prefeitura BH/Catalogo prefeitura de BH.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Prefeitura BH/laudo-completo-prefeitura-bh.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Prefeitura BH/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Prefeitura BH/pedido no edital.txt",
+      "kind": "requisito_edital",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Prefeitura BH/registro-confirmacoes-fabricante-bh.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Prefeitura BH/relatorio-completo-comparativo-prefeitura-bh.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Pro-reitoria/ITEM 26 - CADEIRA TELA DIRETOR BRACO (2).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Pro-reitoria/ITEM 35 - CADEIRA UNIVERSITARIA ESCAMOTEAVEL (2).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Pro-reitoria/ITEM 37 - CADEIRA UNIVERSITARIA (3).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Pro-reitoria/ITEM 97 - POLTRONA AUDITORIO COM PRANCHETA (2).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Pro-reitoria/ITEM 98 - POLTRONA AUDITORIO COM PRANCHETA OBESO.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Pro-reitoria/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Sao Roque 9/ITEM 21 - POLTRONA CONCHA ANATÔMICA (1).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Sao Roque 9/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Secretaria Seguranca Publica/Item 21 - Poltrona Auditoria Estrutura (1).pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Secretaria Seguranca Publica/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Tijucas/ITEM 136 - MOCHO ERGONOMICO BIPARTIDO.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - Tijucas/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - unitau/item04_165b57e2-b75c-4293-9048-1d9fbb3d7d7e.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras - unitau/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras CRECI/Catalogo Cadeira Ergonômica Com Braços.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras CRECI/laudo-final-completo-creci.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras CRECI/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras CRECI/pedido no edital.txt",
+      "kind": "requisito_edital",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras CRECI/registro-confirmacoes-melhorias-creci.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras CRECI/relatorio-final-comparativo-creci.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras Londrina auditorio/ITEM 12 e 13 - POLTRONA DE AUDITORIO DE 01 LUGAR.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras Londrina auditorio/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras Prefeitura BH universitaria/Catalogo cadeira universitaria 2 BH.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras Prefeitura BH universitaria/laudo-final-completo-bh-universitaria.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras Prefeitura BH universitaria/laudo-tecnico-consolidado.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras Prefeitura BH universitaria/pedido edital.txt",
+      "kind": "requisito_edital",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/catalogo cadeiras Prefeitura BH universitaria/relatorio-final-completo-aceitacao-bh-universitaria.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 1/catalogo-cadeira-ergonomica-com-bracos-creci.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 1/catalogo-cadeira-ergonomica-tela-bracos-pinhais.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 1/catalogo-cadeira-fixa-universitaria-executiva-braco-escamoteavel.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 1/catalogo-cadeira-universitaria-estofada-prancheta.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 1/catalogo-cadeira-universitaria-pp-prancheta.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 1/catalogo-cadeira-universitaria-pp-prancheta.pdf",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 1/catalogo-modelo-fixa-estofada-bh.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 1/catalogo-tela-ergonomica-relax-braco.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 1/modelos-de-cadeiras-analisados-v3.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 1/modelos-de-cadeiras-analisados-v7-completo.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeira-almirante-alexandrino-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeira-assistencia-juridica-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeira-material-belico-injetada-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeira-paranagua-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeira-patrocinio-paulista-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeira-pi-arras-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeira-sj-dos-pinhais-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeira-ufrgs-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-artilharia-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-bombeiros-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-creci-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-del-rei-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-estancia-velha-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-lagoa-santa-12-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-lagoa-santa-33-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-londrina-auditorio-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-material-belico-tela-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-piumhi-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-prefeitura-bh-universitaria-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-prefeitura-bh-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-pro-reitoria-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-sao-roque-9-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-secretaria-seguranca-publica-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-tijucas-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 2/catalogos versao 2/catalogo-goldflex-catalogo-cadeiras-unitau-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 3/catalogo-goldflex-catalogo-cadeiras-prefeitura-bh-v3.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 3/catalogo-goldflex-mocho-ergonomico-bipartido-estancia-velha-v3.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "catalogos de pedidos/dados extraidos/dados extraidos versao 3/laudo-tecnico-catalogo-prefeitura-bh-v3.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "validação de dados/analise-pedido-cadeira-giratoria-sem-braco-v2.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "validação de dados/avaliacao-poltronas-auditorio-padrao-e-plus-size.md",
+      "kind": "analise_historica",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "validação de dados/catalogo-final-cadeira-8-executiva-lamina-ergonomica-v4.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "validação de dados/catalogo-goldflex-cadeira-executiva-lamina-ergonomica-v4.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "validação de dados/catalogo-goldflex-cadeira-interlocutor-espaldar-medio-base-s-v4.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "validação de dados/validacao-modelos-cadeiras-por-categoria-v2.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "validação de dados/validacao-modelos-cadeiras-por-categoria-v3.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "validação de dados/validacao-modelos-cadeiras-sem-repeticao-v1-atualizada.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    },
+    {
+      "source": "validação de dados/validacao-modelos-cadeiras-sem-repeticao-v1.docx",
+      "kind": "documento_original",
+      "scan_status": "text_extracted",
+      "empty_pages": [],
+      "scan_error": null
+    }
+  ]
+}

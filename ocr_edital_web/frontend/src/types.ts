@@ -174,11 +174,38 @@ export interface GeneratedTableBlock {
 }
 
 export interface DocxStructureResponse {
+  page_parts_preview?: TemplatePagePartsPreview;
+  table_metrics?: ProposalTableMetrics;
   document_signature: string;
   nodes: DocumentNode[];
   mini_box_count: number;
   generated_table_block: GeneratedTableBlock;
   warnings: string[];
+}
+
+export interface TemplatePagePartsPreview {
+  docx_base64: string;
+  content_width_pt: number;
+  default_cell_padding_pt: { top: number; right: number; bottom: number; left: number };
+  page_width_pt: number;
+  page_height_pt: number;
+  left_margin_pt: number;
+  right_margin_pt: number;
+  header_distance_pt: number;
+  footer_distance_pt: number;
+  first_header_blank: boolean;
+  first_footer_blank: boolean;
+  even_header_blank: boolean;
+  even_footer_blank: boolean;
+}
+
+export interface ProposalTableMetrics {
+  available_width_twips: number;
+  body_font_pt: number;
+  header_font_pt: number;
+  horizontal_padding_twips: number;
+  narrow_padding_twips: number;
+  vertical_padding_twips: number;
 }
 
 export interface SearchResponse {
@@ -464,6 +491,8 @@ export interface CatalogEvidenceObservation {
 
 export interface CatalogTechnicalParameter {
   id: string;
+  pergunta_id?: string;
+  resposta?: "atende" | "nao_atende" | "nao_confirmado";
   componente: string;
   atributo: string;
   comparacao: "intervalo" | "igual" | "contem";
@@ -523,6 +552,7 @@ export interface CatalogPolicy {
 }
 
 export interface CatalogRepertoire {
+  cataloged_models?: number;
   structured_models: number;
   source_documents: number;
   source: string;
@@ -554,6 +584,18 @@ export interface GeneratedCatalogItem {
   caracteristicas_catalogo: string[];
   analise_aderencia: CatalogFitAnalysis;
   observacao_repertorio: CatalogEvidenceObservation;
+  perguntas_pendentes?: Array<{ id: string; titulo: string; requisito: string; contexto: string }>;
+  referencias_complementares?: Array<{
+    pagina?: number | null;
+    secao?: string | null;
+    id: string;
+    fonte: string;
+    sha256: string;
+    trecho: string;
+    tipo: string;
+    estado: "referencia_para_revisao";
+    nota: string;
+  }>;
   repertorio_usuario?: CatalogUserRepertoire;
   status_catalogo: "bloqueado_sem_modelo" | "bloqueado_por_divergencia" | "rascunho_para_revisao";
   analise_desatualizada: boolean;
@@ -586,6 +628,7 @@ export interface CatalogGeneratorJob {
 }
 
 export interface CatalogGeneratorExportResponse {
+  export_warnings?: string[];
   exports: Record<string, CatalogExportFile>;
   items: GeneratedCatalogItem[];
   validation: { incompletos: number; conflitos: number; avisos: string[] };

@@ -1,0 +1,112 @@
+{
+  "checks": {
+    "failure_summary": [
+      {
+        "error": "Item description missing; nothing persisted",
+        "amount": 3
+      },
+      {
+        "error": "Remote end closed connection without response",
+        "amount": 1
+      },
+      {
+        "error": "GET https://pncp.gov.br/api/pncp/v1/orgaos/98661366000106/compras/2026/426/itens?pagina=1&tamanhoPagina=500 failed: HTTP Error 404: Not Found",
+        "amount": 1
+      },
+      {
+        "error": "GET https://pncp.gov.br/api/pncp/v1/orgaos/98661366000106/compras/2026/417/itens?pagina=1&tamanhoPagina=500 failed: HTTP Error 404: Not Found",
+        "amount": 1
+      },
+      {
+        "error": "GET https://pncp.gov.br/api/pncp/v1/orgaos/97761407000173/compras/2026/264/itens?pagina=1&tamanhoPagina=500 failed: HTTP Error 404: Not Found",
+        "amount": 1
+      },
+      {
+        "error": "GET https://pncp.gov.br/api/pncp/v1/orgaos/97761407000173/compras/2026/256/itens?pagina=1&tamanhoPagina=500 failed: HTTP Error 502: Bad Gateway",
+        "amount": 1
+      },
+      {
+        "error": "GET https://pncp.gov.br/api/pncp/v1/orgaos/95991097000158/compras/2026/130/itens?pagina=1&tamanhoPagina=500 failed: HTTP Error 404: Not Found",
+        "amount": 1
+      },
+      {
+        "error": "GET https://pncp.gov.br/api/pncp/v1/orgaos/95991097000158/compras/2026/119/itens?pagina=1&tamanhoPagina=500 failed: HTTP Error 404: Not Found",
+        "amount": 1
+      }
+    ]
+  },
+  "api": [
+    {
+      "name": "search",
+      "ms": 509.84,
+      "total": 20481,
+      "status": 200,
+      "cache": "miss",
+      "server_timing": "opportunity-search;dur=469.0"
+    },
+    {
+      "name": "search",
+      "ms": 31.64,
+      "total": 20481,
+      "status": 200,
+      "cache": "miss",
+      "server_timing": "opportunity-search;dur=27.8"
+    },
+    {
+      "name": "search",
+      "ms": 47.47,
+      "total": 20483,
+      "status": 200,
+      "cache": "miss",
+      "server_timing": "opportunity-search;dur=43.3"
+    },
+    {
+      "name": "keyword",
+      "ms": 3814.89,
+      "total": 771,
+      "status": 200,
+      "cache": "miss",
+      "server_timing": "opportunity-search;dur=3810.7"
+    },
+    {
+      "name": "keyword",
+      "ms": 1540.47,
+      "total": 771,
+      "status": 200,
+      "cache": "miss",
+      "server_timing": "opportunity-search;dur=1536.9"
+    },
+    {
+      "name": "keyword",
+      "ms": 455.19,
+      "total": 771,
+      "status": 200,
+      "cache": "miss",
+      "server_timing": "opportunity-search;dur=451.6"
+    },
+    {
+      "name": "uf",
+      "ms": 44.33,
+      "total": 4084,
+      "status": 200,
+      "cache": "miss",
+      "server_timing": "opportunity-search;dur=40.9"
+    },
+    {
+      "name": "uf",
+      "ms": 53.95,
+      "total": 4084,
+      "status": 200,
+      "cache": "miss",
+      "server_timing": "opportunity-search;dur=49.7"
+    },
+    {
+      "name": "uf",
+      "ms": 60.13,
+      "total": 4084,
+      "status": 200,
+      "cache": "miss",
+      "server_timing": "opportunity-search;dur=55.8"
+    }
+  ]
+}

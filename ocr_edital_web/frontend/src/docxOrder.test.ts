@@ -10,7 +10,7 @@ import {
   moveMiniBox,
   reorderDocumentBlocks,
   reorderMiniBoxes,
-  withoutTemplateHeader,
+  splitReplicaPageParts,
 } from "./docxOrder";
 import type { DocumentNode } from "./types";
 
@@ -138,7 +138,7 @@ describe("DOCX mini-box ordering", () => {
       .toEqual(["box-a", "box-b", "box-c", table.id]);
   });
 
-  it("omits template header content only from the live preview", () => {
+  it("separates original headers and footers from the body without dropping content", () => {
     const table = {
       id: "generated-table",
       type: "GENERATED_TABLE" as const,
@@ -149,6 +149,7 @@ describe("DOCX mini-box ordering", () => {
       { id: "body-box", type: "MINI_BOX", content: "Item", order: 0, text_align: "left", source_part: "word/document.xml" },
       { id: "header", type: "FIXED_TEXT", content: "Cabeçalho", source_part: "word/header1.xml" },
       { id: "header-box", type: "MINI_BOX", content: "Marca", order: 1, text_align: "center", source_part: "word/header1.xml" },
+      { id: "footer", type: "FIXED_TEXT", content: "Rodape original", source_part: "word/footer1.xml" },
     ];
 
     const replica = createReplicaDocumentBlocks(
@@ -157,11 +158,18 @@ describe("DOCX mini-box ordering", () => {
       table,
     );
 
-    expect(withoutTemplateHeader(replica).map((block) => block.id)).toEqual([
+    const parts = splitReplicaPageParts(replica);
+    expect(parts.body.map((block) => block.id)).toEqual([
       "body",
       "body-box",
       table.id,
     ]);
-    expect(replica.map((block) => block.id)).toContain("header-box");
+    expect(parts.header.map((block) => block.id)).toEqual(["header", "header-box"]);
+    expect(parts.footer.map((block) => block.id)).toEqual(["footer"]);
+    expect(parts.body.length + parts.header.length + parts.footer.length).toBe(replica.length);
+  });
+
+  it("keeps templates without page furniture unchanged", () => {
+    expect(splitReplicaPageParts(nodes)).toEqual({ body: nodes, header: [], footer: [] });
   });
 });

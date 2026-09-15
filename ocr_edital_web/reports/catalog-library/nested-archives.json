@@ -1,0 +1,38 @@
+[
+  {
+    "source": "relatoriocatalogogoldflex/Modelos de catalogos/catalogos de pedidos/Catalogo cadeira Sj dos Pinhais/Versao 1.rar",
+    "checked_documents": 2,
+    "not_indexed": []
+  },
+  {
+    "source": "relatoriocatalogogoldflex/Modelos de catalogos/catalogos de pedidos/Catalogo cadeira UFRGS/Versao 2.rar",
+    "checked_documents": 2,
+    "not_indexed": []
+  },
+  {
+    "source": "relatoriocatalogogoldflex/Modelos de catalogos/catalogos de pedidos/catalogo cadeiras - Prefeitura BH/Versao 3.rar",
+    "checked_documents": 1,
+    "not_indexed": []
+  },
+  {
+    "source": "relatoriocatalogogoldflex/Modelos de catalogos/catalogos de pedidos/catalogo cadeiras CRECI/Versao 4.rar",
+    "checked_documents": 1,
+    "not_indexed": []
+  },
+  {
+    "source": "relatoriocatalogogoldflex/Modelos de catalogos.zip",
+    "checked_documents": 106,
+    "not_indexed": []
+  },
+  {
+    "source": "relatoriocatalogogoldflex/pacotes/agente-catalogos-goldflex-interno-v1-2026-08-20.zip",
+    "checked_documents": 90,
+    "not_indexed": [
+      {
+        "name": "Modelos de catalogos/validaç╞o de dados/validacao-modelos-cadeiras-por-categoria-v3.docx",
+        "sha256": "fea70a0fbd7c2ee7c0ff8d70e28712bc67081e7f41ea7e0e64dbcaa7e075093a",
+        "retained_separately": true
+      }
+    ]
+  }
+]

@@ -1,0 +1,34 @@
+{
+  "template": "C:\\Users\\ducor\\OneDrive\\Desktop\\template-catalogo.docx",
+  "sha256": "411a15b6d62e8784a21e0624a55807cdfe7228c03c2cb422d68c6c948ca3f3aa",
+  "seconds": 8.32,
+  "preserved_parts": [
+    "word/header1.xml",
+    "word/media/image1.png",
+    "word/numbering.xml",
+    "word/styles.xml"
+  ],
+  "exports": {
+    "docx": {
+      "filename": "catalogo_goldflex_template_20260914_080154_fa569fee.docx",
+      "download_url": "/download/catalogo_goldflex_template_20260914_080154_fa569fee.docx"
+    },
+    "pdf": {
+      "filename": "catalogo_goldflex_template_20260914_080154_fa569fee.pdf",
+      "download_url": "/download/catalogo_goldflex_template_20260914_080154_fa569fee.pdf"
+    },
+    "xlsx": {
+      "filename": "catalogo_goldflex_template_20260914_080154_fa569fee_auditoria.xlsx",
+      "download_url": "/download/catalogo_goldflex_template_20260914_080154_fa569fee_auditoria.xlsx"
+    },
+    "csv": {
+      "filename": "catalogo_goldflex_template_20260914_080154_fa569fee_auditoria.csv",
+      "download_url": "/download/catalogo_goldflex_template_20260914_080154_fa569fee_auditoria.csv"
+    },
+    "json": {
+      "filename": "catalogo_goldflex_template_20260914_080154_fa569fee_auditoria.json",
+      "download_url": "/download/catalogo_goldflex_template_20260914_080154_fa569fee_auditoria.json"
+    }
+  },
+  "pages": 2
+}

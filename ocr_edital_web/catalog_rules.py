@@ -2,10 +2,12 @@ import copy
 import hashlib
 import re
 import unicodedata
+from catalog_library import find_catalog_references, library_summary
+from catalog_technical_layout import technical_pending_questions
 
 
 CATALOG_POLICY = {
-    "version": "goldflex-v4.0",
+    "version": "goldflex-v4.1",
     "architecture": "catalogo_generico_com_auditoria_separada",
     "page_size": "A4",
     "orientation": "retrato",
@@ -16,7 +18,9 @@ CATALOG_POLICY = {
         "CNPJ 33.661.439/0001-14"
     ),
     "rules": [
-        "Gerar um catálogo genérico por modelo, sem adaptar o catálogo ao edital.",
+        "Identificar o destinatário, pregão e processo, sem transformar requisitos do edital em características do produto.",
+        "Organizar resumo, assento e encosto, estrutura metálica/base, mecanismos/acessórios e observações.",
+        "Usar cláusulas padrão somente com confirmação integral; caso contrário, sinalizar a pendência.",
         "Publicar somente características sustentadas pelo repertório técnico.",
         "Manter a comparação com a oportunidade em relatório de auditoria separado.",
         "Não inferir medidas, materiais, cores, normas, capacidade ou configuração.",
@@ -322,9 +326,12 @@ def catalog_policy_summary():
 
 
 def repertoire_summary():
+    library = library_summary()
     return {
         "structured_models": len(MODEL_PROFILES),
-        "source_documents": 47,
+        "source_documents": library["documents"],
+        "cataloged_models": library.get("documented_models", 0),
+        "reference_library": library,
         "source": REPERTOIRE_SOURCE,
         "scope_note": (
             "Seis perfis possuem consolidação estruturada. Os demais documentos do agente "
@@ -643,6 +650,50 @@ def _display_number(value):
     return f"{number:g}".replace(".", ",")
 
 
+def catalog_pending_questions(item):
+    analysis = item.get("analise_aderencia") or {}
+    questions = []
+    if not item.get("modelo_referencia"):
+        seen = set()
+        for field in ("descricao", "especificacao_tecnica", "criterios_aceitacao", "observacoes"):
+            for fragment in re.split(r"[;\n]+|(?<=[.!?])\s+(?=[A-ZÀ-Ú])", str(item.get(field) or "")):
+                fragment = fragment.strip()
+                normalized = normalize_text(fragment)
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                # Long specifications remain visible in full, divided at word boundaries.
+                chunks = []
+                for word in fragment.split():
+                    if not chunks or len(chunks[-1]) + len(word) + 1 > 1900:
+                        chunks.append(word)
+                    else:
+                        chunks[-1] += " " + word
+                questions.extend({"titulo": "Especificação do produto", "requisito": chunk,
+                                  "contexto": "Informe a especificação da configuração ofertada e sua fonte."} for chunk in chunks)
+    for entry in analysis.get("criterios", []):
+        if entry["estado"] != "evidenciado_na_referencia":
+            questions.append({
+                "criterio_id": entry["id"], "titulo": entry["criterio"],
+                "requisito": entry["requisito"],
+                "contexto": entry["evidencia_repertorio"],
+            })
+    pending_notes = analysis.get("pendencias", []) if item.get("modelo_referencia") else []
+    for pending in unique_strings(pending_notes):
+        questions.append({"titulo": "Confirmação técnica", "requisito": pending, "contexto": ""})
+    reference_id = (item.get("modelo_referencia") or {}).get("id")
+    profile = next((profile for profile in MODEL_PROFILES if profile["id"] == reference_id), None)
+    # Build a stable baseline, ignoring a previous user overlay during reanalysis.
+    questions.extend(technical_pending_questions(public_profile(profile) if profile else {}))
+    questions = list({question.get("criterio_id", "") + ":" + question["requisito"]: question
+                      for question in questions}.values())
+    for question in questions:
+        question["id"] = hashlib.sha256(
+            (question.get("criterio_id", "") + ":" + question["requisito"]).encode("utf-8")
+        ).hexdigest()
+    return questions
+
+
 def apply_user_catalog_repertoire(item, repertoire):
     analyzed = dict(item)
     parameters = [dict(parameter) for parameter in repertoire.get("parametros", [])]
@@ -651,6 +702,10 @@ def apply_user_catalog_repertoire(item, repertoire):
     evidence = []
     missing = []
     conflicts = []
+    supplemental = any(parameter.get("pergunta_id") for parameter in parameters)
+    baseline = analyze_catalog_item(item) if supplemental else None
+    questions = catalog_pending_questions(baseline) if baseline else []
+    answered = set()
 
     for index, parameter in enumerate(parameters):
         component = str(parameter.get("componente") or "Componente").strip()
@@ -684,6 +739,17 @@ def apply_user_catalog_repertoire(item, repertoire):
             characteristic = f"{component} — {attribute}: {supported_value}."
 
         state = "evidenciado_na_referencia" if meets else "divergente"
+        question_id = parameter.get("pergunta_id")
+        if question_id:
+            question = next((entry for entry in questions if entry["id"] == question_id), None)
+            meets = parameter.get("resposta") == "atende" and bool(source) and bool(supported)
+            state = "evidenciado_na_referencia" if meets else "divergente" if parameter.get("resposta") == "nao_atende" else "nao_evidenciado"
+            # A response must still address the exact current requirement, not an edited substitute.
+            if not question or comparison == "intervalo" or normalize_text(requirement) != normalize_text(question["requisito"]):
+                meets = False
+                state = "divergente"
+            if meets:
+                answered.add(question_id)
         entry = criterion(
             f"usuario_{index + 1}",
             f"{component} — {attribute}",
@@ -694,7 +760,8 @@ def apply_user_catalog_repertoire(item, repertoire):
             declaracao_atendimento_automatica=False,
         )
         criteria.append(entry)
-        characteristics.append(characteristic)
+        if meets:
+            characteristics.append(characteristic)
         if meets:
             evidence.append(
                 f"{component} — {attribute}: requisito {requirement}; {supported}."
@@ -705,14 +772,26 @@ def apply_user_catalog_repertoire(item, repertoire):
                 f"do parâmetro cadastrado ({supported})."
             )
             missing.append(detail)
-            conflicts.append(entry)
+            if state == "divergente":
+                conflicts.append(entry)
 
+    if baseline:
+        remaining = [question for question in questions if question["id"] not in answered]
+        missing.extend(question["requisito"] for question in remaining)
+        resolved_criteria = {question.get("criterio_id") for question in questions if question["id"] in answered}
+        retained = [entry for entry in baseline["analise_aderencia"]["criterios"] if entry["id"] not in resolved_criteria]
+        criteria = retained + criteria
+        conflicts.extend(entry for entry in retained if entry["estado"] == "divergente")
+        characteristics = unique_strings(baseline["caracteristicas_catalogo"] + characteristics)
+        evidence = unique_strings(baseline["observacao_repertorio"]["evidencias"] + evidence)
+        analyzed["perguntas_pendentes"] = remaining
+        analyzed["referencias_complementares"] = baseline["referencias_complementares"]
     complete_coverage = bool(repertoire.get("cobertura_completa"))
     if not complete_coverage:
         missing.append(
             "O cadastro foi marcado como parcial; informe os demais componentes exigidos no item."
         )
-    complete = complete_coverage and bool(criteria) and not conflicts
+    complete = complete_coverage and bool(criteria) and not conflicts and not missing
     observation = {
         "status": "evidencia_completa" if complete else "evidencia_parcial",
         "titulo": (
@@ -764,6 +843,7 @@ def apply_user_catalog_repertoire(item, repertoire):
 def analyze_catalog_item(item):
     analyzed = dict(item)
     text = normalize_text(item_requirement_text(analyzed))
+    analyzed["referencias_complementares"] = find_catalog_references(item_requirement_text(analyzed))
     profile, reference = match_model(analyzed)
     analyzed["modelo_referencia"] = reference
     analyzed["analise_desatualizada"] = False
@@ -781,6 +861,7 @@ def analyze_catalog_item(item):
         }
         analyzed["status_catalogo"] = "bloqueado_sem_modelo"
         analyzed["observacao_repertorio"] = evidence_observation(None, [])
+        analyzed["perguntas_pendentes"] = catalog_pending_questions(analyzed)
         return analyzed
 
     criteria = []
@@ -822,6 +903,7 @@ def analyze_catalog_item(item):
     }
     analyzed["status_catalogo"] = status
     analyzed["observacao_repertorio"] = evidence_observation(profile, criteria)
+    analyzed["perguntas_pendentes"] = catalog_pending_questions(analyzed)
     return analyzed
 
 
@@ -847,6 +929,14 @@ def build_catalog_entries(items):
                 "capacidade_kg": None,
                 "normas": [],
                 "pendencias": list(observation.get("faltantes") or []),
+                "respostas_layout": {
+                    parameter.get("valor_requerido_texto"): parameter.get("valor_atendido_texto")
+                    for index, parameter in enumerate(user_repertoire.get("parametros", []))
+                    if parameter.get("pergunta_id") and parameter.get("resposta") == "atende"
+                    and any(criterion.get("id") == f"usuario_{index + 1}"
+                            and criterion.get("estado") == "evidenciado_na_referencia"
+                            for criterion in (item.get("analise_aderencia") or {}).get("criterios", []))
+                },
             })
             continue
         reference = item.get("modelo_referencia") or {}

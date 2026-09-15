@@ -1,0 +1,61 @@
+{
+  "create_ms": 38.258899992797524,
+  "job_id": "96b90b6c151f4bc981c927526fdf8109",
+  "analysis_ms": 943.8440999947488,
+  "stages": [
+    {
+      "stage": "validacao",
+      "seconds": 0.038
+    }
+  ],
+  "status": "ready",
+  "warnings": [
+    "3 anexo(s) de menor prioridade não foram baixados."
+  ],
+  "export_ms": 8122.636899992358,
+  "export_warnings": [],
+  "downloads": {
+    "docx": {
+      "bytes": 69252,
+      "ms": 25.7887999759987
+    },
+    "pdf": {
+      "bytes": 205702,
+      "ms": 96.41120000742376
+    },
+    "xlsx": {
+      "bytes": 5850,
+      "ms": 26.67340001789853
+    },
+    "csv": {
+      "bytes": 1572,
+      "ms": 42.82740002963692
+    },
+    "json": {
+      "bytes": 21809,
+      "ms": 39.68909999821335
+    }
+  },
+  "exports": {
+    "docx": {
+      "filename": "catalogo_goldflex_96b90b6c_20260914_133644_66ef1af9.docx",
+      "download_url": "/download/catalogo_goldflex_96b90b6c_20260914_133644_66ef1af9.docx"
+    },
+    "pdf": {
+      "filename": "catalogo_goldflex_96b90b6c_20260914_133644_66ef1af9.pdf",
+      "download_url": "/download/catalogo_goldflex_96b90b6c_20260914_133644_66ef1af9.pdf"
+    },
+    "xlsx": {
+      "filename": "catalogo_goldflex_96b90b6c_20260914_133644_66ef1af9_auditoria.xlsx",
+      "download_url": "/download/catalogo_goldflex_96b90b6c_20260914_133644_66ef1af9_auditoria.xlsx"
+    },
+    "csv": {
+      "filename": "catalogo_goldflex_96b90b6c_20260914_133644_66ef1af9_auditoria.csv",
+      "download_url": "/download/catalogo_goldflex_96b90b6c_20260914_133644_66ef1af9_auditoria.csv"
+    },
+    "json": {
+      "filename": "catalogo_goldflex_96b90b6c_20260914_133644_66ef1af9_auditoria.json",
+      "download_url": "/download/catalogo_goldflex_96b90b6c_20260914_133644_66ef1af9_auditoria.json"
+    }
+  }
+}

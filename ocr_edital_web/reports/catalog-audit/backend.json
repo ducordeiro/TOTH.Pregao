@@ -1,0 +1,35 @@
+{
+  "reference_samples": 50,
+  "measurements": {
+    "http_app": {
+      "samples": 10,
+      "mean_ms": 17.72410999983549,
+      "max_ms": 64.95760002871975
+    },
+    "http_saved_catalog": {
+      "samples": 10,
+      "mean_ms": 16.523559985216707,
+      "max_ms": 34.444899996742606
+    }
+  },
+  "references_ms": {
+    "total": 391.8013999937102,
+    "cold": 331.0304000042379,
+    "p95": 1.590800005942583
+  },
+  "live_stages_ms": {
+    "metadata": 25.882699992507696,
+    "items": 18.972599995322526,
+    "documents": 410.26610002154484,
+    "analysis": 79.32100002653897,
+    "saved_repertoire": 21594.146899995394
+  },
+  "live": {
+    "total_ms": 22131.116300006397,
+    "status": "ready",
+    "warnings": [
+      "Documentos anexos não puderam ser processados: Não foi possível consultar os documentos oficiais no PNCP. Detalhe: <urlopen error [WinError 10013] Foi feita uma tentativa de acesso a um soquete de uma maneira que é proibida pelas permissões de acesso>"
+    ],
+    "error": null
+  }
+}

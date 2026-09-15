@@ -1,0 +1,1902 @@
+{
+  "started_at": "2026-09-12T17:41:06.178099-03:00",
+  "database": "C:\\Users\\ducor\\OneDrive\\Documentos\\Pregão\\ocr_edital_web\\data\\pncp.sqlite3",
+  "database_bytes": 9982316544,
+  "checks": {
+    "journal": {
+      "rows": [
+        {
+          "journal_mode": "wal"
+        }
+      ],
+      "seconds": 0.007
+    },
+    "counts": {
+      "rows": [
+        {
+          "opportunities": 354707,
+          "items": 2522776,
+          "search_entries": 354707
+        }
+      ],
+      "seconds": 3.823
+    },
+    "coverage": {
+      "rows": [
+        {
+          "source": "comprasgov",
+          "opportunities": 101593,
+          "with_items": 94750,
+          "latest_publication": "2026-07-23T19:54:03"
+        },
+        {
+          "source": "pncp",
+          "opportunities": 253114,
+          "with_items": 124530,
+          "latest_publication": "2026-09-11T17:25:24"
+        }
+      ],
+      "seconds": 8.115
+    },
+    "month_coverage": {
+      "rows": [
+        {
+          "opportunities": 19670,
+          "with_items": 19583,
+          "classified_material": 15021,
+          "material_without_items": 54
+        }
+      ],
+      "seconds": 0.546
+    },
+    "indexes": {
+      "rows": [
+        {
+          "name": "sqlite_autoindex_opportunities_1",
+          "tbl_name": "opportunities",
+          "sql": null
+        },
+        {
+          "name": "sqlite_autoindex_opportunities_2",
+          "tbl_name": "opportunities",
+          "sql": null
+        },
+        {
+          "name": "sqlite_autoindex_opportunity_items_1",
+          "tbl_name": "opportunity_items",
+          "sql": null
+        },
+        {
+          "name": "sqlite_autoindex_opportunity_items_2",
+          "tbl_name": "opportunity_items",
+          "sql": null
+        },
+        {
+          "name": "idx_opportunities_radar_status",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_radar_status\n  ON opportunities(radar_status)"
+        },
+        {
+          "name": "idx_opportunities_dates",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_dates\n  ON opportunities(published_at, proposal_end_at)"
+        },
+        {
+          "name": "idx_opportunities_region",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_region\n  ON opportunities(uf, city)"
+        },
+        {
+          "name": "idx_opportunities_modality",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_modality\n  ON opportunities(modality_code, modality)"
+        },
+        {
+          "name": "idx_opportunities_buyer",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_buyer\n  ON opportunities(buyer_cnpj, buyer_name)"
+        },
+        {
+          "name": "idx_opportunities_converted_business",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_converted_business\n  ON opportunities(converted_business_id)"
+        },
+        {
+          "name": "idx_opportunity_items_opportunity",
+          "tbl_name": "opportunity_items",
+          "sql": "CREATE INDEX idx_opportunity_items_opportunity\n  ON opportunity_items(opportunity_id, lot_number, item_number)"
+        },
+        {
+          "name": "idx_opportunities_pncp_identity",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_pncp_identity\n  ON opportunities(source_cnpj, year, sequence)"
+        },
+        {
+          "name": "idx_opportunities_proposal_end",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_proposal_end\n  ON opportunities(proposal_end_at, radar_status, modality_code, uf)"
+        },
+        {
+          "name": "idx_opportunities_missing_end_published",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_missing_end_published\n  ON opportunities(published_at, radar_status, modality_code, uf)\n  WHERE proposal_end_at IS NULL OR proposal_end_at = ''"
+        },
+        {
+          "name": "idx_opportunities_published_at",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_published_at\n  ON opportunities(published_at, radar_status, modality_code, uf)"
+        },
+        {
+          "name": "idx_opportunities_proposal_start",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_proposal_start\n  ON opportunities(proposal_start_at, radar_status, modality_code, uf)"
+        },
+        {
+          "name": "idx_opportunities_material_published",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_material_published\n                    ON opportunities(\n                        object_matches_material, published_at, radar_status, modality_code, uf\n                    )\n                    "
+        },
+        {
+          "name": "idx_opportunities_material_proposal_start",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_material_proposal_start\n                    ON opportunities(\n                        object_matches_material, proposal_start_at, radar_status, modality_code, uf\n                    )\n                    "
+        },
+        {
+          "name": "idx_opportunities_material_proposal_end",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_material_proposal_end\n                    ON opportunities(\n                        object_matches_material, proposal_end_at, radar_status, modality_code, uf\n                    )\n                    "
+        },
+        {
+          "name": "idx_opportunities_material_missing_end_published",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_material_missing_end_published\n                ON opportunities(\n                    object_matches_material, published_at, radar_status, modality_code, uf\n                )\n                WHERE proposal_end_at IS NULL OR proposal_end_at = ''\n                "
+        },
+        {
+          "name": "idx_opportunities_service_published",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_service_published\n                    ON opportunities(\n                        object_matches_service, published_at, radar_status, modality_code, uf\n                    )\n                    "
+        },
+        {
+          "name": "idx_opportunities_service_proposal_start",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_service_proposal_start\n                    ON opportunities(\n                        object_matches_service, proposal_start_at, radar_status, modality_code, uf\n                    )\n                    "
+        },
+        {
+          "name": "idx_opportunities_service_proposal_end",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_service_proposal_end\n                    ON opportunities(\n                        object_matches_service, proposal_end_at, radar_status, modality_code, uf\n                    )\n                    "
+        },
+        {
+          "name": "idx_opportunities_service_missing_end_published",
+          "tbl_name": "opportunities",
+          "sql": "CREATE INDEX idx_opportunities_service_missing_end_published\n                ON opportunities(\n                    object_matches_service, published_at, radar_status, modality_code, uf\n                )\n                WHERE proposal_end_at IS NULL OR proposal_end_at = ''\n                "
+        }
+      ],
+      "seconds": 0.018
+    },
+    "recent_runs": {
+      "rows": [
+        {
+          "id": "2a5fa082a0f2442cb58f6a7ca8cc31c1",
+          "source": "comprasgov",
+          "run_type": "search_reconciliation",
+          "status": "partial",
+          "started_at": "2026-09-12T17:36:33-03:00",
+          "updated_at": "2026-09-12T17:36:33-03:00",
+          "total_fetched": 0,
+          "total_updated": 0,
+          "total_failed": 1,
+          "error_message": "GET https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarContratacoes_PNCP_14133?dataPublicacaoPncpInicial=2026-08-14&dataPublicacaoPncpFinal=2026-09-12&codigoModalidade=5&pagina=1&tamanhoPagina=500 failed: <urlopen error [WinError 10013] Foi feita uma tentativa de acesso a um soquete de uma maneira que é proibida pelas permissões de acesso>"
+        },
+        {
+          "id": "9b1da84ddffc444491b384c265543a54",
+          "source": "comprasgov",
+          "run_type": "search_reconciliation",
+          "status": "partial",
+          "started_at": "2026-09-12T10:38:39-03:00",
+          "updated_at": "2026-09-12T10:38:39-03:00",
+          "total_fetched": 0,
+          "total_updated": 0,
+          "total_failed": 1,
+          "error_message": "GET https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarContratacoes_PNCP_14133?dataPublicacaoPncpInicial=2026-08-14&dataPublicacaoPncpFinal=2026-09-12&codigoModalidade=5&pagina=1&tamanhoPagina=500 failed: <urlopen error [WinError 10013] Foi feita uma tentativa de acesso a um soquete de uma maneira que é proibida pelas permissões de acesso>"
+        },
+        {
+          "id": "aceb165fe66a47f896bf9f1683fa4449",
+          "source": "comprasgov",
+          "run_type": "search_reconciliation",
+          "status": "partial",
+          "started_at": "2026-09-11T18:06:08-03:00",
+          "updated_at": "2026-09-11T18:06:08-03:00",
+          "total_fetched": 0,
+          "total_updated": 0,
+          "total_failed": 1,
+          "error_message": "GET https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarContratacoes_PNCP_14133?dataPublicacaoPncpInicial=2026-08-13&dataPublicacaoPncpFinal=2026-09-11&codigoModalidade=5&pagina=1&tamanhoPagina=500 failed: <urlopen error [WinError 10013] Foi feita uma tentativa de acesso a um soquete de uma maneira que é proibida pelas permissões de acesso>"
+        },
+        {
+          "id": "9453818d273c475782305721d0c67148",
+          "source": "comprasgov",
+          "run_type": "search_reconciliation",
+          "status": "partial",
+          "started_at": "2026-09-11T18:03:48-03:00",
+          "updated_at": "2026-09-11T18:03:48-03:00",
+          "total_fetched": 0,
+          "total_updated": 0,
+          "total_failed": 1,
+          "error_message": "GET https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarContratacoes_PNCP_14133?dataPublicacaoPncpInicial=2026-08-13&dataPublicacaoPncpFinal=2026-09-11&codigoModalidade=5&pagina=1&tamanhoPagina=500 failed: <urlopen error [WinError 10013] Foi feita uma tentativa de acesso a um soquete de uma maneira que é proibida pelas permissões de acesso>"
+        },
+        {
+          "id": "cbc2d920caf4406c824e090962a12ed1",
+          "source": "comprasgov",
+          "run_type": "search_reconciliation",
+          "status": "partial",
+          "started_at": "2026-09-11T18:03:34-03:00",
+          "updated_at": "2026-09-11T18:03:34-03:00",
+          "total_fetched": 0,
+          "total_updated": 0,
+          "total_failed": 1,
+          "error_message": "GET https://dadosabertos.compras.gov.br/modulo-contratacoes/1_consultarContratacoes_PNCP_14133?dataPublicacaoPncpInicial=2026-08-13&dataPublicacaoPncpFinal=2026-09-11&codigoModalidade=5&pagina=1&tamanhoPagina=500 failed: <urlopen error [WinError 10013] Foi feita uma tentativa de acesso a um soquete de uma maneira que é proibida pelas permissões de acesso>"
+        },
+        {
+          "id": "a0c65638827a4bf087e136b8c00c9d94",
+          "source": "pncp",
+          "run_type": "search_reconciliation",
+          "status": "success",
+          "started_at": "2026-09-11T17:36:48-03:00",
+          "updated_at": "2026-09-11T17:37:29-03:00",
+          "total_fetched": 953,
+          "total_updated": 3,
+          "total_failed": 0,
+          "error_message": null
+        },
+        {
+          "id": "2f59282aa51e4e03950a48d92d84e693",
+          "source": "comprasgov",
+          "run_type": "search_reconciliation",
+          "status": "partial",
+          "started_at": "2026-09-11T17:36:19-03:00",
+          "updated_at": "2026-09-11T17:36:40-03:00",
+          "total_fetched": 500,
+          "total_updated": 3,
+          "total_failed": 1,
+          "error_message": "Janela de consulta Compras.gov esgotada"
+        },
+        {
+          "id": "587a0157d5344890a7c75b4537dd78fa",
+          "source": "pncp",
+          "run_type": "search_reconciliation",
+          "status": "success",
+          "started_at": "2026-09-11T17:06:06-03:00",
+          "updated_at": "2026-09-11T17:06:48-03:00",
+          "total_fetched": 950,
+          "total_updated": 6,
+          "total_failed": 0,
+          "error_message": null
+        }
+      ],
+      "seconds": 0.005
+    },
+    "quick_check": {
+      "error": "interrupted",
+      "timeout_seconds": 120,
+      "seconds": 120.606
+    },
+    "sample": {
+      "rows": [
+        {
+          "search_rowid": 354705,
+          "id": "b9426bb6597645868d2cfb83951ca903",
+          "external_key": "46377800000127-1-003870/2026"
+        },
+        {
+          "search_rowid": 354706,
+          "id": "5b8e224f63d24c8fb40d2810d7f93976",
+          "external_key": "45787678000102-1-000316/2026"
+        },
+        {
+          "search_rowid": 354707,
+          "id": "38427fe351d14f29b9de6fdd16975441",
+          "external_key": "46585964000140-1-000192/2026"
+        },
+        {
+          "search_rowid": 354680,
+          "id": "e8244e8c8a18428686a90f49cea1233f",
+          "external_key": "08945727000153-1-000033/2026"
+        },
+        {
+          "search_rowid": 354681,
+          "id": "23e7c46c0592409faa2f1496ecac0a49",
+          "external_key": "07438468000101-1-000032/2026"
+        },
+        {
+          "search_rowid": 354682,
+          "id": "5c01faa453ce427ab6ff2591dfa7cb8d",
+          "external_key": "46585964000140-1-000190/2026"
+        },
+        {
+          "search_rowid": 354683,
+          "id": "ea7eae4101cf4008af2014f270de15d0",
+          "external_key": "43465459000173-1-001193/2026"
+        },
+        {
+          "search_rowid": 354684,
+          "id": "8b551b5231214844abcbd5e1aa6d8ad4",
+          "external_key": "18008193000192-1-000137/2026"
+        },
+        {
+          "search_rowid": 354685,
+          "id": "f8cea558ff4146c59e1d34361faef260",
+          "external_key": "43465459000173-1-001188/2026"
+        },
+        {
+          "search_rowid": 354686,
+          "id": "e43b3bfcf755446cb8f12ff5ac9d654f",
+          "external_key": "00394502000144-1-011583/2026"
+        },
+        {
+          "search_rowid": 354687,
+          "id": "508a9982265c45bb8b40784cc8e19f3d",
+          "external_key": "46137444000174-1-000822/2026"
+        },
+        {
+          "search_rowid": 354688,
+          "id": "cf2f98ad470a48a0a4a524c2a00c3e82",
+          "external_key": "11055682000156-1-000477/2026"
+        },
+        {
+          "search_rowid": 354689,
+          "id": "598a6be896984d4bb48a590b1ea18f9d",
+          "external_key": "08348971000139-1-000106/2026"
+        },
+        {
+          "search_rowid": 354690,
+          "id": "aacfd43043704988b8a5b200d277a2e5",
+          "external_key": "01614019000190-1-000019/2026"
+        },
+        {
+          "search_rowid": 354691,
+          "id": "5615074f89af4e099672b3c502fa6c92",
+          "external_key": "78198975000163-1-000184/2026"
+        },
+        {
+          "search_rowid": 354692,
+          "id": "d0b86c4d21a949e6be36a20cd51a2b3a",
+          "external_key": "45351749000111-1-000097/2026"
+        },
+        {
+          "search_rowid": 354693,
+          "id": "cf0c2d122ce64ba2a92030cbb56bf1cc",
+          "external_key": "18715599000105-1-000688/2026"
+        },
+        {
+          "search_rowid": 354694,
+          "id": "6bd4b6c2d51d413fb893d5a5af2b94c3",
+          "external_key": "95590832000111-1-000114/2026"
+        },
+        {
+          "search_rowid": 354695,
+          "id": "f6bb3140a4f64afb9f91ed36cbf9b5c7",
+          "external_key": "05183827000100-1-000058/2026"
+        },
+        {
+          "search_rowid": 354696,
+          "id": "a966ea6d89b14291a14d23f1281b1839",
+          "external_key": "07438468000101-1-000031/2026"
+        },
+        {
+          "search_rowid": 354698,
+          "id": "c39f5e2cf0a84b60953a768be64cacce",
+          "external_key": "75101873000190-1-000400/2026"
+        },
+        {
+          "search_rowid": 354697,
+          "id": "3c730670ad4d4583bb96ecb45e7f83d2",
+          "external_key": "87843819000107-1-001393/2026"
+        },
+        {
+          "search_rowid": 354699,
+          "id": "9b4362cbcd364302a0a2d3b055580f3f",
+          "external_key": "45132495000140-1-000655/2026"
+        },
+        {
+          "search_rowid": 354700,
+          "id": "d2ed249b951a413691fbe11b422f98e7",
+          "external_key": "44847663000111-1-000798/2026"
+        },
+        {
+          "search_rowid": 354701,
+          "id": "346bf6f5b4b34152aa6cf83122b905e8",
+          "external_key": "37464831000124-1-000014/2026"
+        },
+        {
+          "search_rowid": 354702,
+          "id": "46e1104e25db4c12859057e7559a08e0",
+          "external_key": "01409580000138-1-001424/2026"
+        },
+        {
+          "search_rowid": 354703,
+          "id": "1d2909a912e64670ac616ca70e138550",
+          "external_key": "16695025000197-1-000854/2026"
+        },
+        {
+          "search_rowid": 354704,
+          "id": "84ff73b635024a7e84970a384728ed0d",
+          "external_key": "02451938000153-1-000299/2026"
+        },
+        {
+          "search_rowid": 354388,
+          "id": "dca625ed07db44b3abc30f458fa4ec15",
+          "external_key": "01613309000110-1-000031/2026"
+        },
+        {
+          "search_rowid": 354389,
+          "id": "94f9a87dc1354664a2b28c6c494cbae3",
+          "external_key": "17444779000137-1-000179/2026"
+        },
+        {
+          "search_rowid": 354390,
+          "id": "82f78df75b2c42818cf364a49f3f5759",
+          "external_key": "11022597001597-1-000289/2026"
+        },
+        {
+          "search_rowid": 354391,
+          "id": "60aa31f3988d4ea882f6ea485149e083",
+          "external_key": "19843929000100-1-000657/2026"
+        },
+        {
+          "search_rowid": 354392,
+          "id": "b41e6b5e82a94cc18ed7820397094d9c",
+          "external_key": "13864377000130-1-001421/2026"
+        },
+        {
+          "search_rowid": 354393,
+          "id": "c31de9b953154385a43e68d4f04c7ae6",
+          "external_key": "46377800000127-1-003863/2026"
+        },
+        {
+          "search_rowid": 354394,
+          "id": "a67cbd3031514abd85bf00e4528133ca",
+          "external_key": "18715599000105-1-000687/2026"
+        },
+        {
+          "search_rowid": 354396,
+          "id": "3cea27a84e314c35ab3d5ea8ad0f24c7",
+          "external_key": "00394502000144-1-011561/2026"
+        },
+        {
+          "search_rowid": 354397,
+          "id": "2c5ddf15cc2e41c884a8970a9fcab915",
+          "external_key": "00394502000144-1-011560/2026"
+        },
+        {
+          "search_rowid": 354398,
+          "id": "ecddc415a03d477aaf00ff11ce8043b2",
+          "external_key": "07954480000179-1-023641/2026"
+        },
+        {
+          "search_rowid": 354400,
+          "id": "ace7163f208c463cbd41b32cdee7ec56",
+          "external_key": "11924138000101-1-000623/2026"
+        },
+        {
+          "search_rowid": 354401,
+          "id": "ae3e6cce7d9541d58f291ab6fd90fe93",
+          "external_key": "00394700000108-1-000372/2026"
+        },
+        {
+          "search_rowid": 354402,
+          "id": "8ad8d43a409c4a84acbf95d59dd04f83",
+          "external_key": "75731018000162-1-000085/2026"
+        },
+        {
+          "search_rowid": 354403,
+          "id": "fca443feddf040998f3f71d9370b040d",
+          "external_key": "07598691000116-1-000036/2026"
+        },
+        {
+          "search_rowid": 354404,
+          "id": "f1c31845f9ad4dd79b09bb9eed9526f1",
+          "external_key": "46374500000194-1-007524/2026"
+        },
+        {
+          "search_rowid": 354405,
+          "id": "2f9c4e80907a45cd94f2ce24cc511edd",
+          "external_key": "33787094000140-1-000402/2026"
+        },
+        {
+          "search_rowid": 354406,
+          "id": "a3662a4033944bcfacd5c3f580430aed",
+          "external_key": "30104361000149-1-000014/2026"
+        },
+        {
+          "search_rowid": 354407,
+          "id": "a1fdb72bfd7e43fe87464770f3f1155a",
+          "external_key": "49238316000105-1-000134/2026"
+        },
+        {
+          "search_rowid": 354408,
+          "id": "81bc2e2bbb5448418c685e635b5895d0",
+          "external_key": "02070589000120-1-000089/2026"
+        },
+        {
+          "search_rowid": 354409,
+          "id": "6e95579dd2b2450c90d69daa0643e49b",
+          "external_key": "96291141000180-1-005839/2026"
+        },
+        {
+          "search_rowid": 354410,
+          "id": "9009a6ffd81c45618dcbe01a1e804795",
+          "external_key": "87958658000199-1-000990/2026"
+        },
+        {
+          "search_rowid": 354411,
+          "id": "167e5a9228a6464a85cd1683a7999419",
+          "external_key": "45781176000166-1-000789/2026"
+        }
+      ],
+      "seconds": 0.036
+    },
+    "quick_check_opportunities": {
+      "rows": [
+        {
+          "quick_check": "ok"
+        }
+      ],
+      "seconds": 22.84
+    },
+    "quick_check_items": {
+      "error": "interrupted",
+      "timeout_seconds": 60
+    }
+  },
+  "api": [
+    {
+      "name": "app",
+      "path": "/",
+      "status": 200,
+      "bytes": 459,
+      "ms": 49.03
+    },
+    {
+      "name": "app",
+      "path": "/",
+      "status": 200,
+      "bytes": 459,
+      "ms": 12.26
+    },
+    {
+      "name": "app",
+      "path": "/",
+      "status": 200,
+      "bytes": 459,
+      "ms": 11.46
+    },
+    {
+      "name": "templates",
+      "path": "/api/templates",
+      "status": 200,
+      "bytes": 448,
+      "keys": [
+        "templates"
+      ],
+      "total": null,
+      "ms": 31.71
+    },
+    {
+      "name": "templates",
+      "path": "/api/templates",
+      "status": 200,
+      "bytes": 448,
+      "keys": [
+        "templates"
+      ],
+      "total": null,
+      "ms": 14.71
+    },
+    {
+      "name": "templates",
+      "path": "/api/templates",
+      "status": 200,
+      "bytes": 448,
+      "keys": [
+        "templates"
+      ],
+      "total": null,
+      "ms": 13.38
+    },
+    {
+      "name": "responsibles",
+      "path": "/api/responsaveis",
+      "status": 200,
+      "bytes": 660,
+      "keys": [
+        "responsaveis"
+      ],
+      "total": null,
+      "ms": 63.02
+    },
+    {
+      "name": "responsibles",
+      "path": "/api/responsaveis",
+      "status": 200,
+      "bytes": 660,
+      "keys": [
+        "responsaveis"
+      ],
+      "total": null,
+      "ms": 10.38
+    },
+    {
+      "name": "responsibles",
+      "path": "/api/responsaveis",
+      "status": 200,
+      "bytes": 660,
+      "keys": [
+        "responsaveis"
+      ],
+      "total": null,
+      "ms": 23.06
+    },
+    {
+      "name": "businesses",
+      "path": "/api/negocios",
+      "status": 200,
+      "bytes": 5530,
+      "keys": [
+        "negocios",
+        "etapas"
+      ],
+      "total": null,
+      "ms": 44.66
+    },
+    {
+      "name": "businesses",
+      "path": "/api/negocios",
+      "status": 200,
+      "bytes": 5530,
+      "keys": [
+        "negocios",
+        "etapas"
+      ],
+      "total": null,
+      "ms": 9.95
+    },
+    {
+      "name": "businesses",
+      "path": "/api/negocios",
+      "status": 200,
+      "bytes": 5530,
+      "keys": [
+        "negocios",
+        "etapas"
+      ],
+      "total": null,
+      "ms": 18.68
+    },
+    {
+      "name": "kanban",
+      "path": "/api/kanban",
+      "status": 200,
+      "bytes": 3510,
+      "keys": [
+        "columns",
+        "proposals",
+        "sync_status"
+      ],
+      "total": null,
+      "ms": 62.35
+    },
+    {
+      "name": "kanban",
+      "path": "/api/kanban",
+      "status": 200,
+      "bytes": 3510,
+      "keys": [
+        "columns",
+        "proposals",
+        "sync_status"
+      ],
+      "total": null,
+      "ms": 19.96
+    },
+    {
+      "name": "kanban",
+      "path": "/api/kanban",
+      "status": 200,
+      "bytes": 3510,
+      "keys": [
+        "columns",
+        "proposals",
+        "sync_status"
+      ],
+      "total": null,
+      "ms": 21.92
+    },
+    {
+      "name": "search",
+      "path": "/internal/opportunities?campoData=publicacao&dataInicial=20260901&dataFinal=20260912&pagina=1&tamanhoPagina=50",
+      "status": 200,
+      "bytes": 46924,
+      "keys": [
+        "results",
+        "total",
+        "source_total",
+        "pagina",
+        "tamanhoPagina",
+        "total_pages",
+        "has_previous",
+        "has_next",
+        "complete",
+        "searching",
+        "source",
+        "campoData"
+      ],
+      "total": 19670,
+      "ms": 164.08
+    },
+    {
+      "name": "search",
+      "path": "/internal/opportunities?campoData=publicacao&dataInicial=20260901&dataFinal=20260912&pagina=1&tamanhoPagina=50",
+      "status": 200,
+      "bytes": 46924,
+      "keys": [
+        "results",
+        "total",
+        "source_total",
+        "pagina",
+        "tamanhoPagina",
+        "total_pages",
+        "has_previous",
+        "has_next",
+        "complete",
+        "searching",
+        "source",
+        "campoData"
+      ],
+      "total": 19670,
+      "ms": 46.22
+    },
+    {
+      "name": "search",
+      "path": "/internal/opportunities?campoData=publicacao&dataInicial=20260901&dataFinal=20260912&pagina=1&tamanhoPagina=50",
+      "status": 200,
+      "bytes": 46924,
+      "keys": [
+        "results",
+        "total",
+        "source_total",
+        "pagina",
+        "tamanhoPagina",
+        "total_pages",
+        "has_previous",
+        "has_next",
+        "complete",
+        "searching",
+        "source",
+        "campoData"
+      ],
+      "total": 19670,
+      "ms": 31.76
+    },
+    {
+      "name": "keyword",
+      "path": "/internal/opportunities?campoData=publicacao&dataInicial=20260901&dataFinal=20260912&pagina=1&tamanhoPagina=50&palavraChave=cadeira",
+      "status": 200,
+      "bytes": 49033,
+      "keys": [
+        "results",
+        "total",
+        "source_total",
+        "pagina",
+        "tamanhoPagina",
+        "total_pages",
+        "has_previous",
+        "has_next",
+        "complete",
+        "searching",
+        "source",
+        "campoData"
+      ],
+      "total": 770,
+      "ms": 7297.13
+    },
+    {
+      "name": "keyword",
+      "path": "/internal/opportunities?campoData=publicacao&dataInicial=20260901&dataFinal=20260912&pagina=1&tamanhoPagina=50&palavraChave=cadeira",
+      "status": 200,
+      "bytes": 49033,
+      "keys": [
+        "results",
+        "total",
+        "source_total",
+        "pagina",
+        "tamanhoPagina",
+        "total_pages",
+        "has_previous",
+        "has_next",
+        "complete",
+        "searching",
+        "source",
+        "campoData"
+      ],
+      "total": 770,
+      "ms": 301.9
+    },
+    {
+      "name": "keyword",
+      "path": "/internal/opportunities?campoData=publicacao&dataInicial=20260901&dataFinal=20260912&pagina=1&tamanhoPagina=50&palavraChave=cadeira",
+      "status": 200,
+      "bytes": 49033,
+      "keys": [
+        "results",
+        "total",
+        "source_total",
+        "pagina",
+        "tamanhoPagina",
+        "total_pages",
+        "has_previous",
+        "has_next",
+        "complete",
+        "searching",
+        "source",
+        "campoData"
+      ],
+      "total": 770,
+      "ms": 5.13
+    },
+    {
+      "name": "uf",
+      "path": "/internal/opportunities?campoData=publicacao&dataInicial=20260901&dataFinal=20260912&pagina=1&tamanhoPagina=50&uf=SP",
+      "status": 200,
+      "bytes": 45887,
+      "keys": [
+        "results",
+        "total",
+        "source_total",
+        "pagina",
+        "tamanhoPagina",
+        "total_pages",
+        "has_previous",
+        "has_next",
+        "complete",
+        "searching",
+        "source",
+        "campoData"
+      ],
+      "total": 3881,
+      "ms": 79.7
+    },
+    {
+      "name": "uf",
+      "path": "/internal/opportunities?campoData=publicacao&dataInicial=20260901&dataFinal=20260912&pagina=1&tamanhoPagina=50&uf=SP",
+      "status": 200,
+      "bytes": 45887,
+      "keys": [
+        "results",
+        "total",
+        "source_total",
+        "pagina",
+        "tamanhoPagina",
+        "total_pages",
+        "has_previous",
+        "has_next",
+        "complete",
+        "searching",
+        "source",
+        "campoData"
+      ],
+      "total": 3881,
+      "ms": 1071.73
+    },
+    {
+      "name": "uf",
+      "path": "/internal/opportunities?campoData=publicacao&dataInicial=20260901&dataFinal=20260912&pagina=1&tamanhoPagina=50&uf=SP",
+      "status": 200,
+      "bytes": 45887,
+      "keys": [
+        "results",
+        "total",
+        "source_total",
+        "pagina",
+        "tamanhoPagina",
+        "total_pages",
+        "has_previous",
+        "has_next",
+        "complete",
+        "searching",
+        "source",
+        "campoData"
+      ],
+      "total": 3881,
+      "ms": 62.83
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/b9426bb6597645868d2cfb83951ca903?rapido=1",
+      "status": 200,
+      "bytes": 5205,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 40.9
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/5b8e224f63d24c8fb40d2810d7f93976?rapido=1",
+      "status": 200,
+      "bytes": 3892,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 9.84
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/38427fe351d14f29b9de6fdd16975441?rapido=1",
+      "status": 200,
+      "bytes": 15595,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 12.38
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/e8244e8c8a18428686a90f49cea1233f?rapido=1",
+      "status": 200,
+      "bytes": 8089,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 18.48
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/23e7c46c0592409faa2f1496ecac0a49?rapido=1",
+      "status": 200,
+      "bytes": 56278,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 25.77
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/5c01faa453ce427ab6ff2591dfa7cb8d?rapido=1",
+      "status": 200,
+      "bytes": 15602,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 18.22
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/ea7eae4101cf4008af2014f270de15d0?rapido=1",
+      "status": 200,
+      "bytes": 4022,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 12.79
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/8b551b5231214844abcbd5e1aa6d8ad4?rapido=1",
+      "status": 200,
+      "bytes": 4724,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 15.52
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/f8cea558ff4146c59e1d34361faef260?rapido=1",
+      "status": 200,
+      "bytes": 3894,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 15.43
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/e43b3bfcf755446cb8f12ff5ac9d654f?rapido=1",
+      "status": 200,
+      "bytes": 5240,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 15.57
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/508a9982265c45bb8b40784cc8e19f3d?rapido=1",
+      "status": 200,
+      "bytes": 13344,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 26.33
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/cf2f98ad470a48a0a4a524c2a00c3e82?rapido=1",
+      "status": 200,
+      "bytes": 11310,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 16.64
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/598a6be896984d4bb48a590b1ea18f9d?rapido=1",
+      "status": 200,
+      "bytes": 1610,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 9.52
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/aacfd43043704988b8a5b200d277a2e5?rapido=1",
+      "status": 200,
+      "bytes": 11010,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 18.34
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/5615074f89af4e099672b3c502fa6c92?rapido=1",
+      "status": 200,
+      "bytes": 3196,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 20.21
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/d0b86c4d21a949e6be36a20cd51a2b3a?rapido=1",
+      "status": 200,
+      "bytes": 19554,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 17.0
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/cf0c2d122ce64ba2a92030cbb56bf1cc?rapido=1",
+      "status": 200,
+      "bytes": 5441,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 11.13
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/6bd4b6c2d51d413fb893d5a5af2b94c3?rapido=1",
+      "status": 200,
+      "bytes": 28004,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 19.75
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/f6bb3140a4f64afb9f91ed36cbf9b5c7?rapido=1",
+      "status": 200,
+      "bytes": 26690,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 14.17
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/a966ea6d89b14291a14d23f1281b1839?rapido=1",
+      "status": 200,
+      "bytes": 3776,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 35.89
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/c39f5e2cf0a84b60953a768be64cacce?rapido=1",
+      "status": 200,
+      "bytes": 1579,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 42.26
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/3c730670ad4d4583bb96ecb45e7f83d2?rapido=1",
+      "status": 200,
+      "bytes": 14196,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 17.75
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/9b4362cbcd364302a0a2d3b055580f3f?rapido=1",
+      "status": 200,
+      "bytes": 6519,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 12.42
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/d2ed249b951a413691fbe11b422f98e7?rapido=1",
+      "status": 200,
+      "bytes": 1496,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 13.48
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/346bf6f5b4b34152aa6cf83122b905e8?rapido=1",
+      "status": 200,
+      "bytes": 4406,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 14.38
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/46e1104e25db4c12859057e7559a08e0?rapido=1",
+      "status": 200,
+      "bytes": 16585,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 17.26
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/1d2909a912e64670ac616ca70e138550?rapido=1",
+      "status": 200,
+      "bytes": 2857,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 11.1
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/84ff73b635024a7e84970a384728ed0d?rapido=1",
+      "status": 200,
+      "bytes": 5981,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 12.98
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/dca625ed07db44b3abc30f458fa4ec15?rapido=1",
+      "status": 200,
+      "bytes": 2300,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 14.8
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/94f9a87dc1354664a2b28c6c494cbae3?rapido=1",
+      "status": 200,
+      "bytes": 1630,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 13.93
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/82f78df75b2c42818cf364a49f3f5759?rapido=1",
+      "status": 200,
+      "bytes": 2023,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 12.87
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/60aa31f3988d4ea882f6ea485149e083?rapido=1",
+      "status": 200,
+      "bytes": 19413,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 15.95
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/b41e6b5e82a94cc18ed7820397094d9c?rapido=1",
+      "status": 200,
+      "bytes": 2059,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 11.27
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/c31de9b953154385a43e68d4f04c7ae6?rapido=1",
+      "status": 200,
+      "bytes": 1637,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 14.11
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/a67cbd3031514abd85bf00e4528133ca?rapido=1",
+      "status": 200,
+      "bytes": 1354,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 13.28
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/3cea27a84e314c35ab3d5ea8ad0f24c7?rapido=1",
+      "status": 200,
+      "bytes": 3864,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 14.55
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/2c5ddf15cc2e41c884a8970a9fcab915?rapido=1",
+      "status": 200,
+      "bytes": 1854,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 12.67
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/ecddc415a03d477aaf00ff11ce8043b2?rapido=1",
+      "status": 200,
+      "bytes": 3886,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 14.44
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/ace7163f208c463cbd41b32cdee7ec56?rapido=1",
+      "status": 200,
+      "bytes": 1452,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 15.93
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/ae3e6cce7d9541d58f291ab6fd90fe93?rapido=1",
+      "status": 200,
+      "bytes": 3754,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 52.43
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/8ad8d43a409c4a84acbf95d59dd04f83?rapido=1",
+      "status": 200,
+      "bytes": 4110,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 22.78
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/fca443feddf040998f3f71d9370b040d?rapido=1",
+      "status": 200,
+      "bytes": 2583,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 7.2
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/f1c31845f9ad4dd79b09bb9eed9526f1?rapido=1",
+      "status": 200,
+      "bytes": 1698,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 14.89
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/2f9c4e80907a45cd94f2ce24cc511edd?rapido=1",
+      "status": 200,
+      "bytes": 4944,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 86.67
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/a3662a4033944bcfacd5c3f580430aed?rapido=1",
+      "status": 200,
+      "bytes": 1734,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 31.7
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/a1fdb72bfd7e43fe87464770f3f1155a?rapido=1",
+      "status": 200,
+      "bytes": 1366,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 14.08
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/81bc2e2bbb5448418c685e635b5895d0?rapido=1",
+      "status": 200,
+      "bytes": 7391,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 14.39
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/6e95579dd2b2450c90d69daa0643e49b?rapido=1",
+      "status": 200,
+      "bytes": 80582,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 71.21
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/9009a6ffd81c45618dcbe01a1e804795?rapido=1",
+      "status": 200,
+      "bytes": 1399,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 39.23
+    },
+    {
+      "name": "detail_local",
+      "path": "/internal/opportunities/167e5a9228a6464a85cd1683a7999419?rapido=1",
+      "status": 200,
+      "bytes": 13102,
+      "keys": [
+        "oportunidade",
+        "arquivos",
+        "itens",
+        "fontes",
+        "aviso_enriquecimento",
+        "enriquecimento_pendente",
+        "enriquecimento_disponivel"
+      ],
+      "total": null,
+      "ms": 31.46
+    }
+  ],
+  "extraction_before": {
+    "run_id": "5490b548d56a4825b97fe784036015ed",
+    "pid": 25000,
+    "status": "running",
+    "scope": "all",
+    "source": "all",
+    "provider_priority": [
+      "comprasgov",
+      "pncp"
+    ],
+    "queue_order": "publication_desc",
+    "date_from": "2026-06-01",
+    "date_to": "2026-09-11",
+    "as_of": "2026-09-11",
+    "total": 179421,
+    "completed": 50435,
+    "remaining": 128986,
+    "progress_percent": 28.11,
+    "opportunities_per_minute": 28.3,
+    "estimated_seconds_remaining": 273487,
+    "counters": {
+      "fetched": 50435,
+      "inserted": 0,
+      "updated": 49540,
+      "skipped": 0,
+      "failed": 895,
+      "items": 589204,
+      "documents": 0
+    },
+    "started_at": "2026-09-11T11:58:49.255144-03:00",
+    "updated_at": "2026-09-12T17:41:05.767886-03:00",
+    "error": ""
+  },
+  "sample_validation": {
+    "opportunities": 50,
+    "items": 822,
+    "errors": [],
+    "fts_match_checked": 50,
+    "fts_match_failures": []
+  },
+  "timings": {
+    "app": {
+      "requests": 3,
+      "median_ms": 12.26,
+      "p95_ms": 49.03,
+      "max_ms": 49.03,
+      "errors": 0
+    },
+    "templates": {
+      "requests": 3,
+      "median_ms": 14.71,
+      "p95_ms": 31.71,
+      "max_ms": 31.71,
+      "errors": 0
+    },
+    "responsibles": {
+      "requests": 3,
+      "median_ms": 23.06,
+      "p95_ms": 63.02,
+      "max_ms": 63.02,
+      "errors": 0
+    },
+    "businesses": {
+      "requests": 3,
+      "median_ms": 18.68,
+      "p95_ms": 44.66,
+      "max_ms": 44.66,
+      "errors": 0
+    },
+    "kanban": {
+      "requests": 3,
+      "median_ms": 21.92,
+      "p95_ms": 62.35,
+      "max_ms": 62.35,
+      "errors": 0
+    },
+    "search": {
+      "requests": 3,
+      "median_ms": 46.22,
+      "p95_ms": 164.08,
+      "max_ms": 164.08,
+      "errors": 0
+    },
+    "keyword": {
+      "requests": 3,
+      "median_ms": 301.9,
+      "p95_ms": 7297.13,
+      "max_ms": 7297.13,
+      "errors": 0
+    },
+    "uf": {
+      "requests": 3,
+      "median_ms": 79.7,
+      "p95_ms": 1071.73,
+      "max_ms": 1071.73,
+      "errors": 0
+    },
+    "detail_local": {
+      "requests": 50,
+      "median_ms": 15.475,
+      "p95_ms": 52.43,
+      "max_ms": 86.67,
+      "errors": 0
+    }
+  },
+  "extraction_after": {
+    "run_id": "5490b548d56a4825b97fe784036015ed",
+    "pid": 25000,
+    "status": "running",
+    "scope": "all",
+    "source": "all",
+    "provider_priority": [
+      "comprasgov",
+      "pncp"
+    ],
+    "queue_order": "publication_desc",
+    "date_from": "2026-06-01",
+    "date_to": "2026-09-11",
+    "as_of": "2026-09-11",
+    "total": 179421,
+    "completed": 50703,
+    "remaining": 128718,
+    "progress_percent": 28.26,
+    "opportunities_per_minute": 28.41,
+    "estimated_seconds_remaining": 271842,
+    "counters": {
+      "fetched": 50703,
+      "inserted": 0,
+      "updated": 49808,
+      "skipped": 0,
+      "failed": 895,
+      "items": 592031,
+      "documents": 0
+    },
+    "started_at": "2026-09-11T11:58:49.255144-03:00",
+    "updated_at": "2026-09-12T17:43:29.922395-03:00",
+    "error": ""
+  },
+  "finished_at": "2026-09-12T17:43:30.166593-03:00"
+}

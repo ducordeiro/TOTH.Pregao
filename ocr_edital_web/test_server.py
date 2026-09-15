@@ -841,7 +841,7 @@ class ItemExtractionRegressionTests(unittest.TestCase):
                 if run.text
             )
             self.assertTrue(header_run.bold)
-            self.assertEqual(header_run.font.size.pt, 10)
+            self.assertEqual(header_run.font.size.pt, server.PROPOSAL_TABLE_STYLE["header_font_pt"])
             self.assertEqual(body_run.font.size.pt, 9)
 
     def test_proposal_total_and_commercial_terms_are_added_after_table(self):
@@ -1492,8 +1492,11 @@ class CatalogGenerationTests(unittest.TestCase):
             self.assertEqual(generated.sections[0].header.paragraphs[0].text, "IDENTIDADE DO MODELO")
             self.assertAlmostEqual(generated.sections[0].left_margin.mm, 27, places=1)
             self.assertNotIn("{CATALOGO}", paragraphs)
-            self.assertLess(paragraphs.index("Capa personalizada"), paragraphs.index("Catálogo técnico Goldflex"))
-            self.assertLess(paragraphs.index("Catálogo técnico Goldflex"), paragraphs.index("Conteúdo posterior do modelo"))
+            inserted = next(value for value in paragraphs if value.startswith("Modelo não identificado."))
+            self.assertLess(paragraphs.index("Capa personalizada"), paragraphs.index(inserted))
+            self.assertLess(paragraphs.index(inserted), paragraphs.index("Conteúdo posterior do modelo"))
+            self.assertNotIn("Catálogo técnico Goldflex", paragraphs)
+            self.assertNotIn("pdf", exports)
 
     def test_block7_revalidates_edited_required_fields(self):
         items = catalog_generator.normalize_items(

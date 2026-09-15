@@ -1,0 +1,356 @@
+{
+  "schema_version": "2.0",
+  "fabricante": {
+    "razao_social": "GOLDFLEX INDUSTRIA E COMERCIO DE MOVEIS E EQUIPAMENTOS LTDA",
+    "cnpj": "33.661.439/0001-14"
+  },
+  "regras_catalogo": {
+    "version": "goldflex-v4.0",
+    "architecture": "catalogo_generico_com_auditoria_separada",
+    "page_size": "A4",
+    "orientation": "retrato",
+    "brand_color": "#FFC000",
+    "section_title": "Características",
+    "manufacturer": "GOLDFLEX INDUSTRIA E COMERCIO DE MOVEIS E EQUIPAMENTOS LTDA CNPJ 33.661.439/0001-14",
+    "rules": [
+      "Gerar um catálogo genérico por modelo, sem adaptar o catálogo ao edital.",
+      "Publicar somente características sustentadas pelo repertório técnico.",
+      "Manter a comparação com a oportunidade em relatório de auditoria separado.",
+      "Não inferir medidas, materiais, cores, normas, capacidade ou configuração.",
+      "Aplicar tolerância somente quando ela estiver expressamente autorizada no processo.",
+      "Bloquear a liberação quando houver conflito ou modelo sem evidência suficiente.",
+      "Exigir revisão humana antes da liberação comercial."
+    ],
+    "evidence_states": [
+      "comprovado_no_catalogo",
+      "comprovado_no_laudo",
+      "confirmado_pelo_fabricante",
+      "configuracao_a_confirmar",
+      "nao_evidenciado",
+      "conflitante"
+    ]
+  },
+  "repertorio": {
+    "structured_models": 6,
+    "source_documents": 169,
+    "reference_library": {
+      "documents": 169,
+      "searchable_reports": 162,
+      "source": "relatoriocatalogogoldflex.zip",
+      "automatic_compliance": false
+    },
+    "source": "agentes_importados/agente-catalogos-goldflex-interno-v1-2026-08-20/analises/registro-modelos-aprovados.md",
+    "scope_note": "Seis perfis possuem consolidação estruturada. Os demais documentos do agente permanecem como biblioteca de evidências e não autorizam alegações automáticas.",
+    "models": [
+      {
+        "id": "ufrgs-pp-prancheta",
+        "nome": "Cadeira universitária fixa em PP com prancheta",
+        "familia": "Cadeira universitária fixa",
+        "fonte": "Catálogo aprovado UFRGS — PP com prancheta"
+      },
+      {
+        "id": "ufrgs-estofada-prancheta",
+        "nome": "Cadeira universitária fixa estofada com prancheta",
+        "familia": "Cadeira universitária fixa",
+        "fonte": "Catálogo aprovado UFRGS — estofada com prancheta"
+      },
+      {
+        "id": "pinhais-giratoria-tela",
+        "nome": "Cadeira de escritório giratória em tela",
+        "familia": "Cadeira de escritório giratória",
+        "fonte": "Catálogo aprovado Pinhais — cadeira em tela"
+      },
+      {
+        "id": "creci-giratoria-ergonomica",
+        "nome": "Cadeira de escritório giratória ergonômica com braços",
+        "familia": "Cadeira de escritório giratória",
+        "fonte": "Catálogo aprovado CRECI — ergonômica com braços"
+      },
+      {
+        "id": "bh-fixa-estofada",
+        "nome": "Cadeira fixa estofada",
+        "familia": "Cadeira fixa",
+        "fonte": "Catálogo aprovado BH — Fixa Estofada"
+      },
+      {
+        "id": "bh-universitaria-executiva",
+        "nome": "Cadeira universitária executiva com braço escamoteável",
+        "familia": "Cadeira universitária fixa",
+        "fonte": "Catálogo aprovado BH — Executiva com braço escamoteável"
+      }
+    ]
+  },
+  "catalogos": [
+    {
+      "id": "pinhais-giratoria-tela",
+      "nome": "Cadeira de escritório giratória em tela",
+      "familia": "Cadeira de escritório giratória",
+      "nivel_tecnico": "completo com pendências",
+      "fonte": "Catálogo aprovado Pinhais — cadeira em tela",
+      "caracteristicas": [
+        "Cadeira de escritório giratória com encosto em tela Mesh.",
+        "Apoio lombar descrito na referência.",
+        "Mecanismo Back System.",
+        "Pistão classe 4 e base com cinco rodízios.",
+        "Braços com seis regulagens descritas."
+      ],
+      "dimensoes": [
+        {
+          "parte": "encosto",
+          "rotulo": "Encosto (altura x largura x espessura)",
+          "eixos": [
+            "altura",
+            "largura",
+            "espessura"
+          ],
+          "valores_mm": [
+            540.0,
+            450.0,
+            80.0
+          ],
+          "aproximada": true
+        },
+        {
+          "parte": "assento",
+          "rotulo": "Assento (profundidade x largura x espessura)",
+          "eixos": [
+            "profundidade",
+            "largura",
+            "espessura"
+          ],
+          "valores_mm": [
+            480.0,
+            490.0,
+            80.0
+          ],
+          "aproximada": true
+        },
+        {
+          "parte": "altura_assento",
+          "rotulo": "Faixa de altura do assento",
+          "eixos": [
+            "mínima",
+            "máxima"
+          ],
+          "valores_mm": [
+            455.0,
+            565.0
+          ],
+          "aproximada": false
+        },
+        {
+          "parte": "altura_total",
+          "rotulo": "Faixa de altura global informada",
+          "eixos": [
+            "mínima",
+            "máxima"
+          ],
+          "valores_mm": [
+            980.0,
+            1090.0
+          ],
+          "aproximada": false
+        }
+      ],
+      "capacidade_kg": null,
+      "normas": [],
+      "pendencias": [
+        "Relação exata entre tela e revestimento em courvin.",
+        "Código comercial e conjunto documental completo."
+      ]
+    }
+  ],
+  "auditoria_oportunidade": {
+    "edital": {},
+    "itens": [
+      {
+        "numero": "1",
+        "lote": "",
+        "codigo": "",
+        "produto": "Cadeira giratória em tela Mesh com apoio lombar e pistão classe 4",
+        "descricao": "Cadeira giratória em tela Mesh com apoio lombar e pistão classe 4",
+        "especificacao_tecnica": "Cadeira giratória em tela Mesh com apoio lombar e pistão classe 4",
+        "unidade": "UN",
+        "quantidade": "1",
+        "marca_referencia": "",
+        "valor_estimado": "",
+        "criterios_aceitacao": "",
+        "observacoes": "",
+        "categoria": "Mobiliário",
+        "subcategoria": "Assentos",
+        "status_evidencia": "confirmado",
+        "id": "item-1",
+        "fontes": [
+          {
+            "documento": "API oficial do PNCP",
+            "pagina": null,
+            "secao": "Item 1",
+            "url": "offline:template-test"
+          }
+        ],
+        "conflitos": [],
+        "campos_ausentes": [],
+        "referencias_complementares": [
+          {
+            "id": "6b9f1229093f5ef905ed6ae16c12d1da024dbdc1b0b48188a0c964a281d01c1d",
+            "fonte": "Laudos e ensaios/Nr das cadeiras/Laudo Mobiliário - Cadeira Escritorio Tela Ergonômica - Rev02 (2).pdf",
+            "sha256": "6b9f1229093f5ef905ed6ae16c12d1da024dbdc1b0b48188a0c964a281d01c1d",
+            "trecho": "Possui a região preparada para o apoio da lombar.",
+            "tipo": "documento_original",
+            "pagina": 6,
+            "secao": null,
+            "estado": "referencia_para_revisao",
+            "nota": "Referência documental: conferir o vínculo com o modelo e a configuração. Não comprova atendimento automaticamente."
+          },
+          {
+            "id": "60cd236bc035ecc1eea22987b70db5ab297b22e802e7bf5698d673b6cd02c9d4",
+            "fonte": "Laudos e ensaios/Nr das cadeiras/Laudo Mobiliário - Cadeira Escritorio Executiva Gerente - Rev02.pdf",
+            "sha256": "60cd236bc035ecc1eea22987b70db5ab297b22e802e7bf5698d673b6cd02c9d4",
+            "trecho": "Pistão: Pistão classe 3 ou classe 4 com sistema de regulagem pneumática da altura do assento",
+            "tipo": "documento_original",
+            "pagina": 5,
+            "secao": null,
+            "estado": "referencia_para_revisao",
+            "nota": "Referência documental: conferir o vínculo com o modelo e a configuração. Não comprova atendimento automaticamente."
+          },
+          {
+            "id": "eafe6ea40680c2e334db87937f435e3dd0c92bff00573af6c2bff031423cf9d8",
+            "fonte": "catalogos de pedidos/Catalogo cadeira Sj dos Pinhais/laudo-final-modelo-cadeira-tela-pinhais.md",
+            "sha256": "eafe6ea40680c2e334db87937f435e3dd0c92bff00573af6c2bff031423cf9d8",
+            "trecho": "- Tela Mesh, base giratória, cinco rodízios, pistão classe 4, Back System e braços reguláveis.",
+            "tipo": "analise_historica",
+            "pagina": null,
+            "secao": "Relatório",
+            "estado": "referencia_para_revisao",
+            "nota": "Referência documental: conferir o vínculo com o modelo e a configuração. Não comprova atendimento automaticamente."
+          },
+          {
+            "id": "547d7247118b2d1d6a15a128421a903b4dec7c2ea5506fc7b3faa96efc21019c",
+            "fonte": "catalogos de pedidos/catalogo cadeiras - Pro-reitoria/ITEM 26 - CADEIRA TELA DIRETOR BRACO (2).pdf",
+            "sha256": "547d7247118b2d1d6a15a128421a903b4dec7c2ea5506fc7b3faa96efc21019c",
+            "trecho": "em Tela Mesh com apoio lombar integrado.",
+            "tipo": "documento_original",
+            "pagina": 2,
+            "secao": null,
+            "estado": "referencia_para_revisao",
+            "nota": "Referência documental: conferir o vínculo com o modelo e a configuração. Não comprova atendimento automaticamente."
+          },
+          {
+            "id": "8f846d1c2496ee81a61e3d647061a4fd8413850d33f86bb01f21fa95de7057cf",
+            "fonte": "catalogos de pedidos/dados extraidos/dados extraidos versao 1/catalogo-cadeira-ergonomica-tela-bracos-pinhais.docx",
+            "sha256": "8f846d1c2496ee81a61e3d647061a4fd8413850d33f86bb01f21fa95de7057cf",
+            "trecho": "Cadeira de escritório ergonômica giratória com encosto em Tela Mesh, assento estofado, braços reguláveis, base de cinco rodízios, pistão classe 4 e mecanismo Back System.",
+            "tipo": "documento_original",
+            "pagina": null,
+            "secao": "Parágrafo 6",
+            "estado": "referencia_para_revisao",
+            "nota": "Referência documental: conferir o vínculo com o modelo e a configuração. Não comprova atendimento automaticamente."
+          }
+        ],
+        "modelo_referencia": {
+          "id": "pinhais-giratoria-tela",
+          "nome": "Cadeira de escritório giratória em tela",
+          "familia": "Cadeira de escritório giratória",
+          "confianca": "alta",
+          "pontuacao": 1.0,
+          "sinais_encontrados": [
+            "apoio lombar",
+            "giratoria",
+            "mesh",
+            "pistao classe 4",
+            "tela"
+          ],
+          "fonte": "Catálogo aprovado Pinhais — cadeira em tela"
+        },
+        "analise_desatualizada": false,
+        "caracteristicas_catalogo": [
+          "Cadeira de escritório giratória com encosto em tela Mesh.",
+          "Apoio lombar descrito na referência.",
+          "Mecanismo Back System.",
+          "Pistão classe 4 e base com cinco rodízios.",
+          "Braços com seis regulagens descritas."
+        ],
+        "analise_aderencia": {
+          "resultado": "referencia_identificada_com_pendencias",
+          "criterios": [
+            {
+              "id": "movimento_giratoria",
+              "criterio": "Tipo de movimento",
+              "requisito": "giratória",
+              "estado": "evidenciado_na_referencia",
+              "evidencia_repertorio": "giratória"
+            },
+            {
+              "id": "tela",
+              "criterio": "Encosto em tela",
+              "requisito": "tela mesh",
+              "estado": "evidenciado_na_referencia",
+              "evidencia_repertorio": "Encosto em tela"
+            },
+            {
+              "id": "apoio_lombar",
+              "criterio": "Apoio lombar",
+              "requisito": "apoio lombar",
+              "estado": "evidenciado_na_referencia",
+              "evidencia_repertorio": "Apoio lombar"
+            },
+            {
+              "id": "pistao_classe_4",
+              "criterio": "Pistão classe 4",
+              "requisito": "pistao classe 4",
+              "estado": "evidenciado_na_referencia",
+              "evidencia_repertorio": "Pistão classe 4"
+            }
+          ],
+          "pendencias": [
+            "Relação exata entre tela e revestimento em courvin.",
+            "Código comercial e conjunto documental completo."
+          ],
+          "revisao_humana_obrigatoria": true,
+          "declaracao_atendimento_automatica": false
+        },
+        "status_catalogo": "rascunho_para_revisao",
+        "observacao_repertorio": {
+          "status": "evidencia_completa",
+          "titulo": "Foram encontradas evidências para todos os componentes identificados",
+          "descricao": "O repertório analisado sustenta os requisitos técnicos identificados no item.",
+          "evidencias": [
+            "Tipo de movimento: giratória — giratória",
+            "Encosto em tela: tela mesh — Encosto em tela",
+            "Apoio lombar: apoio lombar — Apoio lombar",
+            "Pistão classe 4: pistao classe 4 — Pistão classe 4"
+          ],
+          "faltantes": [],
+          "fonte": "Catálogo aprovado Pinhais — cadeira em tela"
+        },
+        "perguntas_pendentes": [
+          {
+            "titulo": "Confirmação técnica",
+            "requisito": "Relação exata entre tela e revestimento em courvin.",
+            "contexto": "",
+            "id": "10aae6e1754ff92b9cb7f701bcb17d1ed25573849d6c5420c488c7215ad31171"
+          },
+          {
+            "titulo": "Confirmação técnica",
+            "requisito": "Código comercial e conjunto documental completo.",
+            "contexto": "",
+            "id": "0be5f4a9b44f69af61d33f04c1e2cf2fd7af2ccc54373353d82036ba3b633aa8"
+          }
+        ],
+        "modelo_catalogo": "Cadeira de escritório giratória em tela",
+        "resultado_aderencia": "referencia_identificada_com_pendencias"
+      }
+    ],
+    "resumo": {
+      "items_analisados": 1,
+      "items_com_modelo": 1,
+      "items_sem_modelo": 0,
+      "items_com_divergencia": 0,
+      "modelos_catalogados": 1,
+      "status_liberacao": "pronto_para_revisao_humana",
+      "revisao_humana_obrigatoria": true
+    },
+    "nota": "A análise identifica referências e pendências. Ela não constitui declaração automática de atendimento ao edital."
+  },
+  "gerado_em": "2026-09-12T10:33:10"
+}

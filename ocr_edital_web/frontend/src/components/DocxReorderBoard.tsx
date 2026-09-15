@@ -112,6 +112,7 @@ function SortableDocumentBlock({
   onContentChange,
   onEditTable,
 }: SortableDocumentBlockProps) {
+  const [editing, setEditing] = useState(false);
   const {
     attributes,
     listeners,
@@ -141,7 +142,7 @@ function SortableDocumentBlock({
       style={style}
       role="listitem"
       aria-label={`${generated ? "Tabela gerada" : "Mini-box"}, posição ${position} de ${total}`}
-      title={generated ? "Arraste para mover a tabela" : "Edite o texto ou arraste pela barra superior para mover"}
+      title={generated ? "Arraste para mover a tabela" : "Arraste para mover; clique duas vezes no texto para editar"}
     >
       <div className="docx-mini-box-toolbar">
         <span className="docx-mini-box-index" aria-hidden="true">
@@ -227,21 +228,45 @@ function SortableDocumentBlock({
       </div>
       {generated ? (
         <TableConfigurationButton disabled={disabled} onClick={onEditTable} />
-      ) : (
+      ) : editing ? (
         <textarea
           className="docx-mini-box-editor"
           aria-label={`Texto do mini-box ${position}`}
-          title="Clique para editar o texto"
+          title="Editar texto"
+          autoFocus
           value={content}
           rows={2}
           disabled={disabled}
           placeholder="Digite o texto do mini-box"
           style={{ textAlign: alignment }}
           onChange={(event) => onContentChange(id, event.target.value)}
+          onBlur={() => setEditing(false)}
           onPointerDown={(event) => event.stopPropagation()}
           onTouchStart={(event) => event.stopPropagation()}
-          onKeyDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === "Escape") setEditing(false);
+          }}
         />
+      ) : (
+        <div
+          className="docx-mini-box-editor docx-mini-box-text"
+          role="button"
+          tabIndex={disabled ? -1 : 0}
+          aria-label={`Editar texto do mini-box ${position}`}
+          aria-disabled={disabled}
+          style={{ textAlign: alignment }}
+          onDoubleClick={() => { if (!disabled) setEditing(true); }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !disabled) {
+              event.preventDefault();
+              event.stopPropagation();
+              setEditing(true);
+            }
+          }}
+        >
+          {content || "Digite o texto do mini-box"}
+        </div>
       )}
     </article>
   );

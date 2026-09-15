@@ -40,7 +40,7 @@ export function ProposalColumnModal({ items, column, layout, widths, onSave, onC
       custom_values: { ...current.custom_values, [key]: items.map(() => "") } }));
     setRemoving(false);
     requestAnimationFrame(() => {
-      const input = tableRef.current?.querySelector<HTMLInputElement>(`input[data-column="${key}"]`);
+      const input = tableRef.current?.querySelector<HTMLTextAreaElement>(`textarea[data-column="${key}"]`);
       input?.focus(); input?.select(); input?.scrollIntoView({ block: "nearest", inline: "nearest" });
     });
   };
@@ -81,10 +81,14 @@ export function ProposalColumnModal({ items, column, layout, widths, onSave, onC
               {draft.columns.map(({ key, label }, index) => <th key={key}>
                 {removing ? <button type="button" className="proposal-table-remove-target" onClick={() => removeColumn(key)}
                   aria-label={`Remover coluna ${index + 1}: ${label}`}><Minus size={15} />{label || `Coluna ${index + 1}`}</button>
-                  : <input data-column={key} autoFocus={index === 0} required maxLength={120} value={label}
+                  : <div className="proposal-table-heading-editor">
+                    <span aria-hidden="true">{label + " "}</span>
+                    <textarea data-column={key} rows={1} autoFocus={index === 0} required maxLength={120} value={label}
                     aria-label={`Título da coluna ${index + 1}`}
+                    onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault(); }}
                     onChange={(event) => setDraft((current) => ({ ...current, columns: current.columns.map((entry) =>
-                      entry.key === key ? { ...entry, label: event.target.value } : entry) }))} />}
+                      entry.key === key ? { ...entry, label: event.target.value.replace(/[\r\n]+/g, " ") } : entry) }))} />
+                  </div>}
                 {!removing && index < draft.columns.length - 1 && <ColumnResizeHandle
                   left={key} right={draft.columns[index + 1].key} widths={normalizedWidths}
                   showLot={showLot} tableLayout={draft} onChange={setDraftWidths} />}

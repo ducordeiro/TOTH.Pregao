@@ -122,6 +122,10 @@ def main() -> int:
     parser.add_argument("--between-delay", type=float, default=0.0)
     parser.add_argument("--workers", type=int, default=3)
     parser.add_argument("--retry-failures-after-hours", type=float, default=12.0)
+    parser.add_argument(
+        "--retry-run-id",
+        help="Retry only opportunities that failed in this item-enrichment run.",
+    )
     parser.add_argument("--item-page-size", type=int, default=500)
     parser.add_argument("--item-max-pages", type=int, default=20)
     parser.add_argument("--status-file", default=str(DEFAULT_STATUS_FILE))
@@ -172,6 +176,7 @@ def main() -> int:
             date_to=args.date_to,
             as_of=args.as_of,
             retry_failures_after_hours=args.retry_failures_after_hours,
+            retry_run_id=args.retry_run_id,
         )
         sample_limit = min(args.limit or 10, 100)
         sample = _load_missing(
@@ -183,6 +188,7 @@ def main() -> int:
             date_to=args.date_to,
             as_of=args.as_of,
             retry_failures_after_hours=args.retry_failures_after_hours,
+            retry_run_id=args.retry_run_id,
         )
         print(json.dumps({
             "mode": "plan",
@@ -266,6 +272,7 @@ def _run_enrichment(
             "workers": args.workers,
             "request_delay": args.request_delay,
             "retry_failures_after_hours": args.retry_failures_after_hours,
+            "retry_run_id": getattr(args, "retry_run_id", None),
             "item_max_pages": args.item_max_pages,
             "item_page_size": args.item_page_size,
             "provider_priority": ["comprasgov", "pncp"],
@@ -290,6 +297,7 @@ def _run_enrichment(
         date_to=args.date_to,
         as_of=args.as_of,
         retry_failures_after_hours=args.retry_failures_after_hours,
+        retry_run_id=getattr(args, "retry_run_id", None),
     )
     total = min(queue["total"], args.limit) if args.limit is not None else queue["total"]
     if args.dry_run:
@@ -327,6 +335,7 @@ def _run_enrichment(
                 date_to=args.date_to,
                 as_of=args.as_of,
                 retry_failures_after_hours=args.retry_failures_after_hours,
+                retry_run_id=getattr(args, "retry_run_id", None),
                 exclude_run_id=run_id,
             )
             if not rows:
@@ -561,6 +570,7 @@ def _load_missing(
     as_of: str | None = None,
     retry_failures_after_hours: float = 12.0,
     exclude_run_id: str | None = None,
+    retry_run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     priority_sql, where_sql, params = _missing_selection(
         date_from,
@@ -569,6 +579,7 @@ def _load_missing(
         date_to=date_to,
         as_of=as_of,
         retry_failures_after_hours=retry_failures_after_hours,
+        retry_run_id=retry_run_id,
     )
     if exclude_run_id:
         where_sql += """ AND NOT EXISTS (
@@ -605,6 +616,7 @@ def _summarize_missing(
     date_to: str | None = None,
     as_of: str | None = None,
     retry_failures_after_hours: float = 12.0,
+    retry_run_id: str | None = None,
 ) -> dict[str, Any]:
     priority_sql, where_sql, params = _missing_selection(
         date_from,
@@ -613,6 +625,7 @@ def _summarize_missing(
         date_to=date_to,
         as_of=as_of,
         retry_failures_after_hours=retry_failures_after_hours,
+        retry_run_id=retry_run_id,
     )
     sql = f"""
         SELECT source, priority, COUNT(*) AS count
@@ -651,6 +664,7 @@ def _missing_selection(
     date_to: str | None,
     as_of: str | None,
     retry_failures_after_hours: float,
+    retry_run_id: str | None = None,
 ) -> tuple[str, str, list[Any]]:
     reference_date = as_of or date.today().isoformat()
     reference_start = f"{reference_date}T00:00:00"
@@ -691,6 +705,28 @@ def _missing_selection(
         WHEN COALESCE(o.proposal_end_at, '') >= ? THEN 2
         ELSE 3
     END"""
+    if retry_run_id:
+        failure_condition = """EXISTS (
+              SELECT 1
+              FROM source_records failed
+              WHERE failed.source = 'pncp'
+                AND failed.external_key = o.external_key
+                AND failed.etl_run_id = ?
+                AND failed.source_endpoint = 'item_enrichment_batch'
+                AND failed.status = 'failed'
+          )"""
+        failure_params = [retry_run_id]
+    else:
+        failure_condition = """NOT EXISTS (
+              SELECT 1
+              FROM source_records failed
+              WHERE failed.source = 'pncp'
+                AND failed.external_key = o.external_key
+                AND failed.source_endpoint = 'item_enrichment_batch'
+                AND failed.status = 'failed'
+                AND failed.captured_at >= ?
+          )"""
+        failure_params = [retry_cutoff]
     where_sql = f"""{scope_condition}
           AND {source_condition}
           AND o.source_cnpj IS NOT NULL
@@ -699,15 +735,7 @@ def _missing_selection(
           AND NOT EXISTS (
               SELECT 1 FROM opportunity_items i WHERE i.opportunity_id = o.id
           )
-          AND NOT EXISTS (
-              SELECT 1
-              FROM source_records failed
-              WHERE failed.source = 'pncp'
-                AND failed.external_key = o.external_key
-                AND failed.source_endpoint = 'item_enrichment_batch'
-                AND failed.status = 'failed'
-                AND failed.captured_at >= ?
-          )
+          AND {failure_condition}
     """
     params: list[Any] = [
         reference_start,
@@ -716,7 +744,7 @@ def _missing_selection(
         reference_start,
         *scope_params,
         *source_params,
-        retry_cutoff,
+        *failure_params,
     ]
     return priority_sql, where_sql, params
 

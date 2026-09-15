@@ -798,7 +798,9 @@ class ETLRepository:
             bounded_date_order += ", o.published_at DESC"
         source_sql = (
             "opportunity_search CROSS JOIN opportunities o "
-            "ON o.id = opportunity_search.opportunity_id"
+            # FTS migrations/triggers preserve the opportunity rowid; this avoids
+            # loading the stored search document just to read its text ID.
+            "ON o.rowid = opportunity_search.rowid"
             if fts_query
             else "opportunities o"
         )
@@ -984,7 +986,7 @@ class ETLRepository:
                 if use_score_order:
                     total = connection.execute(
                         f"""
-                        SELECT COUNT(*) FROM opportunities o
+                        SELECT COUNT(*) FROM {source_sql}
                         LEFT JOIN opportunity_matches m
                           ON m.opportunity_id = o.id AND m.company_profile_id = ?
                         {clause}

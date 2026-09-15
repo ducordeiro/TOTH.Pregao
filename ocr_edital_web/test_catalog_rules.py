@@ -27,6 +27,68 @@ def opportunity_item(description, *, number="1"):
 
 
 class CatalogRulesTests(unittest.TestCase):
+    def supplemental_fixture(self):
+        item = analyze_catalog_item({"produto": "Cadeira giratória em tela Mesh",
+            "descricao": "Cadeira giratória em tela Mesh. Encosto mínimo 56 x 45 x 8 cm, apoio lombar e pistão classe 4."})
+        parameters = [{"id": str(index).zfill(32), "pergunta_id": question["id"],
+            "resposta": "atende", "componente": question["titulo"], "atributo": "Validação técnica",
+            "comparacao": "igual", "valor_requerido_texto": question["requisito"],
+            "valor_atendido_texto": "Configuração específica confirmada pelo fabricante",
+            "evidencia": "Ficha técnica revisada, página 2"}
+            for index, question in enumerate(item["perguntas_pendentes"])]
+        return item, {"id": "e" * 32, "produto_nome": "Modelo revisado", "cobertura_completa": True, "parametros": parameters}
+
+    def test_pending_answers_preserve_reference_and_require_human_review(self):
+        item, repertoire = self.supplemental_fixture()
+        self.assertTrue(item["perguntas_pendentes"])
+        result = apply_user_catalog_repertoire(item, repertoire)
+        self.assertEqual(result["perguntas_pendentes"], [])
+        self.assertEqual(result["observacao_repertorio"]["status"], "evidencia_completa")
+        self.assertTrue(set(item["caracteristicas_catalogo"]) <= set(result["caracteristicas_catalogo"]))
+        self.assertTrue(result["analise_aderencia"]["revisao_humana_obrigatoria"])
+        self.assertFalse(result["analise_aderencia"]["declaracao_atendimento_automatica"])
+        self.assertEqual(apply_user_catalog_repertoire(result, repertoire), result)
+
+    def test_unanswered_questions_survive_complete_checkbox(self):
+        item, repertoire = self.supplemental_fixture()
+        repertoire["parametros"] = repertoire["parametros"][:1]
+        result = apply_user_catalog_repertoire(item, repertoire)
+        self.assertTrue(result["perguntas_pendentes"])
+        self.assertEqual(result["observacao_repertorio"]["status"], "evidencia_parcial")
+
+    def test_partial_answers_can_be_completed_without_losing_prior_answers(self):
+        item, repertoire = self.supplemental_fixture()
+        partial = dict(repertoire, parametros=repertoire["parametros"][:1])
+        first = apply_user_catalog_repertoire(item, partial)
+        self.assertEqual(len(first["perguntas_pendentes"]), len(item["perguntas_pendentes"]) - 1)
+        final = apply_user_catalog_repertoire(first, repertoire)
+        self.assertEqual(final["perguntas_pendentes"], [])
+        self.assertEqual(final["observacao_repertorio"]["status"], "evidencia_completa")
+
+    def test_client_pending_list_cannot_remove_real_questions(self):
+        item, repertoire = self.supplemental_fixture()
+        item["perguntas_pendentes"] = []
+        partial = dict(repertoire, parametros=repertoire["parametros"][:1])
+        result = apply_user_catalog_repertoire(item, partial)
+        self.assertTrue(result["perguntas_pendentes"])
+
+    def test_unknown_model_has_questions_for_each_specification(self):
+        item = analyze_catalog_item({"produto": "Mocho especial", "descricao": "Assento bipartido; altura regulável de 45 a 60 cm; revestimento sintético"})
+        self.assertIsNone(item["modelo_referencia"])
+        questions = item["perguntas_pendentes"]
+        self.assertTrue(any(question["requisito"] == "altura regulável de 45 a 60 cm" for question in questions))
+        self.assertGreaterEqual(len(questions), 3)
+
+    def test_no_unconfirmed_or_changed_answer_clears_pending(self):
+        for change in ({"resposta": "nao_confirmado"}, {"resposta": "nao_atende"},
+                       {"evidencia": ""}, {"valor_requerido_texto": "Requisito substituído"}):
+            with self.subTest(change=change):
+                item, repertoire = self.supplemental_fixture()
+                repertoire["parametros"][0].update(change)
+                result = apply_user_catalog_repertoire(item, repertoire)
+                self.assertTrue(result["perguntas_pendentes"])
+                self.assertNotEqual(result["observacao_repertorio"]["status"], "evidencia_completa")
+
     def test_policy_is_portrait_generic_and_backed_by_structured_repertoire(self):
         policy = catalog_policy_summary()
         repertoire = repertoire_summary()
@@ -36,7 +98,7 @@ class CatalogRulesTests(unittest.TestCase):
         self.assertEqual(policy["section_title"], "Características")
         self.assertEqual(policy["architecture"], "catalogo_generico_com_auditoria_separada")
         self.assertEqual(repertoire["structured_models"], 6)
-        self.assertEqual(repertoire["source_documents"], 47)
+        self.assertEqual(repertoire["source_documents"], 174)
         self.assertEqual(len(repertoire["models"]), 6)
 
     def test_matching_uses_repertoire_and_never_declares_automatic_compliance(self):

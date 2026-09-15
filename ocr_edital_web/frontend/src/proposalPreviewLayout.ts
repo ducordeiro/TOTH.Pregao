@@ -4,6 +4,7 @@ import type {
   ProposalItem,
   ProposalExtraColumn,
   ProposalTableLayout,
+  ProposalTableMetrics,
 } from "./types";
 
 export interface ProposalColumnDefinition {
@@ -62,6 +63,21 @@ const DEFAULT_LOT_WEIGHTS: Record<ProposalColumnKey, number> = {
 export const PREVIEW_PAGE_LINE_CAPACITY = 72;
 export const PREVIEW_TABLE_HEADER_LINES = 4;
 export const MIN_COLUMN_WIDTH_PERCENT = 4;
+
+export const defaultTableMetrics: ProposalTableMetrics = {
+  available_width_twips: 9360,
+  body_font_pt: 9,
+  header_font_pt: 9,
+  horizontal_padding_twips: 40,
+  narrow_padding_twips: 20,
+  vertical_padding_twips: 80,
+};
+
+export function proposalTableWidthPt(columns: ProposalColumnDefinition[], showLot: boolean, metrics: ProposalTableMetrics): number {
+  const defaults = showLot ? DEFAULT_LOT_WEIGHTS : DEFAULT_WEIGHTS;
+  const total = columns.reduce((sum, column) => sum + (defaults[column.key] || 1500), 0);
+  return Math.min(total, metrics.available_width_twips) / 20;
+}
 
 export function proposalColumns(showLot: boolean, extraColumn?: ProposalExtraColumn | null, layout?: ProposalTableLayout | null): ProposalColumnDefinition[] {
   if (layout) return layout.columns;

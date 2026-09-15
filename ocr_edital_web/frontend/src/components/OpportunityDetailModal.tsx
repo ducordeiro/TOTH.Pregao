@@ -26,10 +26,12 @@ import type {
 import { normalizePncpUrl, parseLocalDate } from "../utils";
 import { opportunityItemKey, selectedOpportunityItems } from "../opportunitySelection";
 import { Modal } from "./Modal";
+import { KeywordHighlight } from "./KeywordHighlight";
 import { StatusMessage } from "./StatusMessage";
 
 interface OpportunityDetailModalProps {
   bid: Bid | null;
+  highlightTerms?: readonly string[];
   onClose: () => void;
   onGenerateProposal: (selection: OpportunityItemSelection) => void;
   onGenerateCatalog: (selection: OpportunityItemSelection) => void;
@@ -37,6 +39,7 @@ interface OpportunityDetailModalProps {
 
 const DETAIL_REFRESH_INTERVAL_MS = 1_000;
 const DETAIL_REFRESH_MAX_ATTEMPTS = 12;
+const NO_HIGHLIGHT_TERMS: readonly string[] = [];
 
 function formatCurrency(value: number | string | null) {
   if (value === null || value === "") return "Não informado";
@@ -60,6 +63,7 @@ function formatDateTime(value: string) {
 
 export function OpportunityDetailModal({
   bid,
+  highlightTerms = NO_HIGHLIGHT_TERMS,
   onClose,
   onGenerateProposal,
   onGenerateCatalog,
@@ -229,14 +233,14 @@ export function OpportunityDetailModal({
               <strong>{opportunity.portal_origem}</strong>
               {opportunity.situacao ? <span className="opportunity-status">{opportunity.situacao}</span> : null}
             </div>
-            <h3>{opportunity.modalidade} {opportunity.numero_compra}</h3>
+            <h3><KeywordHighlight text={`${opportunity.modalidade} ${opportunity.numero_compra}`} terms={highlightTerms} /></h3>
             <p className="opportunity-buyer">
               {opportunity.codigo_unidade
                 ? `${opportunity.portal_origem === "Comprasnet" ? "UASG" : "Unidade"} ${opportunity.codigo_unidade} · `
                 : ""}
-              {opportunity.unidade || opportunity.orgao}
+              <KeywordHighlight text={opportunity.unidade || opportunity.orgao} terms={highlightTerms} />
             </p>
-            <p className="opportunity-object">{opportunity.objeto}</p>
+            <p className="opportunity-object"><KeywordHighlight text={opportunity.objeto} terms={highlightTerms} /></p>
             <div className="opportunity-tags" aria-label="Categorias da oportunidade">
               {opportunity.categorias.map((category) => <span key={category}>{category}</span>)}
             </div>
@@ -464,12 +468,12 @@ export function OpportunityDetailModal({
                       })}
                     >
                       <span>Item {item.numero}{item.lote ? ` · Lote ${item.lote}` : ""}</span>
-                      <strong>{item.descricao || "Descrição não informada"}</strong>
+                      <strong><KeywordHighlight text={item.descricao || "Descrição não informada"} terms={highlightTerms} /></strong>
                       <ChevronDown size={18} />
                     </button>
                     {isOpen ? (
                       <div className="opportunity-item-details">
-                        <p>{item.descricao}</p>
+                        <p><KeywordHighlight text={item.descricao} terms={highlightTerms} /></p>
                         <dl>
                           <div><dt>Quantidade</dt><dd>{item.quantidade || "Não informada"}</dd></div>
                           <div><dt>Unidade</dt><dd>{item.unidade || "UND"}</dd></div>

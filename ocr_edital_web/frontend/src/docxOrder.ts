@@ -6,13 +6,19 @@ import type {
 
 export type ReplicaDocumentBlock = DocumentNode | GeneratedTableBlock;
 
-export function withoutTemplateHeader(
+export function splitReplicaPageParts(
   blocks: ReplicaDocumentBlock[],
-): ReplicaDocumentBlock[] {
-  return blocks.filter((block) => (
-    block.type === "GENERATED_TABLE"
-    || !block.source_part?.startsWith("word/header")
-  ));
+) {
+  const body: ReplicaDocumentBlock[] = [];
+  const header: ReplicaDocumentBlock[] = [];
+  const footer: ReplicaDocumentBlock[] = [];
+  for (const block of blocks) {
+    const part = block.type === "GENERATED_TABLE" ? "" : block.source_part || "";
+    if (part.startsWith("word/header")) header.push(block);
+    else if (part.startsWith("word/footer")) footer.push(block);
+    else body.push(block);
+  }
+  return { body, header, footer };
 }
 
 export function miniBoxNodes(nodes: DocumentNode[]): MiniBoxNode[] {

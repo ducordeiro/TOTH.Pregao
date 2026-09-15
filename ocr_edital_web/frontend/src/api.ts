@@ -300,8 +300,8 @@ export async function createCatalogGeneratorJob(
   return parseJson<CatalogGeneratorJob>(response);
 }
 
-export async function getCatalogGeneratorJob(jobId: string): Promise<CatalogGeneratorJob> {
-  const response = await fetch(`/catalog-generator/jobs/${encodeURIComponent(jobId)}`);
+export async function getCatalogGeneratorJob(jobId: string, signal?: AbortSignal): Promise<CatalogGeneratorJob> {
+  const response = await fetch(`/catalog-generator/jobs/${encodeURIComponent(jobId)}`, { signal });
   return parseJson<CatalogGeneratorJob>(response);
 }
 
@@ -360,6 +360,7 @@ export async function generateProposal(
   miniBoxContents?: Record<string, string>,
   extraColumn?: ProposalExtraColumn | null,
   tableLayout?: ProposalTableLayout | null,
+  outputFormat: "docx" | "pdf" = "docx",
 ): Promise<GenerateResponse> {
   const response = await fetch("/generate", {
     method: "POST",
@@ -369,6 +370,7 @@ export async function generateProposal(
       template_ref: templateRef,
       source_name: sourceName,
       responsible_id: responsibleId,
+      output_format: outputFormat,
       commercial_terms: commercialTerms,
       ...(miniBoxOrder ? { mini_box_order: miniBoxOrder } : {}),
       ...(documentBlockOrder ? { document_block_order: documentBlockOrder } : {}),

@@ -569,19 +569,63 @@ class ProposalDocxIntegrationTests(unittest.TestCase):
                 {"item": 1},
             )
 
-    def test_table_cannot_split_two_markers_from_the_same_paragraph(self):
+    def test_table_splits_same_paragraph_at_the_selected_visual_position(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            template = self.create_template(Path(temp_dir))
+            root = Path(temp_dir)
+            template = self.create_template(root)
+            output = root / "tabela_entre_blocos.docx"
             structure = inspect_docx_structure(template)
             identifiers = [
                 node["id"] for node in structure["nodes"] if node["type"] == "MINI_BOX"
             ]
+            document_order = [identifiers[0], GENERATED_TABLE_BLOCK_ID, identifiers[1]]
+            layout = resolve_document_block_layout(template, document_order)
 
-            with self.assertRaisesRegex(ValueError, "mesmo parágrafo"):
-                resolve_document_block_layout(
-                    template,
-                    [identifiers[0], GENERATED_TABLE_BLOCK_ID, identifiers[1]],
-                )
+            self.assertEqual(layout.table_paragraph_index, 1)
+            self.assertEqual(layout.split_after_slot_id, identifiers[0])
+            server.build_docx(
+                [self.proposal_item()], template, output,
+                mini_box_order=list(layout.mini_box_order),
+                document_block_order=document_order,
+            )
+            generated = Document(output)
+            body_children = list(generated._element.body)
+            self.assertEqual([child.tag.rsplit("}", 1)[-1] for child in body_children[:3]], ["p", "tbl", "p"])
+            self.assertEqual(generated.paragraphs[0].text, "Fixo Primeiro")
+            self.assertEqual(generated.paragraphs[1].text, " entre Segundo final")
+            self.assertEqual(generated.tables[0].rows[1].cells[3].text, "Item de teste")
+
+    def test_table_can_be_the_third_block_with_two_mini_boxes_above_it(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template = root / "tres_blocos_mesmo_paragrafo.docx"
+            document = Document()
+            paragraph = document.add_paragraph()
+            paragraph.add_run("Início {Primeiro} / ").bold = True
+            paragraph.add_run("{Segundo} / ").italic = True
+            paragraph.add_run("{Terceiro} fim").underline = True
+            document.save(template)
+            output = root / "tabela_em_terceiro.docx"
+            identifiers = [
+                node["id"] for node in inspect_docx_structure(template)["nodes"]
+                if node["type"] == "MINI_BOX"
+            ]
+            order = [identifiers[0], identifiers[1], GENERATED_TABLE_BLOCK_ID, identifiers[2]]
+
+            server.build_docx(
+                [self.proposal_item()], template, output,
+                mini_box_order=identifiers,
+                document_block_order=order,
+            )
+            generated = Document(output)
+
+        children = list(generated._element.body)
+        self.assertEqual([child.tag.rsplit("}", 1)[-1] for child in children[:3]], ["p", "tbl", "p"])
+        self.assertEqual(generated.paragraphs[0].text, "Início Primeiro / Segundo")
+        self.assertEqual(generated.paragraphs[1].text, " / Terceiro fim")
+        self.assertTrue(any(run.bold for run in generated.paragraphs[0].runs))
+        self.assertTrue(any(run.italic for run in generated.paragraphs[0].runs))
+        self.assertTrue(any(run.underline for run in generated.paragraphs[1].runs))
 
     def test_generation_context_validates_and_fingerprints_selected_order(self):
         with tempfile.TemporaryDirectory() as temp_dir:
